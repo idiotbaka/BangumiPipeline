@@ -1,0 +1,18 @@
+{
+  "name": "bangumi-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "frontend/apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run build:ui && concurrently --kill-others-on-fail --names admin,viewer,server \"npm run dev --workspace @bangumi-pipeline/admin\" \"npm run dev --workspace @bangumi-pipeline/viewer\" \"go run ./backend/cmd/server\"",
+    "start": "npm run build:ui && go run ./backend/cmd/server",
+    "build:ui": "npm run build --workspace @bangumi-pipeline/admin && npm run build --workspace @bangumi-pipeline/viewer",
+    "build:server": "go build -buildvcs=false ./backend/cmd/server",
+    "test": "go test ./backend/... && npm run build:ui"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.3"
+  }
+}

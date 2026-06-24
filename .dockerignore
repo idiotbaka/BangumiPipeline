@@ -1,0 +1,8 @@
+.git
+.codex-tmp
+node_modules
+frontend/apps/*/dist
+data
+*.db
+*.db-shm
+*.db-wal

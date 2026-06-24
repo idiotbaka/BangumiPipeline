@@ -1,0 +1,217 @@
+package database_test
+
+import (
+	"context"
+	"database/sql"
+	"path/filepath"
+	"testing"
+
+	"bangumipipeline.local/server/internal/database"
+)
+
+func TestOpenUpgradesLegacyScheduledTasksTable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.ExecContext(ctx, `
+CREATE TABLE scheduled_tasks (
+    task_key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    schedule TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+INSERT INTO scheduled_tasks(task_key, name, description, schedule, enabled, created_at, updated_at)
+VALUES ('bangumi-season-metadata', 'legacy task', 'legacy', '0 3 * * *', 1, 1, 1);
+CREATE TABLE anime_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bangumi_id INTEGER NOT NULL UNIQUE,
+    url TEXT NOT NULL,
+    name TEXT NOT NULL,
+    name_cn TEXT NOT NULL DEFAULT '',
+    air_date TEXT NOT NULL DEFAULT '',
+    air_weekday INTEGER NOT NULL DEFAULT 0,
+    image_large_url TEXT NOT NULL DEFAULT '',
+    image_local_path TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+INSERT INTO anime_metadata(bangumi_id, url, name, created_at)
+VALUES (101, 'https://bgm.tv/subject/101', 'legacy anime', 1);`)
+	if err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := database.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var enabled bool
+	var interval int
+	var status string
+	if err := db.QueryRowContext(ctx, `
+SELECT enabled, interval_minutes, last_status
+FROM scheduled_tasks
+WHERE task_key = 'bangumi-season-metadata'`).Scan(&enabled, &interval, &status); err != nil {
+		t.Fatal(err)
+	}
+	if !enabled || interval != 15 || status != "idle" {
+		t.Fatalf("legacy task was not upgraded correctly: enabled=%v interval=%d status=%q", enabled, interval, status)
+	}
+	var detailStatus, charactersStatus, infobox string
+	if err := db.QueryRowContext(ctx, `
+SELECT detail_status, characters_status, infobox_json
+FROM anime_metadata WHERE bangumi_id = 101`).Scan(&detailStatus, &charactersStatus, &infobox); err != nil {
+		t.Fatal(err)
+	}
+	if detailStatus != "pending" || charactersStatus != "pending" || infobox != "[]" {
+		t.Fatalf("legacy anime was not prepared for detail synchronization: detail=%q characters=%q infobox=%q", detailStatus, charactersStatus, infobox)
+	}
+}
+
+func TestVersion5MigrationQueuesCompletedCharactersForActorNormalization(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "version4.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.ExecContext(ctx, `
+CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+INSERT INTO schema_migrations(version, applied_at) VALUES (1,1),(2,1),(3,1),(4,1);
+CREATE TABLE anime_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bangumi_id INTEGER NOT NULL UNIQUE,
+    url TEXT NOT NULL,
+    name TEXT NOT NULL,
+    name_cn TEXT NOT NULL DEFAULT '',
+    air_date TEXT NOT NULL DEFAULT '',
+    air_weekday INTEGER NOT NULL DEFAULT 0,
+    image_large_url TEXT NOT NULL DEFAULT '',
+    image_local_path TEXT NOT NULL DEFAULT '',
+    detail_status TEXT NOT NULL DEFAULT 'pending',
+    characters_status TEXT NOT NULL DEFAULT 'pending',
+    characters_error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+INSERT INTO anime_metadata(
+    bangumi_id, url, name, image_large_url, image_local_path,
+    detail_status, characters_status, created_at
+) VALUES (808, 'https://bgm.tv/subject/808', 'v4 anime', 'https://example/cover.jpg', 'cover.jpg', 'completed', 'completed', 1);
+CREATE TABLE anime_characters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bangumi_id INTEGER NOT NULL,
+    character_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    relation TEXT NOT NULL DEFAULT '',
+    type INTEGER NOT NULL DEFAULT 0,
+    image_large_url TEXT NOT NULL DEFAULT '',
+    image_local_path TEXT NOT NULL DEFAULT '',
+    actors_json TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (bangumi_id, character_id)
+);
+INSERT INTO anime_characters(
+    bangumi_id, character_id, name, image_large_url, image_local_path, created_at, updated_at
+) VALUES (808, 88, 'v4 character', 'https://example/character.jpg', 'character.jpg', 1, 1);`)
+	if err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := database.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var characterStage, subjectImageStatus, characterImageStatus string
+	if err := db.QueryRowContext(ctx, `
+SELECT characters_status, image_status FROM anime_metadata WHERE bangumi_id = 808`).
+		Scan(&characterStage, &subjectImageStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `
+SELECT image_status FROM anime_characters WHERE bangumi_id = 808 AND character_id = 88`).
+		Scan(&characterImageStatus); err != nil {
+		t.Fatal(err)
+	}
+	if characterStage != "pending" || subjectImageStatus != "downloaded" || characterImageStatus != "downloaded" {
+		t.Fatalf("version 5 migration mismatch: stage=%q subject_image=%q character_image=%q", characterStage, subjectImageStatus, characterImageStatus)
+	}
+}
+
+func TestVersion6MigrationTrimsCharactersAndOrphanActors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "version5.db")
+	db, err := database.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO anime_metadata(bangumi_id, url, name, created_at)
+VALUES (6060, 'https://bgm.tv/subject/6060', 'many characters', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	for id := 1; id <= 12; id++ {
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO actors(actor_id, name, created_at, updated_at) VALUES (?, ?, 1, 1)`, id, "Actor"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO anime_characters(bangumi_id, character_id, name, created_at, updated_at)
+VALUES (6060, ?, ?, ?, ?)`, id, "Character", id, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO character_actors(bangumi_id, character_id, actor_id, sort_order)
+VALUES (6060, ?, ?, 0)`, id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, "DELETE FROM schema_migrations WHERE version = 6"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = database.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for table, expected := range map[string]int{
+		"anime_characters": 10,
+		"character_actors": 10,
+		"actors":           10,
+	} {
+		var count int
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != expected {
+			t.Fatalf("expected %d rows in %s after migration, got %d", expected, table, count)
+		}
+	}
+}

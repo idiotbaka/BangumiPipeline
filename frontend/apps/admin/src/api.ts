@@ -1,0 +1,314 @@
+export interface User {
+  id: number
+  username: string
+  isAdmin: boolean
+  createdAt: number
+}
+
+export interface ScheduledTask {
+  key: string
+  name: string
+  description: string
+  enabled: boolean
+  intervalMinutes: number
+  lastStatus: 'idle' | 'running' | 'completed' | 'failed'
+  lastError: string
+  lastStartedAt: number | null
+  lastFinishedAt: number | null
+  nextRunAt: number | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface NetworkSettings {
+  httpProxy: string
+  httpsProxy: string
+  updatedAt: number
+}
+
+export interface SubscriptionSettings {
+  rssUrl: string
+  updatedAt: number
+}
+
+export type LogLevel = 'INFO' | 'WARNING' | 'ERROR'
+
+export interface SystemLog {
+  id: number
+  level: LogLevel
+  source: string
+  message: string
+  fields: Record<string, unknown>
+  createdAt: number
+}
+
+export interface AnimeMatchedEpisode {
+  seasonNumber: number
+  episodeType: string
+  episodeNumber: string
+  status: 'matched'
+}
+
+export interface AnimeListItem {
+  bangumiId: number
+  name: string
+  nameCN: string
+  airDate: string
+  airWeekday: number
+  episodes: number
+  platform: string
+  imageStatus: string
+  hasCover: boolean
+  detailStatus: string
+  matchedEpisodes: AnimeMatchedEpisode[]
+  createdAt: number
+}
+
+export interface AnimePage {
+  items: AnimeListItem[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface HistorySyncResult {
+  bangumiId: number
+  sourceTitle: string
+  searchTitle: string
+  fetched: number
+  inserted: number
+  bound: number
+  skippedExisting: number
+  skippedIgnored: number
+  skippedUnmatched: number
+}
+
+export type SubscriptionMatchStatus = 'matched' | 'unmatched'
+export type SubscriptionBindingStatus = 'pending' | 'bound' | 'ignored'
+
+export interface AnimeSearchItem {
+  bangumiId: number
+  name: string
+  nameCN: string
+}
+
+export interface SubscriptionItem {
+  id: number
+  guid: string
+  title: string
+  description: string
+  link: string
+  enclosureUrl: string
+  torrentUrl: string
+  contentLength: number
+  pubDate: string
+  publishedAt: number | null
+  matchStatus: SubscriptionMatchStatus
+  bangumiId: number | null
+  matchedName: string
+  parsedName: string
+  seasonNumber: number | null
+  episodeType: string
+  episodeNumber: string
+  matchScore: number
+  matchReason: string
+  bindingStatus: SubscriptionBindingStatus
+  boundBangumiId: number | null
+  boundAnimeName: string
+  boundSeasonNumber: number | null
+  boundEpisodeType: string
+  boundEpisodeNumber: string
+  bindingNote: string
+  boundAt: number | null
+  ignoredAt: number | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SubscriptionItemPage {
+  items: SubscriptionItem[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface AnimeActor {
+  actorId: number
+  name: string
+  summary: string
+  career: string[]
+  hasImage: boolean
+  imageStatus: string
+}
+
+export interface AnimeCharacter {
+  characterId: number
+  name: string
+  summary: string
+  relation: string
+  hasImage: boolean
+  imageStatus: string
+  actors: AnimeActor[]
+}
+
+export interface AnimeDetail {
+  bangumiId: number
+  url: string
+  name: string
+  nameCN: string
+  airDate: string
+  airWeekday: number
+  detailDate: string
+  platform: string
+  summary: string
+  eps: number
+  totalEpisodes: number
+  volumes: number
+  series: boolean
+  locked: boolean
+  nsfw: boolean
+  hasCover: boolean
+  imageStatus: string
+  detailStatus: string
+  characterStatus: string
+  infobox: Array<{ key?: string; value?: unknown }>
+  rating: Record<string, unknown>
+  collection: Record<string, unknown>
+  metaTags: string[]
+  tags: Array<{ name: string; count: number }>
+  aliases: string[]
+  characters: AnimeCharacter[]
+  createdAt: number
+}
+
+interface ErrorPayload {
+  error?: {
+    code?: string
+    message?: string
+  }
+}
+
+export class APIError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code?: string,
+  ) {
+    super(message)
+  }
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    credentials: 'same-origin',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as ErrorPayload
+    throw new APIError(payload.error?.message ?? `请求失败（${response.status}）`, response.status, payload.error?.code)
+  }
+  if (response.status === 204) {
+    return undefined as T
+  }
+  return response.json() as Promise<T>
+}
+
+export const api = {
+  setupStatus: () => request<{ initialized: boolean }>('/api/setup/status'),
+  setup: (username: string, password: string) =>
+    request<{ user: User }>('/api/setup', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  login: (username: string, password: string) =>
+    request<{ user: User }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  me: () => request<{ user: User }>('/api/auth/me'),
+  logout: () => request<void>('/api/auth/logout', { method: 'POST', body: '{}' }),
+  scheduledTasks: () => request<{ tasks: ScheduledTask[] }>('/api/scheduled-tasks'),
+  updateScheduledTask: (key: string, update: { enabled?: boolean; intervalMinutes?: number }) =>
+    request<{ task: ScheduledTask }>(`/api/scheduled-tasks/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(update),
+    }),
+  runScheduledTask: (key: string) =>
+    request<{ task: ScheduledTask }>(`/api/scheduled-tasks/${encodeURIComponent(key)}/run`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  networkSettings: () => request<{ settings: NetworkSettings }>('/api/settings/network'),
+  updateNetworkSettings: (httpProxy: string, httpsProxy: string) =>
+    request<{ settings: NetworkSettings }>('/api/settings/network', {
+      method: 'PUT',
+      body: JSON.stringify({ httpProxy, httpsProxy }),
+    }),
+  subscriptionSettings: () => request<{ settings: SubscriptionSettings }>('/api/settings/subscription'),
+  updateSubscriptionSettings: (rssUrl: string) =>
+    request<{ settings: SubscriptionSettings }>('/api/settings/subscription', {
+      method: 'PUT',
+      body: JSON.stringify({ rssUrl }),
+    }),
+  systemLogs: (levels: LogLevel[]) => {
+    const query = new URLSearchParams()
+    levels.forEach((level) => query.append('level', level))
+    return request<{ logs: SystemLog[] }>(`/api/system-logs?${query}`)
+  },
+  animeList: (page: number, pageSize: number) =>
+    request<AnimePage>(`/api/anime?page=${page}&pageSize=${pageSize}`),
+  createAnime: (bangumiId: number) =>
+    request<{ anime: AnimeDetail }>('/api/anime', {
+      method: 'POST',
+      body: JSON.stringify({ bangumiId }),
+    }),
+  animeDetail: (bangumiId: number) =>
+    request<{ anime: AnimeDetail }>(`/api/anime/${bangumiId}`),
+  refreshAnime: (bangumiId: number) =>
+    request<{ anime: AnimeDetail }>(`/api/anime/${bangumiId}/refresh`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  syncAnimeHistory: (bangumiId: number) =>
+    request<{ result: HistorySyncResult }>(`/api/anime/${bangumiId}/sync-history`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  deleteAnime: (bangumiId: number) =>
+    request<void>(`/api/anime/${bangumiId}`, { method: 'DELETE' }),
+  animeSearch: (query: string, limit = 100) => {
+    const params = new URLSearchParams({ q: query, limit: String(limit) })
+    return request<{ items: AnimeSearchItem[] }>(`/api/anime/search?${params}`)
+  },
+  subscriptionItems: (page: number, pageSize: number, bindingStatus?: SubscriptionBindingStatus) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    if (bindingStatus) params.set('bindingStatus', bindingStatus)
+    return request<SubscriptionItemPage>(`/api/subscription/items?${params}`)
+  },
+  confirmSubscriptionBinding: (itemId: number) =>
+    request<{ item: SubscriptionItem }>(`/api/subscription/items/${itemId}/confirm`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  bindSubscriptionItem: (itemId: number, input: { bangumiId: number; seasonNumber: number; episodeType: string; episodeNumber: string }) =>
+    request<{ item: SubscriptionItem }>(`/api/subscription/items/${itemId}/binding`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  ignoreSubscriptionItem: (itemId: number) =>
+    request<{ item: SubscriptionItem }>(`/api/subscription/items/${itemId}/ignore`, {
+      method: 'POST',
+      body: '{}',
+    }),
+}
+
+export function systemLogStreamURL(levels: LogLevel[], afterId: number): string {
+  const query = new URLSearchParams({ afterId: String(afterId) })
+  levels.forEach((level) => query.append('level', level))
+  return `/api/system-logs/stream?${query}`
+}

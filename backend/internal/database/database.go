@@ -1,0 +1,540 @@
+package database
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	_ "modernc.org/sqlite"
+)
+
+func Open(ctx context.Context, path string) (*sql.DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("create database directory: %w", err)
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	// A single writer is sufficient for this single-process application and
+	// ensures connection-scoped SQLite pragmas are applied consistently.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	for _, pragma := range []string{
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA foreign_keys = ON",
+		"PRAGMA busy_timeout = 5000",
+		"PRAGMA synchronous = NORMAL",
+	} {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("apply %q: %w", pragma, err)
+		}
+	}
+
+	if err := migrate(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func migrate(ctx context.Context, db *sql.DB) error {
+	const schema = `
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    password_hash TEXT NOT NULL,
+    is_admin      INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0, 1)),
+    created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash BLOB PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    INTEGER PRIMARY KEY,
+    applied_at INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (1, unixepoch());
+
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    task_key    TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL,
+    schedule    TEXT NOT NULL,
+    enabled     INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+    interval_minutes INTEGER NOT NULL DEFAULT 15,
+    last_status TEXT NOT NULL DEFAULT 'idle',
+    last_error TEXT NOT NULL DEFAULT '',
+    last_started_at INTEGER,
+    last_finished_at INTEGER,
+    next_run_at INTEGER,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO scheduled_tasks(
+    task_key, name, description, schedule, enabled, created_at, updated_at
+) VALUES (
+    'bangumi-season-metadata',
+    '从 bangumi.tv 抓取当季新番元数据',
+    '从 Bangumi Calendar API 同步当季动画基础元数据和大图封面。',
+    'interval',
+    0,
+    unixepoch(),
+    unixepoch()
+);
+
+CREATE TABLE IF NOT EXISTS network_settings (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    http_proxy  TEXT NOT NULL DEFAULT '',
+    https_proxy TEXT NOT NULL DEFAULT '',
+    updated_at  INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO network_settings(id, http_proxy, https_proxy, updated_at)
+VALUES (1, '', '', unixepoch());
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (2, unixepoch());
+
+CREATE TABLE IF NOT EXISTS anime_metadata (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    bangumi_id       INTEGER NOT NULL UNIQUE,
+    url              TEXT NOT NULL,
+    name             TEXT NOT NULL,
+    name_cn          TEXT NOT NULL DEFAULT '',
+    air_date         TEXT NOT NULL DEFAULT '',
+    air_weekday      INTEGER NOT NULL DEFAULT 0,
+    image_large_url  TEXT NOT NULL DEFAULT '',
+    image_local_path TEXT NOT NULL DEFAULT '',
+    image_status     TEXT NOT NULL DEFAULT 'pending',
+    image_error      TEXT NOT NULL DEFAULT '',
+    detail_date      TEXT NOT NULL DEFAULT '',
+    platform         TEXT NOT NULL DEFAULT '',
+    summary          TEXT NOT NULL DEFAULT '',
+    eps              INTEGER NOT NULL DEFAULT 0,
+    total_episodes   INTEGER NOT NULL DEFAULT 0,
+    volumes          INTEGER NOT NULL DEFAULT 0,
+    series           INTEGER NOT NULL DEFAULT 0,
+    locked           INTEGER NOT NULL DEFAULT 0,
+    nsfw             INTEGER NOT NULL DEFAULT 0,
+    infobox_json     TEXT NOT NULL DEFAULT '[]',
+    rating_json      TEXT NOT NULL DEFAULT '{}',
+    collection_json  TEXT NOT NULL DEFAULT '{}',
+    meta_tags_json   TEXT NOT NULL DEFAULT '[]',
+    detail_status    TEXT NOT NULL DEFAULT 'pending',
+    detail_error     TEXT NOT NULL DEFAULT '',
+    detail_fetched_at INTEGER,
+    characters_status TEXT NOT NULL DEFAULT 'pending',
+    characters_error TEXT NOT NULL DEFAULT '',
+    characters_fetched_at INTEGER,
+    deleted_at       INTEGER,
+    created_at       INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS anime_tags (
+    bangumi_id  INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    count       INTEGER NOT NULL DEFAULT 0,
+    total_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (bangumi_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS anime_aliases (
+    bangumi_id INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    alias      TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (bangumi_id, alias)
+);
+
+CREATE TABLE IF NOT EXISTS anime_characters (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    bangumi_id       INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    character_id     INTEGER NOT NULL,
+    name             TEXT NOT NULL,
+    summary          TEXT NOT NULL DEFAULT '',
+    relation         TEXT NOT NULL DEFAULT '',
+    type             INTEGER NOT NULL DEFAULT 0,
+    image_large_url  TEXT NOT NULL DEFAULT '',
+    image_local_path TEXT NOT NULL DEFAULT '',
+    image_status     TEXT NOT NULL DEFAULT 'pending',
+    image_error      TEXT NOT NULL DEFAULT '',
+    actors_json      TEXT NOT NULL DEFAULT '[]',
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    UNIQUE (bangumi_id, character_id)
+);
+
+CREATE TABLE IF NOT EXISTS actors (
+    actor_id         INTEGER PRIMARY KEY,
+    name             TEXT NOT NULL,
+    short_summary    TEXT NOT NULL DEFAULT '',
+    career_json      TEXT NOT NULL DEFAULT '[]',
+    type             INTEGER NOT NULL DEFAULT 0,
+    locked           INTEGER NOT NULL DEFAULT 0,
+    image_large_url  TEXT NOT NULL DEFAULT '',
+    image_local_path TEXT NOT NULL DEFAULT '',
+    image_status     TEXT NOT NULL DEFAULT 'pending',
+    image_error      TEXT NOT NULL DEFAULT '',
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS character_actors (
+    bangumi_id   INTEGER NOT NULL,
+    character_id INTEGER NOT NULL,
+    actor_id     INTEGER NOT NULL REFERENCES actors(actor_id) ON DELETE CASCADE,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (bangumi_id, character_id, actor_id),
+    FOREIGN KEY (bangumi_id, character_id)
+        REFERENCES anime_characters(bangumi_id, character_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_anime_characters_bangumi_id ON anime_characters(bangumi_id);
+CREATE INDEX IF NOT EXISTS idx_character_actors_actor_id ON character_actors(actor_id);
+
+CREATE TABLE IF NOT EXISTS system_logs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    level       TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'system',
+    message     TEXT NOT NULL,
+    fields_json TEXT NOT NULL DEFAULT '{}',
+    created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_system_logs_level_id ON system_logs(level, id);
+`
+	if _, err := db.ExecContext(ctx, schema); err != nil {
+		return fmt.Errorf("migrate database: %w", err)
+	}
+
+	// Version 3 upgrades databases created before interval scheduling existed.
+	columns := map[string]string{
+		"interval_minutes": "INTEGER NOT NULL DEFAULT 15",
+		"last_status":      "TEXT NOT NULL DEFAULT 'idle'",
+		"last_error":       "TEXT NOT NULL DEFAULT ''",
+		"last_started_at":  "INTEGER",
+		"last_finished_at": "INTEGER",
+		"next_run_at":      "INTEGER",
+	}
+	for name, definition := range columns {
+		if err := ensureColumn(ctx, db, "scheduled_tasks", name, definition); err != nil {
+			return err
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+UPDATE scheduled_tasks
+SET interval_minutes = 15
+WHERE interval_minutes IS NULL OR interval_minutes < 1;
+UPDATE scheduled_tasks
+SET name = '从 bangumi.tv 抓取当季新番元数据',
+    description = '从 Bangumi Calendar API 同步当季动画基础元数据和大图封面。',
+    schedule = 'interval'
+WHERE task_key = 'bangumi-season-metadata';
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (3, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 3 migration: %w", err)
+	}
+
+	animeColumns := map[string]string{
+		"detail_date":           "TEXT NOT NULL DEFAULT ''",
+		"platform":              "TEXT NOT NULL DEFAULT ''",
+		"summary":               "TEXT NOT NULL DEFAULT ''",
+		"eps":                   "INTEGER NOT NULL DEFAULT 0",
+		"total_episodes":        "INTEGER NOT NULL DEFAULT 0",
+		"volumes":               "INTEGER NOT NULL DEFAULT 0",
+		"series":                "INTEGER NOT NULL DEFAULT 0",
+		"locked":                "INTEGER NOT NULL DEFAULT 0",
+		"nsfw":                  "INTEGER NOT NULL DEFAULT 0",
+		"infobox_json":          "TEXT NOT NULL DEFAULT '[]'",
+		"rating_json":           "TEXT NOT NULL DEFAULT '{}'",
+		"collection_json":       "TEXT NOT NULL DEFAULT '{}'",
+		"meta_tags_json":        "TEXT NOT NULL DEFAULT '[]'",
+		"detail_status":         "TEXT NOT NULL DEFAULT 'pending'",
+		"detail_error":          "TEXT NOT NULL DEFAULT ''",
+		"detail_fetched_at":     "INTEGER",
+		"characters_status":     "TEXT NOT NULL DEFAULT 'pending'",
+		"characters_error":      "TEXT NOT NULL DEFAULT ''",
+		"characters_fetched_at": "INTEGER",
+	}
+	for name, definition := range animeColumns {
+		if err := ensureColumn(ctx, db, "anime_metadata", name, definition); err != nil {
+			return err
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS idx_anime_detail_status ON anime_metadata(detail_status);
+CREATE INDEX IF NOT EXISTS idx_anime_characters_status ON anime_metadata(characters_status);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (4, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 4 migration: %w", err)
+	}
+
+	for name, definition := range map[string]string{
+		"image_status": "TEXT NOT NULL DEFAULT 'pending'",
+		"image_error":  "TEXT NOT NULL DEFAULT ''",
+	} {
+		if err := ensureColumn(ctx, db, "anime_metadata", name, definition); err != nil {
+			return err
+		}
+		if err := ensureColumn(ctx, db, "anime_characters", name, definition); err != nil {
+			return err
+		}
+	}
+	applied, err := migrationApplied(ctx, db, 5)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `
+UPDATE anime_metadata
+SET image_status = CASE
+    WHEN image_local_path != '' THEN 'downloaded'
+    WHEN image_large_url = '' THEN 'not_found'
+    ELSE 'pending'
+END;
+UPDATE anime_characters
+SET image_status = CASE
+    WHEN image_local_path != '' THEN 'downloaded'
+    WHEN image_large_url = '' THEN 'not_found'
+    ELSE 'pending'
+END;
+UPDATE anime_metadata
+SET characters_status = 'pending', characters_error = ''
+WHERE characters_status = 'completed';
+INSERT INTO schema_migrations(version, applied_at) VALUES (5, unixepoch());`); err != nil {
+			return fmt.Errorf("apply version 5 migration: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit version 5 migration: %w", err)
+		}
+	}
+
+	applied, err = migrationApplied(ctx, db, 6)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		// Character rows preserve the order returned by Bangumi through their
+		// auto-increment id. Keep only the first ten for databases synchronized
+		// before the application introduced the same limit in the fetch path.
+		if _, err := tx.ExecContext(ctx, `
+DELETE FROM anime_characters
+WHERE id IN (
+    SELECT extra.id
+    FROM anime_characters AS extra
+    WHERE (
+        SELECT COUNT(*)
+        FROM anime_characters AS earlier
+        WHERE earlier.bangumi_id = extra.bangumi_id
+          AND earlier.id <= extra.id
+    ) > 10
+);
+DELETE FROM actors
+WHERE actor_id NOT IN (SELECT DISTINCT actor_id FROM character_actors);
+INSERT INTO schema_migrations(version, applied_at) VALUES (6, unixepoch());`); err != nil {
+			return fmt.Errorf("apply version 6 migration: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit version 6 migration: %w", err)
+		}
+	}
+
+	if err := ensureColumn(ctx, db, "anime_metadata", "deleted_at", "INTEGER"); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS idx_anime_deleted_created ON anime_metadata(deleted_at, created_at DESC, id DESC);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (7, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 7 migration: %w", err)
+	}
+
+	applied, err = migrationApplied(ctx, db, 8)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS subscription_settings (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    rss_url    TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO subscription_settings(id, rss_url, updated_at)
+VALUES (1, '', unixepoch());
+
+CREATE TABLE IF NOT EXISTS subscription_items (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_key       TEXT NOT NULL UNIQUE,
+    guid           TEXT NOT NULL DEFAULT '',
+    title          TEXT NOT NULL,
+    description    TEXT NOT NULL DEFAULT '',
+    link           TEXT NOT NULL DEFAULT '',
+    enclosure_url  TEXT NOT NULL DEFAULT '',
+    torrent_url    TEXT NOT NULL DEFAULT '',
+    content_length INTEGER NOT NULL DEFAULT 0,
+    pub_date       TEXT NOT NULL DEFAULT '',
+    published_at   INTEGER,
+    match_status   TEXT NOT NULL DEFAULT 'unmatched',
+    bangumi_id     INTEGER,
+    matched_name   TEXT NOT NULL DEFAULT '',
+    parsed_name    TEXT NOT NULL DEFAULT '',
+    season_number  INTEGER,
+    episode_type   TEXT NOT NULL DEFAULT '',
+    episode_number TEXT NOT NULL DEFAULT '',
+    match_score    REAL NOT NULL DEFAULT 0,
+    match_reason   TEXT NOT NULL DEFAULT '',
+    raw_json       TEXT NOT NULL DEFAULT '{}',
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    FOREIGN KEY (bangumi_id) REFERENCES anime_metadata(bangumi_id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscription_items_status_created ON subscription_items(match_status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_subscription_items_bangumi ON subscription_items(bangumi_id, created_at DESC);
+
+INSERT OR IGNORE INTO scheduled_tasks(
+    task_key, name, description, schedule, enabled, interval_minutes, created_at, updated_at
+) VALUES (
+    'subscription-rss-match',
+    '抓取订阅和匹配番剧',
+    '抓取 RSS 番剧订阅，入库新条目并根据本地番剧名称、中文名和别名进行规则匹配。',
+    'interval',
+    0,
+    15,
+    unixepoch(),
+    unixepoch()
+);
+
+INSERT INTO schema_migrations(version, applied_at) VALUES (8, unixepoch());`); err != nil {
+			return fmt.Errorf("apply version 8 migration: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit version 8 migration: %w", err)
+		}
+	}
+
+	for name, definition := range map[string]string{
+		"binding_status":       "TEXT NOT NULL DEFAULT 'pending'",
+		"bound_bangumi_id":     "INTEGER",
+		"bound_anime_name":     "TEXT NOT NULL DEFAULT ''",
+		"bound_season_number":  "INTEGER",
+		"bound_episode_type":   "TEXT NOT NULL DEFAULT ''",
+		"bound_episode_number": "TEXT NOT NULL DEFAULT ''",
+		"binding_note":         "TEXT NOT NULL DEFAULT ''",
+		"bound_at":             "INTEGER",
+		"ignored_at":           "INTEGER",
+	} {
+		if err := ensureColumn(ctx, db, "subscription_items", name, definition); err != nil {
+			return err
+		}
+	}
+	applied, err = migrationApplied(ctx, db, 9)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS subscription_title_rules (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    title_key            TEXT NOT NULL UNIQUE,
+    bangumi_id           INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    anime_name           TEXT NOT NULL,
+    season_number        INTEGER NOT NULL,
+    episode_type         TEXT NOT NULL DEFAULT 'episode',
+    created_from_item_id INTEGER REFERENCES subscription_items(id) ON DELETE SET NULL,
+    created_at           INTEGER NOT NULL,
+    updated_at           INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscription_items_binding_status ON subscription_items(binding_status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_subscription_items_bound_target ON subscription_items(bound_bangumi_id, bound_season_number, bound_episode_type, bound_episode_number);
+CREATE INDEX IF NOT EXISTS idx_subscription_title_rules_bangumi ON subscription_title_rules(bangumi_id);
+
+INSERT INTO schema_migrations(version, applied_at) VALUES (9, unixepoch());`); err != nil {
+			return fmt.Errorf("apply version 9 migration: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit version 9 migration: %w", err)
+		}
+	}
+	return nil
+}
+
+func migrationApplied(ctx context.Context, db *sql.DB, version int) (bool, error) {
+	var applied bool
+	if err := db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?)", version,
+	).Scan(&applied); err != nil {
+		return false, fmt.Errorf("check migration %d: %w", version, err)
+	}
+	return applied, nil
+}
+
+func ensureColumn(ctx context.Context, db *sql.DB, table, column, definition string) error {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	exists := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == column {
+			exists = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
+	}
+	return nil
+}
