@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -63,31 +64,35 @@ type JobPage struct {
 }
 
 type Job struct {
-	ID                   int64  `json:"id"`
-	DownloadJobID        int64  `json:"downloadJobId"`
-	SubscriptionItemID   int64  `json:"subscriptionItemId"`
-	Title                string `json:"title"`
-	BangumiID            int64  `json:"bangumiId"`
-	AnimeName            string `json:"animeName"`
-	SeasonNumber         int    `json:"seasonNumber"`
-	EpisodeType          string `json:"episodeType"`
-	EpisodeNumber        string `json:"episodeNumber"`
-	Status               string `json:"status"`
-	SourceFile           string `json:"sourceFile"`
-	SubtitleFile         string `json:"subtitleFile"`
-	OutputFile           string `json:"outputFile"`
-	VideoCodec           string `json:"videoCodec"`
-	AudioCodec           string `json:"audioCodec"`
-	HasInternalSubtitles bool   `json:"hasInternalSubtitles"`
-	HasExternalSubtitles bool   `json:"hasExternalSubtitles"`
-	NeedsTranscode       bool   `json:"needsTranscode"`
-	Action               string `json:"action"`
-	ErrorMessage         string `json:"errorMessage"`
-	StartedAt            *int64 `json:"startedAt"`
-	CompletedAt          *int64 `json:"completedAt"`
-	FailedAt             *int64 `json:"failedAt"`
-	CreatedAt            int64  `json:"createdAt"`
-	UpdatedAt            int64  `json:"updatedAt"`
+	ID                   int64   `json:"id"`
+	DownloadJobID        int64   `json:"downloadJobId"`
+	SubscriptionItemID   int64   `json:"subscriptionItemId"`
+	Title                string  `json:"title"`
+	BangumiID            int64   `json:"bangumiId"`
+	AnimeName            string  `json:"animeName"`
+	SeasonNumber         int     `json:"seasonNumber"`
+	EpisodeType          string  `json:"episodeType"`
+	EpisodeNumber        string  `json:"episodeNumber"`
+	Status               string  `json:"status"`
+	SourceFile           string  `json:"sourceFile"`
+	SubtitleFile         string  `json:"subtitleFile"`
+	OutputFile           string  `json:"outputFile"`
+	VideoCodec           string  `json:"videoCodec"`
+	AudioCodec           string  `json:"audioCodec"`
+	HasInternalSubtitles bool    `json:"hasInternalSubtitles"`
+	HasExternalSubtitles bool    `json:"hasExternalSubtitles"`
+	NeedsTranscode       bool    `json:"needsTranscode"`
+	Action               string  `json:"action"`
+	Progress             float64 `json:"progress"`
+	ProcessedDurationMS  int64   `json:"processedDurationMs"`
+	TotalDurationMS      int64   `json:"totalDurationMs"`
+	ErrorMessage         string  `json:"errorMessage"`
+	ProgressUpdatedAt    *int64  `json:"progressUpdatedAt"`
+	StartedAt            *int64  `json:"startedAt"`
+	CompletedAt          *int64  `json:"completedAt"`
+	FailedAt             *int64  `json:"failedAt"`
+	CreatedAt            int64   `json:"createdAt"`
+	UpdatedAt            int64   `json:"updatedAt"`
 }
 
 type pendingJob struct {
@@ -118,10 +123,12 @@ type probeStream struct {
 	CodecType string `json:"codec_type"`
 	Profile   string `json:"profile"`
 	PixFmt    string `json:"pix_fmt"`
+	Duration  string `json:"duration"`
 }
 
 type probeFormat struct {
 	FormatName string `json:"format_name"`
+	Duration   string `json:"duration"`
 }
 
 type mediaPlan struct {
@@ -134,6 +141,7 @@ type mediaPlan struct {
 	hasExternalSubtitles bool
 	needsTranscode       bool
 	action               string
+	totalDurationMS      int64
 }
 
 type processResult struct {
@@ -260,7 +268,9 @@ UPDATE media_jobs
 SET status = ?, source_path = '', subtitle_path = '', output_path = '',
     video_codec = '', audio_codec = '', has_internal_subtitles = 0,
     has_external_subtitles = 0, needs_transcode = 0, action = '',
-    error_message = '', started_at = NULL, completed_at = NULL, failed_at = NULL,
+    progress = 0, processed_duration_ms = 0, total_duration_ms = 0,
+    progress_updated_at = NULL, error_message = '',
+    started_at = NULL, completed_at = NULL, failed_at = NULL,
     updated_at = ?
 WHERE id = ? AND status = ?`, StatusPending, now, jobID, StatusFailed)
 	if err != nil {
@@ -326,7 +336,9 @@ func (s *Service) recoverInterruptedJobs(ctx context.Context) error {
 	now := s.now().UTC().Unix()
 	result, err := s.db.ExecContext(ctx, `
 UPDATE media_jobs
-SET status = ?, error_message = '上次处理被中断，已重新排队', started_at = NULL, updated_at = ?
+SET status = ?, error_message = '上次处理被中断，已重新排队',
+    progress = 0, processed_duration_ms = 0, progress_updated_at = NULL,
+    started_at = NULL, updated_at = ?
 WHERE status = ?`, StatusPending, now, StatusTranscoding)
 	if err != nil {
 		return err
@@ -364,7 +376,9 @@ func (s *Service) processJob(ctx context.Context, job pendingJob) (processResult
 	now := s.now().UTC().Unix()
 	if _, err := s.db.ExecContext(ctx, `
 UPDATE media_jobs
-SET status = ?, error_message = '', started_at = COALESCE(started_at, ?), failed_at = NULL, updated_at = ?
+SET status = ?, error_message = '', progress = 0, processed_duration_ms = 0,
+    total_duration_ms = 0, progress_updated_at = NULL, started_at = COALESCE(started_at, ?),
+    failed_at = NULL, updated_at = ?
 WHERE id = ? AND status = ?`, StatusTranscoding, now, now, job.ID, StatusPending); err != nil {
 		return result, err
 	}
@@ -385,7 +399,7 @@ WHERE id = ? AND status = ?`, StatusTranscoding, now, now, job.ID, StatusPending
 	if plan.action == "copy" {
 		err = copyToFinal(plan.sourcePath, plan.outputPath)
 	} else {
-		err = s.runFFmpeg(ctx, plan)
+		err = s.runFFmpeg(ctx, job.ID, plan)
 	}
 	if err != nil {
 		_ = s.markFailed(ctx, job.ID, err.Error())
@@ -426,6 +440,7 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 	if videoStream.CodecName == "" {
 		return mediaPlan{}, errors.New("未找到视频流")
 	}
+	totalDurationMS := probeDurationMS(probe, videoStream)
 	subtitlePath := findExternalSubtitle(video.Path)
 	outputPath := finalOutputPath(s.mediaDir, job)
 	webPlayable := isBrowserPlayable(video.Path, videoStream, audioStream)
@@ -449,7 +464,7 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 		sourcePath: video.Path, subtitlePath: subtitlePath, outputPath: outputPath,
 		videoCodec: videoStream.CodecName, audioCodec: audioStream.CodecName,
 		hasInternalSubtitles: hasInternal, hasExternalSubtitles: hasExternal,
-		needsTranscode: needsTranscode, action: action,
+		needsTranscode: needsTranscode, action: action, totalDurationMS: totalDurationMS,
 	}, nil
 }
 
@@ -471,13 +486,16 @@ func (s *Service) probe(ctx context.Context, path string) (probeResult, error) {
 	return result, nil
 }
 
-func (s *Service) runFFmpeg(ctx context.Context, plan mediaPlan) error {
+func (s *Service) runFFmpeg(ctx context.Context, jobID int64, plan mediaPlan) error {
 	if err := os.MkdirAll(filepath.Dir(plan.outputPath), 0o755); err != nil {
 		return err
 	}
 	tempPath := plan.outputPath + ".tmp.mp4"
 	_ = os.Remove(tempPath)
-	args := []string{"-y", "-i", plan.sourcePath, "-map", "0:v:0", "-map", "0:a:0?"}
+	args := []string{
+		"-hide_banner", "-nostats", "-loglevel", "warning", "-progress", "pipe:1",
+		"-y", "-i", plan.sourcePath, "-map", "0:v:0", "-map", "0:a:0?",
+	}
 	switch plan.action {
 	case "remux":
 		args = append(args, "-c", "copy", "-movflags", "+faststart")
@@ -494,18 +512,142 @@ func (s *Service) runFFmpeg(ctx context.Context, plan mediaPlan) error {
 	}
 	args = append(args, tempPath)
 	command := exec.CommandContext(ctx, s.ffmpegPath, args...)
-	output, err := command.CombinedOutput()
+
+	stdout, err := command.StdoutPipe()
 	if err != nil {
-		message := strings.TrimSpace(string(output))
+		return err
+	}
+	stderr, err := command.StderrPipe()
+	if err != nil {
+		return err
+	}
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("启动 ffmpeg 失败: %w", err)
+	}
+
+	stderrCh := make(chan string, 1)
+	go func() {
+		output, _ := io.ReadAll(stderr)
+		stderrCh <- string(output)
+	}()
+
+	if plan.totalDurationMS > 0 {
+		if err := s.updateProgress(ctx, jobID, 0, plan.totalDurationMS, false); err != nil {
+			s.logger.Warn("更新转码进度失败", "source", "media", "media_job_id", jobID, "error", err)
+		}
+	}
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+	tracker := progressTracker{totalDurationMS: plan.totalDurationMS}
+	for scanner.Scan() {
+		update, ok := tracker.consume(scanner.Text(), s.now())
+		if !ok {
+			continue
+		}
+		if err := s.updateProgress(ctx, jobID, update.processedDurationMS, plan.totalDurationMS, update.force); err != nil {
+			s.logger.Warn("更新转码进度失败", "source", "media", "media_job_id", jobID, "error", err)
+		}
+	}
+	scanErr := scanner.Err()
+	waitErr := command.Wait()
+	stderrOutput := <-stderrCh
+	if waitErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		message := strings.TrimSpace(stderrOutput)
+		if message == "" {
+			message = waitErr.Error()
+		}
 		if len(message) > 2000 {
 			message = message[len(message)-2000:]
 		}
 		return fmt.Errorf("ffmpeg 失败: %s", message)
 	}
+	if scanErr != nil {
+		return fmt.Errorf("读取 ffmpeg 进度失败: %w", scanErr)
+	}
+
 	if err := replaceFile(tempPath, plan.outputPath); err != nil {
 		return err
 	}
 	return nil
+}
+
+type progressUpdate struct {
+	processedDurationMS int64
+	force               bool
+}
+
+type progressTracker struct {
+	totalDurationMS     int64
+	processedDurationMS int64
+	lastWrite           time.Time
+}
+
+func (t *progressTracker) consume(line string, now time.Time) (progressUpdate, bool) {
+	key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+	if !ok {
+		return progressUpdate{}, false
+	}
+	switch key {
+	case "out_time_us", "out_time_ms":
+		if microseconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil && microseconds >= 0 {
+			t.processedDurationMS = microseconds / 1000
+			return t.maybeUpdate(now, false)
+		}
+	case "out_time":
+		if milliseconds := parseClockDurationMS(value); milliseconds >= 0 {
+			t.processedDurationMS = milliseconds
+			return t.maybeUpdate(now, false)
+		}
+	case "progress":
+		if strings.TrimSpace(value) == "end" {
+			if t.totalDurationMS > 0 && t.processedDurationMS < t.totalDurationMS {
+				t.processedDurationMS = t.totalDurationMS
+			}
+			return progressUpdate{processedDurationMS: t.processedDurationMS, force: true}, true
+		}
+	}
+	return progressUpdate{}, false
+}
+
+func (t *progressTracker) maybeUpdate(now time.Time, force bool) (progressUpdate, bool) {
+	if !force && !t.lastWrite.IsZero() && now.Sub(t.lastWrite) < time.Second {
+		return progressUpdate{}, false
+	}
+	t.lastWrite = now
+	return progressUpdate{processedDurationMS: t.processedDurationMS, force: force}, true
+}
+
+func (s *Service) updateProgress(ctx context.Context, jobID int64, processedDurationMS, totalDurationMS int64, force bool) error {
+	if processedDurationMS < 0 {
+		processedDurationMS = 0
+	}
+	if totalDurationMS < 0 {
+		totalDurationMS = 0
+	}
+	if totalDurationMS > 0 && processedDurationMS > totalDurationMS {
+		processedDurationMS = totalDurationMS
+	}
+	progress := 0.0
+	if totalDurationMS > 0 {
+		progress = float64(processedDurationMS) / float64(totalDurationMS)
+		if progress > 1 {
+			progress = 1
+		}
+		if progress >= 1 && !force {
+			progress = 0.999
+		}
+	}
+	now := s.now().UTC().Unix()
+	_, err := s.db.ExecContext(ctx, `
+UPDATE media_jobs
+SET progress = ?, processed_duration_ms = ?,
+    total_duration_ms = CASE WHEN ? > 0 THEN ? ELSE total_duration_ms END,
+    progress_updated_at = ?, updated_at = ?
+WHERE id = ? AND status = ?`, progress, processedDurationMS, totalDurationMS, totalDurationMS, now, now, jobID, StatusTranscoding)
+	return err
 }
 
 func (s *Service) persistPlan(ctx context.Context, jobID int64, plan mediaPlan) error {
@@ -514,9 +656,11 @@ func (s *Service) persistPlan(ctx context.Context, jobID int64, plan mediaPlan) 
 UPDATE media_jobs
 SET source_path = ?, subtitle_path = ?, output_path = ?, video_codec = ?, audio_codec = ?,
     has_internal_subtitles = ?, has_external_subtitles = ?, needs_transcode = ?, action = ?,
+    progress = 0, processed_duration_ms = 0, total_duration_ms = ?, progress_updated_at = NULL,
     updated_at = ?
 WHERE id = ?`, plan.sourcePath, plan.subtitlePath, plan.outputPath, plan.videoCodec, plan.audioCodec,
-		plan.hasInternalSubtitles, plan.hasExternalSubtitles, plan.needsTranscode, plan.action, now, jobID)
+		plan.hasInternalSubtitles, plan.hasExternalSubtitles, plan.needsTranscode, plan.action,
+		plan.totalDurationMS, now, jobID)
 	return err
 }
 
@@ -524,8 +668,11 @@ func (s *Service) markCompleted(ctx context.Context, jobID int64) error {
 	now := s.now().UTC().Unix()
 	_, err := s.db.ExecContext(ctx, `
 UPDATE media_jobs
-SET status = ?, error_message = '', completed_at = COALESCE(completed_at, ?), failed_at = NULL, updated_at = ?
-WHERE id = ?`, StatusCompleted, now, now, jobID)
+SET status = ?, progress = 1,
+    processed_duration_ms = CASE WHEN total_duration_ms > 0 THEN total_duration_ms ELSE processed_duration_ms END,
+    progress_updated_at = ?, error_message = '',
+    completed_at = COALESCE(completed_at, ?), failed_at = NULL, updated_at = ?
+WHERE id = ?`, StatusCompleted, now, now, now, jobID)
 	return err
 }
 
@@ -633,6 +780,53 @@ func classifyStreams(streams []probeStream) (probeStream, probeStream, []probeSt
 		}
 	}
 	return video, audio, subtitles
+}
+
+func probeDurationMS(probe probeResult, video probeStream) int64 {
+	if milliseconds := parseSecondsDurationMS(probe.Format.Duration); milliseconds > 0 {
+		return milliseconds
+	}
+	return parseSecondsDurationMS(video.Duration)
+}
+
+func parseSecondsDurationMS(value string) int64 {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "N/A") {
+		return 0
+	}
+	seconds, err := strconv.ParseFloat(value, 64)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return int64(seconds * 1000)
+}
+
+func parseClockDurationMS(value string) int64 {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "N/A") {
+		return -1
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 3 {
+		return -1
+	}
+	hours, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return -1
+	}
+	minutes, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return -1
+	}
+	seconds, err := strconv.ParseFloat(parts[2], 64)
+	if err != nil {
+		return -1
+	}
+	totalSeconds := float64(hours*3600+minutes*60) + seconds
+	if totalSeconds < 0 {
+		return -1
+	}
+	return int64(totalSeconds * 1000)
 }
 
 func isBrowserPlayable(path string, video, audio probeStream) bool {
@@ -813,19 +1007,21 @@ SELECT mj.id, mj.download_job_id, mj.subscription_item_id, si.title, mj.bangumi_
        mj.anime_name, mj.season_number, mj.episode_type, mj.episode_number, mj.status,
        mj.source_path, mj.subtitle_path, mj.output_path, mj.video_codec, mj.audio_codec,
        mj.has_internal_subtitles, mj.has_external_subtitles, mj.needs_transcode,
-       mj.action, mj.error_message, mj.started_at, mj.completed_at, mj.failed_at,
+       mj.action, mj.progress, mj.processed_duration_ms, mj.total_duration_ms,
+       mj.error_message, mj.progress_updated_at, mj.started_at, mj.completed_at, mj.failed_at,
        mj.created_at, mj.updated_at
 `
 
 func scanJob(row interface{ Scan(dest ...any) error }) (Job, error) {
 	var job Job
-	var startedAt, completedAt, failedAt sql.NullInt64
+	var progressUpdatedAt, startedAt, completedAt, failedAt sql.NullInt64
 	if err := row.Scan(
 		&job.ID, &job.DownloadJobID, &job.SubscriptionItemID, &job.Title, &job.BangumiID,
 		&job.AnimeName, &job.SeasonNumber, &job.EpisodeType, &job.EpisodeNumber, &job.Status,
 		&job.SourceFile, &job.SubtitleFile, &job.OutputFile, &job.VideoCodec, &job.AudioCodec,
 		&job.HasInternalSubtitles, &job.HasExternalSubtitles, &job.NeedsTranscode,
-		&job.Action, &job.ErrorMessage, &startedAt, &completedAt, &failedAt,
+		&job.Action, &job.Progress, &job.ProcessedDurationMS, &job.TotalDurationMS,
+		&job.ErrorMessage, &progressUpdatedAt, &startedAt, &completedAt, &failedAt,
 		&job.CreatedAt, &job.UpdatedAt,
 	); err != nil {
 		return Job{}, err
@@ -833,6 +1029,7 @@ func scanJob(row interface{ Scan(dest ...any) error }) (Job, error) {
 	job.SourceFile = baseName(job.SourceFile)
 	job.SubtitleFile = baseName(job.SubtitleFile)
 	job.OutputFile = baseName(job.OutputFile)
+	job.ProgressUpdatedAt = nullableInt64(progressUpdatedAt)
 	job.StartedAt = nullableInt64(startedAt)
 	job.CompletedAt = nullableInt64(completedAt)
 	job.FailedAt = nullableInt64(failedAt)

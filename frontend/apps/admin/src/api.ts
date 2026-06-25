@@ -104,7 +104,11 @@ export interface MediaJob {
   hasExternalSubtitles: boolean
   needsTranscode: boolean
   action: string
+  progress: number
+  processedDurationMs: number
+  totalDurationMs: number
   errorMessage: string
+  progressUpdatedAt: number | null
   startedAt: number | null
   completedAt: number | null
   failedAt: number | null

@@ -33,9 +33,20 @@ async function load(showLoading = true) {
   }
 }
 
+function refreshPolling() {
+  if (pollingTimer) {
+    window.clearInterval(pollingTimer)
+    pollingTimer = undefined
+  }
+  if (status.value === 'transcoding') {
+    pollingTimer = window.setInterval(() => load(false), 3000)
+  }
+}
+
 function changeStatus(value: string | number | boolean) {
   status.value = value as MediaJobStatus
   page.value = 1
+  refreshPolling()
   void load()
 }
 
@@ -89,6 +100,27 @@ function formatTime(timestamp: number | null) {
   return timestamp ? new Date(timestamp * 1000).toLocaleString() : '—'
 }
 
+function formatDurationMs(value: number) {
+  if (!value || value < 0) return '—'
+  const totalSeconds = Math.floor(value / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const minuteText = String(minutes).padStart(hours > 0 ? 2 : 1, '0')
+  const secondText = String(seconds).padStart(2, '0')
+  if (hours > 0) return `${hours}:${minuteText}:${secondText}`
+  return `${minuteText}:${secondText}`
+}
+
+function progressPercent(job: MediaJob) {
+  if (!Number.isFinite(job.progress)) return 0
+  return Math.max(0, Math.min(100, Math.round(job.progress * 100)))
+}
+
+function progressLabel(job: MediaJob) {
+  return `已处理 ${formatDurationMs(job.processedDurationMs)} / 总时长 ${formatDurationMs(job.totalDurationMs)}`
+}
+
 function subtitleLabel(job: MediaJob) {
   const values: string[] = []
   if (job.hasExternalSubtitles) values.push('外挂')
@@ -111,7 +143,7 @@ async function retryJob(job: MediaJob) {
 
 onMounted(async () => {
   await load()
-  pollingTimer = window.setInterval(() => load(false), 5000)
+  refreshPolling()
 })
 
 onBeforeUnmount(() => {
@@ -149,6 +181,17 @@ onBeforeUnmount(() => {
       <el-table-column label="状态" width="96">
         <template #default="{ row }">
           <el-tag :type="statusType(row.status)" effect="plain">{{ statusLabel(row.status) }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="status === 'transcoding'" label="进度" min-width="230">
+        <template #default="{ row }">
+          <div class="transcode-progress-cell">
+            <div class="transcode-progress-head">
+              <strong>{{ progressPercent(row) }}%</strong>
+              <span>{{ progressLabel(row) }}</span>
+            </div>
+            <el-progress :percentage="progressPercent(row)" :stroke-width="8" :show-text="false" />
+          </div>
         </template>
       </el-table-column>
       <el-table-column label="处理方式" width="110">
@@ -201,3 +244,35 @@ onBeforeUnmount(() => {
     <el-pagination background layout="prev, pager, next" :current-page="page" :page-size="pageSize" :total="total" @current-change="changePage" />
   </div>
 </template>
+
+<style scoped>
+.transcode-progress-cell {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.transcode-progress-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transcode-progress-head strong {
+  color: #344054;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.transcode-progress-head span {
+  color: #667085;
+  flex: 1 1 auto;
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

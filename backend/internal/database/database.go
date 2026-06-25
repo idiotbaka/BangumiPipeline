@@ -572,6 +572,10 @@ CREATE TABLE IF NOT EXISTS media_jobs (
     has_external_subtitles INTEGER NOT NULL DEFAULT 0 CHECK (has_external_subtitles IN (0, 1)),
     needs_transcode        INTEGER NOT NULL DEFAULT 0 CHECK (needs_transcode IN (0, 1)),
     action                 TEXT NOT NULL DEFAULT '',
+    progress               REAL NOT NULL DEFAULT 0,
+    processed_duration_ms  INTEGER NOT NULL DEFAULT 0,
+    total_duration_ms      INTEGER NOT NULL DEFAULT 0,
+    progress_updated_at    INTEGER,
     error_message          TEXT NOT NULL DEFAULT '',
     started_at             INTEGER,
     completed_at           INTEGER,
@@ -599,6 +603,21 @@ INSERT OR IGNORE INTO scheduled_tasks(
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (11, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 11 migration: %w", err)
+	}
+	for name, definition := range map[string]string{
+		"progress":              "REAL NOT NULL DEFAULT 0",
+		"processed_duration_ms": "INTEGER NOT NULL DEFAULT 0",
+		"total_duration_ms":     "INTEGER NOT NULL DEFAULT 0",
+		"progress_updated_at":   "INTEGER",
+	} {
+		if err := ensureColumn(ctx, db, "media_jobs", name, definition); err != nil {
+			return err
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (12, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 12 migration: %w", err)
 	}
 	return nil
 }
