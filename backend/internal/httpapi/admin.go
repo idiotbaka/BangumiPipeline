@@ -75,6 +75,7 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/download/jobs", api.listDownloadJobs)
 	mux.HandleFunc("POST /api/download/jobs/{jobID}/retry", api.retryDownloadJob)
 	mux.HandleFunc("GET /api/media/jobs", api.listMediaJobs)
+	mux.HandleFunc("POST /api/media/jobs/{jobID}/retry", api.retryMediaJob)
 	mux.HandleFunc("GET /api/subscription/items", api.listSubscriptionItems)
 	mux.HandleFunc("POST /api/subscription/items/{itemID}/confirm", api.confirmSubscriptionBinding)
 	mux.HandleFunc("PUT /api/subscription/items/{itemID}/binding", api.bindSubscriptionItem)
@@ -849,6 +850,29 @@ func (a *AdminAPI) listMediaJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *AdminAPI) retryMediaJob(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("jobID"))
+	if !ok {
+		return
+	}
+	job, err := a.media.RetryFailedJob(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, media.ErrMediaJobNotFound):
+			writeError(w, http.StatusNotFound, "media_job_not_found", "转码任务不存在")
+		case errors.Is(err, media.ErrRetryNotAllowed):
+			writeError(w, http.StatusConflict, "media_retry_not_allowed", "只有处理失败的转码任务可以重试")
+		default:
+			a.internalError(w, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"job": job})
 }
 
 func (a *AdminAPI) requireAdministrator(w http.ResponseWriter, r *http.Request) bool {

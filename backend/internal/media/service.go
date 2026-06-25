@@ -28,7 +28,11 @@ const (
 	downloadStatusCompleted = "completed"
 )
 
-var ErrInvalidStatus = errors.New("invalid media status")
+var (
+	ErrInvalidStatus    = errors.New("invalid media status")
+	ErrMediaJobNotFound = errors.New("media job not found")
+	ErrRetryNotAllowed  = errors.New("media job retry not allowed")
+)
 
 type Config struct {
 	MediaDir        string
@@ -215,6 +219,48 @@ LIMIT ? OFFSET ?`
 		result.Items = append(result.Items, job)
 	}
 	return result, rows.Err()
+}
+
+func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (Job, error) {
+	now := s.now().UTC().Unix()
+	result, err := s.db.ExecContext(ctx, `
+UPDATE media_jobs
+SET status = ?, source_path = '', subtitle_path = '', output_path = '',
+    video_codec = '', audio_codec = '', has_internal_subtitles = 0,
+    has_external_subtitles = 0, needs_transcode = 0, action = '',
+    error_message = '', started_at = NULL, completed_at = NULL, failed_at = NULL,
+    updated_at = ?
+WHERE id = ? AND status = ?`, StatusPending, now, jobID, StatusFailed)
+	if err != nil {
+		return Job{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return Job{}, err
+	}
+	if affected == 0 {
+		if _, err := s.jobByID(ctx, jobID); errors.Is(err, ErrMediaJobNotFound) {
+			return Job{}, ErrMediaJobNotFound
+		}
+		return Job{}, ErrRetryNotAllowed
+	}
+	job, err := s.jobByID(ctx, jobID)
+	if err != nil {
+		return Job{}, err
+	}
+	s.logger.Info("媒体处理失败任务已重置为待处理", "source", "media", "media_job_id", jobID)
+	return job, nil
+}
+
+func (s *Service) jobByID(ctx context.Context, jobID int64) (Job, error) {
+	job, err := scanJob(s.db.QueryRowContext(ctx, mediaJobSelect+`
+FROM media_jobs mj
+JOIN subscription_items si ON si.id = mj.subscription_item_id
+WHERE mj.id = ?`, jobID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Job{}, ErrMediaJobNotFound
+	}
+	return job, err
 }
 
 func (s *Service) EnqueueCompletedDownloads(ctx context.Context) (int64, error) {

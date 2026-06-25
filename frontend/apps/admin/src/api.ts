@@ -410,6 +410,11 @@ export const api = {
     if (status) params.set('status', status)
     return request<MediaJobPage>(`/api/media/jobs?${params}`)
   },
+  retryMediaJob: (jobId: number) =>
+    request<{ job: MediaJob }>(`/api/media/jobs/${jobId}/retry`, {
+      method: 'POST',
+      body: '{}',
+    }),
   confirmSubscriptionBinding: (itemId: number) =>
     request<{ item: SubscriptionItem }>(`/api/subscription/items/${itemId}/confirm`, {
       method: 'POST',

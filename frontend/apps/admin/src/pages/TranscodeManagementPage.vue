@@ -10,6 +10,7 @@ const page = ref(1)
 const pageSize = 50
 const loading = ref(true)
 const status = ref<MediaJobStatus>('pending')
+const retryingId = ref<number | null>(null)
 let pollingTimer: ReturnType<typeof setInterval> | undefined
 
 const filters: Array<{ label: string; value: MediaJobStatus }> = [
@@ -95,6 +96,19 @@ function subtitleLabel(job: MediaJob) {
   return values.length > 0 ? values.join(' + ') : '无'
 }
 
+async function retryJob(job: MediaJob) {
+  retryingId.value = job.id
+  try {
+    await api.retryMediaJob(job.id)
+    ElMessage.success('已重置为待处理，等待计划任务重新处理')
+    await load(false)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '重试转码任务失败')
+  } finally {
+    retryingId.value = null
+  }
+}
+
 onMounted(async () => {
   await load()
   pollingTimer = window.setInterval(() => load(false), 5000)
@@ -173,6 +187,11 @@ onBeforeUnmount(() => {
         <template #default="{ row }">
           <span v-if="row.errorMessage">{{ row.errorMessage }}</span>
           <span v-else class="muted-text">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="status === 'failed'" label="操作" width="104" fixed="right">
+        <template #default="{ row }">
+          <el-button size="small" type="primary" plain :icon="Refresh" :loading="retryingId === row.id" @click="retryJob(row)">重试</el-button>
         </template>
       </el-table-column>
     </el-table>
