@@ -162,6 +162,7 @@ button, input { font: inherit; }
 .anime-actions .el-button { width: 118px; margin-left: 0 !important; justify-content: center; }
 .anime-pagination { display: flex; justify-content: center; margin-top: 34px; }
 .manual-anime-dialog .el-form-item { margin-bottom: 0; }
+.history-sync-dialog .el-form-item:last-child { margin-bottom: 0; }
 .anime-detail-dialog { max-height: 92vh; display: flex; flex-direction: column; margin-bottom: 4vh; }
 .anime-detail-dialog-body { flex: 1; min-height: 0; max-height: calc(92vh - 64px); overflow: auto; padding: 0 24px 24px !important; }
 .anime-detail-dialog .el-dialog__header { padding: 18px 24px 16px; }

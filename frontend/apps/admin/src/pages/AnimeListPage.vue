@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { Delete, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api, type AnimeListItem } from '../api'
@@ -13,6 +13,9 @@ const loading = ref(false)
 const deletingId = ref<number | null>(null)
 const refreshingId = ref<number | null>(null)
 const syncingHistoryId = ref<number | null>(null)
+const historySyncVisible = ref(false)
+const historySyncTarget = ref<AnimeListItem | null>(null)
+const historySyncForm = reactive({ rssUrl: '', excludeTitle: '', includeTitle: '' })
 const addVisible = ref(false)
 const adding = ref(false)
 const addBangumiId = ref('')
@@ -114,25 +117,57 @@ async function refreshAnime(anime: AnimeListItem) {
   }
 }
 
-async function syncHistory(anime: AnimeListItem) {
+function clearHistorySyncDialog() {
+  historySyncTarget.value = null
+  historySyncForm.rssUrl = ''
+  historySyncForm.excludeTitle = ''
+  historySyncForm.includeTitle = ''
+}
+
+function openHistorySyncDialog(anime: AnimeListItem) {
   if (syncingHistoryId.value !== null || anime.matchedEpisodes.length === 0) {
     return
   }
+  clearHistorySyncDialog()
+  historySyncTarget.value = anime
+  historySyncVisible.value = true
+}
+
+function resetHistorySyncDialog() {
+  if (syncingHistoryId.value === null) {
+    clearHistorySyncDialog()
+  }
+}
+
+async function syncHistory() {
+  if (syncingHistoryId.value !== null || historySyncTarget.value === null) {
+    return
+  }
+  const anime = historySyncTarget.value
   syncingHistoryId.value = anime.bangumiId
   try {
-    const { result } = await api.syncAnimeHistory(anime.bangumiId)
+    const { result } = await api.syncAnimeHistory(anime.bangumiId, {
+      rssUrl: historySyncForm.rssUrl,
+      excludeTitle: historySyncForm.excludeTitle,
+      includeTitle: historySyncForm.includeTitle,
+    })
     if (result.bound > 0) {
       ElMessage.success(`历史话数已同步，新增绑定 ${result.bound} 话`)
     } else {
       ElMessage.info('没有发现缺失的历史话数')
     }
+    historySyncVisible.value = false
     await load()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '历史话数同步失败')
   } finally {
     syncingHistoryId.value = null
+    if (!historySyncVisible.value) {
+      clearHistorySyncDialog()
+    }
   }
 }
+
 async function deleteAnime(anime: AnimeListItem) {
   if (deletingId.value !== null) {
     return
@@ -212,7 +247,7 @@ onMounted(load)
               plain
               :disabled="anime.matchedEpisodes.length === 0"
               :loading="syncingHistoryId === anime.bangumiId"
-              @click="syncHistory(anime)"
+              @click="openHistorySyncDialog(anime)"
             >同步历史话数</el-button>
             <el-popconfirm
               width="240"
@@ -251,6 +286,35 @@ onMounted(load)
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="historySyncVisible"
+      title="同步历史话数"
+      width="min(500px, calc(100vw - 32px))"
+      destroy-on-close
+      append-to-body
+      @closed="resetHistorySyncDialog"
+    >
+      <el-form class="history-sync-dialog" label-position="top" @submit.prevent>
+        <el-form-item label="番剧RSS链接">
+          <el-input v-model.trim="historySyncForm.rssUrl" placeholder="留空自动搜索" clearable @keyup.enter="syncHistory" />
+        </el-form-item>
+        <el-form-item label="过滤字段">
+          <el-input v-model.trim="historySyncForm.excludeTitle" placeholder="标题包含该字段时跳过" clearable @keyup.enter="syncHistory" />
+        </el-form-item>
+        <el-form-item label="包含字段">
+          <el-input v-model.trim="historySyncForm.includeTitle" placeholder="标题必须包含该字段" clearable @keyup.enter="syncHistory" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="historySyncVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="historySyncTarget === null"
+          :loading="historySyncTarget !== null && syncingHistoryId === historySyncTarget.bangumiId"
+          @click="syncHistory"
+        >确认</el-button>
+      </template>
+    </el-dialog>
     <el-empty v-if="!loading && items.length === 0" description="尚未抓取到番剧数据" />
     <div v-if="total > pageSize" class="anime-pagination">
       <el-pagination background layout="prev, pager, next" :current-page="page" :page-size="pageSize" :total="total" @current-change="changePage" />

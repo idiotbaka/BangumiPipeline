@@ -45,6 +45,7 @@ var (
 	ErrInvalidBinding        = errors.New("invalid subscription binding")
 	ErrHistorySourceNotFound = errors.New("history source not found")
 	ErrInvalidHistorySearch  = errors.New("invalid history search")
+	ErrInvalidHistoryRSSURL  = errors.New("invalid history rss url")
 )
 
 type SettingsProvider interface {
@@ -84,6 +85,12 @@ type HistorySyncResult struct {
 	SkippedExisting  int    `json:"skippedExisting"`
 	SkippedIgnored   int    `json:"skippedIgnored"`
 	SkippedUnmatched int    `json:"skippedUnmatched"`
+}
+
+type HistorySyncOptions struct {
+	RSSURL       string
+	ExcludeTitle string
+	IncludeTitle string
 }
 
 type BindingInput struct {
@@ -245,7 +252,7 @@ func (s *Service) Execute(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) SyncHistory(ctx context.Context, bangumiID int64) (HistorySyncResult, error) {
+func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options HistorySyncOptions) (HistorySyncResult, error) {
 	if bangumiID < 1 {
 		return HistorySyncResult{}, ErrInvalidBinding
 	}
@@ -253,15 +260,11 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64) (HistorySync
 	if err != nil {
 		return HistorySyncResult{}, err
 	}
-	searchTitle, err := historySearchTitle(source.Title, source.EpisodeNumber)
+	rssURL, searchTitle, sourceKey, requireSourceKey, err := historySyncURL(source, options)
 	if err != nil {
 		return HistorySyncResult{}, err
 	}
-	searchURL := buildMikanHistorySearchURL(searchTitle)
-	sourceKey := titleMemoryKey(source.Title)
-	if sourceKey == "" {
-		return HistorySyncResult{}, ErrInvalidHistorySearch
-	}
+	titleFilter := newHistoryTitleFilter(options)
 
 	network, err := s.settings.GetNetworkSettings(ctx)
 	if err != nil {
@@ -273,8 +276,9 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64) (HistorySync
 	}
 	defer client.CloseIdleConnections()
 
-	s.logger.Info("历史话数同步开始", "source", "subscription", "bangumi_id", bangumiID, "source_item_id", source.ItemID)
-	items, err := s.fetch(ctx, client, searchURL)
+	s.logger.Info("历史话数同步开始", "source", "subscription", "bangumi_id", bangumiID,
+		"source_item_id", source.ItemID, "rss_url", logURL(rssURL), "manual_rss", strings.TrimSpace(options.RSSURL) != "")
+	items, err := s.fetch(ctx, client, rssURL)
 	if err != nil {
 		return HistorySyncResult{}, err
 	}
@@ -286,12 +290,16 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64) (HistorySync
 		return result, err
 	}
 	for _, item := range items {
+		if !titleFilter.Match(item.Title) {
+			result.SkippedUnmatched++
+			continue
+		}
 		identity, ok := historyEpisodeIdentity(item.Title)
 		if !ok || identity.SeasonNumber != source.SeasonNumber || identity.EpisodeType != source.EpisodeType {
 			result.SkippedUnmatched++
 			continue
 		}
-		if sourceKey != "" && titleMemoryKey(item.Title) != sourceKey {
+		if requireSourceKey && titleMemoryKey(item.Title) != sourceKey {
 			result.SkippedUnmatched++
 			continue
 		}
@@ -706,6 +714,90 @@ ON CONFLICT(title_key) DO UPDATE SET
     updated_at = excluded.updated_at`,
 		key, input.BangumiID, animeName, input.SeasonNumber, input.EpisodeType, itemID, now, now)
 	return err
+}
+
+func historySyncURL(source historySource, options HistorySyncOptions) (rssURL, searchTitle, sourceKey string, requireSourceKey bool, err error) {
+	if manualURL := strings.TrimSpace(options.RSSURL); manualURL != "" {
+		rssURL, err := parseHistoryRSSURL(manualURL)
+		if err != nil {
+			return "", "", "", false, err
+		}
+		return rssURL, "", "", false, nil
+	}
+
+	searchTitle, err = historySearchTitle(source.Title, source.EpisodeNumber)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	sourceKey = titleMemoryKey(source.Title)
+	if sourceKey == "" {
+		return "", "", "", false, ErrInvalidHistorySearch
+	}
+	return buildMikanHistorySearchURL(searchTitle), searchTitle, sourceKey, true, nil
+}
+
+func parseHistoryRSSURL(value string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidHistoryRSSURL, err)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", ErrInvalidHistoryRSSURL
+	}
+	return parsed.String(), nil
+}
+
+type historyTitleFilter struct {
+	exclude []string
+	include []string
+}
+
+func newHistoryTitleFilter(options HistorySyncOptions) historyTitleFilter {
+	return historyTitleFilter{
+		exclude: splitHistoryTitleFilters(options.ExcludeTitle),
+		include: splitHistoryTitleFilters(options.IncludeTitle),
+	}
+}
+
+func (filter historyTitleFilter) Match(title string) bool {
+	title = strings.ToLower(title)
+	for _, value := range filter.exclude {
+		if strings.Contains(title, value) {
+			return false
+		}
+	}
+	for _, value := range filter.include {
+		if !strings.Contains(title, value) {
+			return false
+		}
+	}
+	return true
+}
+
+func splitHistoryTitleFilters(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		switch r {
+		case '\r', '\n', ',', '，', ';', '；':
+			return true
+		default:
+			return false
+		}
+	})
+	result := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "" {
+			continue
+		}
+		if _, exists := seen[part]; exists {
+			continue
+		}
+		seen[part] = struct{}{}
+		result = append(result, part)
+	}
+	return result
 }
 
 func historySearchTitle(title, episodeNumber string) (string, error) {

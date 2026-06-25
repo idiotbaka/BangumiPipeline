@@ -181,7 +181,7 @@ func (a *AdminAPI) createAnime(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		BangumiID int64 `json:"bangumiId"`
 	}
-	if err := decodeJSON(w, r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -262,13 +262,25 @@ func (a *AdminAPI) syncAnimeHistory(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := a.subscription.SyncHistory(r.Context(), id)
+	var input struct {
+		RSSURL       string `json:"rssUrl"`
+		ExcludeTitle string `json:"excludeTitle"`
+		IncludeTitle string `json:"includeTitle"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := a.subscription.SyncHistory(r.Context(), id, subscription.HistorySyncOptions{
+		RSSURL: input.RSSURL, ExcludeTitle: input.ExcludeTitle, IncludeTitle: input.IncludeTitle,
+	})
 	if err != nil {
 		a.subscriptionHistorySyncError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"result": result})
 }
+
 func (a *AdminAPI) deleteAnime(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdministrator(w, r) {
 		return
@@ -371,7 +383,7 @@ func (a *AdminAPI) bindSubscriptionItem(w http.ResponseWriter, r *http.Request) 
 		EpisodeType   string `json:"episodeType"`
 		EpisodeNumber string `json:"episodeNumber"`
 	}
-	if err := decodeJSON(w, r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -408,6 +420,8 @@ func (a *AdminAPI) subscriptionHistorySyncError(w http.ResponseWriter, err error
 		writeError(w, http.StatusConflict, "history_source_not_found", "该番剧没有可用于同步历史的已绑定话数")
 	case errors.Is(err, subscription.ErrInvalidHistorySearch):
 		writeError(w, http.StatusBadRequest, "invalid_history_search", "无法从最新绑定标题中生成历史话数搜索条件")
+	case errors.Is(err, subscription.ErrInvalidHistoryRSSURL):
+		writeError(w, http.StatusBadRequest, "invalid_history_rss_url", "番剧 RSS 链接必须是 HTTP/HTTPS 完整地址")
 	case errors.Is(err, subscription.ErrInvalidBinding):
 		writeError(w, http.StatusBadRequest, "invalid_subscription_binding", "绑定信息不完整或番剧不存在")
 	default:
@@ -512,7 +526,7 @@ func (a *AdminAPI) setupStatus(w http.ResponseWriter, r *http.Request) {
 
 func (a *AdminAPI) setup(w http.ResponseWriter, r *http.Request) {
 	var input credentials
-	if err := decodeJSON(w, r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -534,7 +548,7 @@ func (a *AdminAPI) setup(w http.ResponseWriter, r *http.Request) {
 
 func (a *AdminAPI) login(w http.ResponseWriter, r *http.Request) {
 	var input credentials
-	if err := decodeJSON(w, r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -597,7 +611,7 @@ func (a *AdminAPI) updateScheduledTask(w http.ResponseWriter, r *http.Request) {
 		Enabled         *bool `json:"enabled"`
 		IntervalMinutes *int  `json:"intervalMinutes"`
 	}
-	if err := decodeJSON(w, r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -663,7 +677,7 @@ func (a *AdminAPI) updateNetworkSettings(w http.ResponseWriter, r *http.Request)
 		HTTPProxy  string `json:"httpProxy"`
 		HTTPSProxy string `json:"httpsProxy"`
 	}
-	if err := decodeJSON(w, r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -698,7 +712,7 @@ func (a *AdminAPI) updateSubscriptionSettings(w http.ResponseWriter, r *http.Req
 	var input struct {
 		RSSURL string `json:"rssUrl"`
 	}
-	if err := decodeJSON(w, r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}

@@ -83,6 +83,12 @@ export interface HistorySyncResult {
   skippedUnmatched: number
 }
 
+export interface HistorySyncInput {
+  rssUrl?: string
+  excludeTitle?: string
+  includeTitle?: string
+}
+
 export type SubscriptionMatchStatus = 'matched' | 'unmatched'
 export type SubscriptionBindingStatus = 'pending' | 'bound' | 'ignored'
 
@@ -274,10 +280,10 @@ export const api = {
       method: 'POST',
       body: '{}',
     }),
-  syncAnimeHistory: (bangumiId: number) =>
+  syncAnimeHistory: (bangumiId: number, input: HistorySyncInput = {}) =>
     request<{ result: HistorySyncResult }>(`/api/anime/${bangumiId}/sync-history`, {
       method: 'POST',
-      body: '{}',
+      body: JSON.stringify(input),
     }),
   deleteAnime: (bangumiId: number) =>
     request<void>(`/api/anime/${bangumiId}`, { method: 'DELETE' }),
