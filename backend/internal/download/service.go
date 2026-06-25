@@ -283,6 +283,56 @@ func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (RetryResult,
 	return RetryResult{Job: updated, Action: "deleted_reset"}, nil
 }
 
+func (s *Service) CleanupCompletedQBitTask(ctx context.Context, jobID int64) error {
+	job, err := s.downloadJobForCleanup(ctx, jobID)
+	if err != nil {
+		return err
+	}
+
+	settings, err := s.settings.GetDownloadSettings(ctx)
+	if err != nil {
+		return err
+	}
+	client, err := newQBitClient(settings)
+	if err != nil {
+		return err
+	}
+	if err := client.login(ctx, settings.Username, settings.Password); err != nil {
+		return fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
+	}
+	torrents, err := client.torrents(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
+	}
+
+	tag := tagForItem(job.SubscriptionItemID)
+	torrent, ok := matchTorrent(job, torrents, torrentsByHash(torrents))
+	if ok {
+		if err := client.deleteTorrents(ctx, []string{torrent.Hash}, true); err != nil {
+			return fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
+		}
+		s.logger.Info("qBittorrent 下载任务和文件已清理", "source", "download", "job_id", jobID, "qbit_hash", torrent.Hash)
+	} else {
+		s.logger.Info("qBittorrent 下载任务已不存在，跳过任务删除", "source", "download", "job_id", jobID)
+	}
+	if err := client.deleteTags(ctx, []string{tag}); err != nil {
+		s.logger.Warn("qBittorrent 单集标签清理失败", "source", "download", "job_id", jobID, "tag", tag, "error", err)
+	}
+	return nil
+}
+
+func (s *Service) downloadJobForCleanup(ctx context.Context, jobID int64) (activeJob, error) {
+	var job activeJob
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, subscription_item_id, qbit_hash, save_path, status
+FROM download_jobs
+WHERE id = ?`, jobID).Scan(&job.ID, &job.SubscriptionItemID, &job.QBitHash, &job.SavePath, &job.Status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return activeJob{}, ErrDownloadJobNotFound
+	}
+	return job, err
+}
+
 func (s *Service) failedJob(ctx context.Context, jobID int64) (activeJob, error) {
 	var job activeJob
 	var startedAt sql.NullInt64

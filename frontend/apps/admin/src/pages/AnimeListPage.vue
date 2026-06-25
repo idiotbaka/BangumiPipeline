@@ -67,6 +67,10 @@ function episodeTagLabel(episode: AnimeListItem['matchedEpisodes'][number]) {
   return episode.episodeNumber
 }
 
+function episodeTagType(episode: AnimeListItem['matchedEpisodes'][number]) {
+  return episode.status === 'completed' ? 'success' : 'warning'
+}
+
 function openAddDialog() {
   addBangumiId.value = ''
   addVisible.value = true
@@ -231,7 +235,7 @@ onMounted(load)
               <el-tag
                 v-for="episode in anime.matchedEpisodes"
                 :key="`${episode.seasonNumber}-${episode.episodeType}-${episode.episodeNumber}`"
-                type="warning"
+                :type="episodeTagType(episode)"
                 effect="light"
                 size="small"
                 round

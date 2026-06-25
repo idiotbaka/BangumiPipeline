@@ -278,7 +278,8 @@ button, input { font: inherit; }
 .download-settings-grid + .download-settings-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .settings-button-row { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 .download-card .el-card__body { padding: 0; }
-.download-table { width: 100%; }
+.download-table, .media-table { width: 100%; }
+.media-card .el-card__body { padding: 0; }
 .download-title-cell { min-width: 0; display: grid; gap: 5px; }
 .download-title-cell strong { overflow: hidden; color: #101828; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .download-title-cell span { overflow: hidden; color: #98a2b3; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

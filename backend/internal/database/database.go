@@ -552,6 +552,54 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (10, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 10 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS media_jobs (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    download_job_id        INTEGER NOT NULL UNIQUE REFERENCES download_jobs(id) ON DELETE CASCADE,
+    subscription_item_id   INTEGER NOT NULL REFERENCES subscription_items(id) ON DELETE CASCADE,
+    bangumi_id             INTEGER NOT NULL,
+    anime_name             TEXT NOT NULL,
+    season_number          INTEGER NOT NULL,
+    episode_type           TEXT NOT NULL DEFAULT 'episode',
+    episode_number         TEXT NOT NULL,
+    status                 TEXT NOT NULL DEFAULT 'pending',
+    source_path            TEXT NOT NULL DEFAULT '',
+    subtitle_path          TEXT NOT NULL DEFAULT '',
+    output_path            TEXT NOT NULL DEFAULT '',
+    video_codec            TEXT NOT NULL DEFAULT '',
+    audio_codec            TEXT NOT NULL DEFAULT '',
+    has_internal_subtitles INTEGER NOT NULL DEFAULT 0 CHECK (has_internal_subtitles IN (0, 1)),
+    has_external_subtitles INTEGER NOT NULL DEFAULT 0 CHECK (has_external_subtitles IN (0, 1)),
+    needs_transcode        INTEGER NOT NULL DEFAULT 0 CHECK (needs_transcode IN (0, 1)),
+    action                 TEXT NOT NULL DEFAULT '',
+    error_message          TEXT NOT NULL DEFAULT '',
+    started_at             INTEGER,
+    completed_at           INTEGER,
+    failed_at              INTEGER,
+    created_at             INTEGER NOT NULL,
+    updated_at             INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_jobs_status_updated ON media_jobs(status, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_media_jobs_bangumi_episode ON media_jobs(bangumi_id, season_number, episode_type, episode_number);
+
+INSERT OR IGNORE INTO scheduled_tasks(
+    task_key, name, description, schedule, enabled, interval_minutes, created_at, updated_at
+) VALUES (
+    'process-downloaded-media',
+    '处理和转码已下载完成的视频',
+    '扫描已下载完成的话数，判断浏览器可播放性，必要时调用 ffmpeg 转码或压制字幕，并写入最终产物目录。',
+    'interval',
+    0,
+    1,
+    unixepoch(),
+    unixepoch()
+);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (11, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 11 migration: %w", err)
+	}
 	return nil
 }
 

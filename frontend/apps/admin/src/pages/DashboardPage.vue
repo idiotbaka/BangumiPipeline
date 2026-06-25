@@ -3,12 +3,12 @@ import { Calendar, Collection, Download, Film, Setting, VideoCamera } from '@ele
 import { session } from '../session'
 
 const modules = [
-  { title: '资源采集', description: 'RSS 与元数据采集功能待实现', icon: Collection, status: '尚未实现' },
-  { title: '下载管理', description: 'qBittorrent 任务同步功能待实现', icon: Download, status: '尚未实现' },
-  { title: '媒体整理', description: '重命名与媒体入库功能待实现', icon: Film, status: '尚未实现' },
-  { title: '转码任务', description: 'FFmpeg 探测和转码功能待实现', icon: VideoCamera, status: '尚未实现' },
+  { title: '资源采集', description: 'RSS 与 Bangumi 元数据采集已接入', icon: Collection, status: '已接入' },
+  { title: '下载管理', description: 'qBittorrent 创建、同步和失败重试已接入', icon: Download, status: '已接入' },
+  { title: '媒体整理', description: '下载产物识别、命名和入库已接入', icon: Film, status: '已接入' },
+  { title: '转码任务', description: 'FFmpeg 探测、转码和字幕压制已接入', icon: VideoCamera, status: '已接入' },
   { title: '计划任务', description: '固定间隔调度、手动执行与运行状态已接入', icon: Calendar, status: '已接入' },
-  { title: '系统设置', description: 'HTTP/HTTPS 代理配置已接入', icon: Setting, status: '已接入' },
+  { title: '系统设置', description: '网络、订阅和下载配置已接入', icon: Setting, status: '已接入' },
 ]
 </script>
 

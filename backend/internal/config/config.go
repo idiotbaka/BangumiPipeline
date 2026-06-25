@@ -14,6 +14,9 @@ type Config struct {
 	ViewerWebDir     string
 	CoverDir         string
 	DownloadDir      string
+	MediaDir         string
+	FFmpegPath       string
+	FFprobePath      string
 	BangumiAPIURL    string
 	BangumiUserAgent string
 	CookieSecure     bool
@@ -31,6 +34,9 @@ func Load() Config {
 		ViewerWebDir:     getenvAny([]string{"BP_VIEWER_WEB_DIR", "AB_VIEWER_WEB_DIR"}, "./frontend/apps/viewer/dist"),
 		CoverDir:         getenvAny([]string{"BP_COVER_DIR", "AB_COVER_DIR"}, "./data/images/bangumi"),
 		DownloadDir:      getenvAny([]string{"BP_DOWNLOAD_DIR", "AB_DOWNLOAD_DIR"}, "./data/downloads"),
+		MediaDir:         getenvAny([]string{"BP_MEDIA_DIR", "AB_MEDIA_DIR"}, "./data/bangumi"),
+		FFmpegPath:       getenvAny([]string{"BP_FFMPEG_PATH", "AB_FFMPEG_PATH"}, "ffmpeg"),
+		FFprobePath:      getenvAny([]string{"BP_FFPROBE_PATH", "AB_FFPROBE_PATH"}, "ffprobe"),
 		BangumiAPIURL:    getenvAny([]string{"BP_BANGUMI_API_URL", "AB_BANGUMI_API_URL"}, "https://api.bgm.tv"),
 		BangumiUserAgent: getenvAny([]string{"BP_BANGUMI_USER_AGENT", "AB_BANGUMI_USER_AGENT"}, "private-user/BangumiPipeline/0.1 (private deployment)"),
 		CookieSecure:     getenvBoolAny([]string{"BP_COOKIE_SECURE", "AB_COOKIE_SECURE"}, false),

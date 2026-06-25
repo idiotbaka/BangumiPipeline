@@ -15,6 +15,7 @@ import (
 	"bangumipipeline.local/server/internal/auth"
 	"bangumipipeline.local/server/internal/bangumi"
 	"bangumipipeline.local/server/internal/download"
+	"bangumipipeline.local/server/internal/media"
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
 )
@@ -32,14 +33,15 @@ type AdminAPI struct {
 	syncer       *bangumi.Syncer
 	subscription *subscription.Service
 	download     *download.Service
+	media        *media.Service
 	logger       *slog.Logger
 	cookieSecure bool
 }
 
-func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, downloadService *download.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
+func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, downloadService *download.Service, mediaService *media.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
 	api := &AdminAPI{
 		auth: authService, system: systemService, scheduler: scheduler, logs: logs,
-		catalog: catalog, syncer: syncer, subscription: subscriptionService, download: downloadService, logger: logger, cookieSecure: cookieSecure,
+		catalog: catalog, syncer: syncer, subscription: subscriptionService, download: downloadService, media: mediaService, logger: logger, cookieSecure: cookieSecure,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
@@ -72,6 +74,7 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/actors/{actorID}/image", api.actorImage)
 	mux.HandleFunc("GET /api/download/jobs", api.listDownloadJobs)
 	mux.HandleFunc("POST /api/download/jobs/{jobID}/retry", api.retryDownloadJob)
+	mux.HandleFunc("GET /api/media/jobs", api.listMediaJobs)
 	mux.HandleFunc("GET /api/subscription/items", api.listSubscriptionItems)
 	mux.HandleFunc("POST /api/subscription/items/{itemID}/confirm", api.confirmSubscriptionBinding)
 	mux.HandleFunc("PUT /api/subscription/items/{itemID}/binding", api.bindSubscriptionItem)
@@ -828,6 +831,24 @@ func (a *AdminAPI) retryDownloadJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"result": result})
+}
+
+func (a *AdminAPI) listMediaJobs(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
+	result, err := a.media.ListJobs(r.Context(), page, pageSize, r.URL.Query().Get("status"))
+	if err != nil {
+		if errors.Is(err, media.ErrInvalidStatus) {
+			writeError(w, http.StatusBadRequest, "invalid_media_status", "媒体处理状态筛选条件无效")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (a *AdminAPI) requireAdministrator(w http.ResponseWriter, r *http.Request) bool {

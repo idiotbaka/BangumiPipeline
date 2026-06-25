@@ -174,17 +174,20 @@ func (c *Catalog) attachMatchedEpisodes(ctx context.Context, items []AnimeListIt
 	}
 
 	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(`
-SELECT bound_bangumi_id, bound_season_number, bound_episode_type, bound_episode_number
-FROM (
-    SELECT DISTINCT bound_bangumi_id, bound_season_number,
-           COALESCE(NULLIF(bound_episode_type, ''), 'episode') AS bound_episode_type,
-           bound_episode_number
-    FROM subscription_items
-    WHERE binding_status = 'bound'
-      AND bound_bangumi_id IN (%s)
-      AND bound_season_number IS NOT NULL
-      AND bound_episode_number != ''
-) AS bound_episodes
+SELECT si.bound_bangumi_id, si.bound_season_number,
+       COALESCE(NULLIF(si.bound_episode_type, ''), 'episode') AS bound_episode_type,
+       si.bound_episode_number,
+       MAX(CASE WHEN mj.status = 'completed' THEN 1 ELSE 0 END) AS media_completed
+FROM subscription_items si
+LEFT JOIN download_jobs dj ON dj.subscription_item_id = si.id
+LEFT JOIN media_jobs mj ON mj.download_job_id = dj.id
+WHERE si.binding_status = 'bound'
+  AND si.bound_bangumi_id IN (%s)
+  AND si.bound_season_number IS NOT NULL
+  AND si.bound_episode_number != ''
+GROUP BY si.bound_bangumi_id, si.bound_season_number,
+         COALESCE(NULLIF(si.bound_episode_type, ''), 'episode'),
+         si.bound_episode_number
 ORDER BY bound_bangumi_id, bound_season_number,
          CASE WHEN bound_episode_type = 'episode' THEN 0 ELSE 1 END,
          CASE WHEN bound_episode_number GLOB '[0-9]*' THEN 0 ELSE 1 END,
@@ -197,10 +200,14 @@ ORDER BY bound_bangumi_id, bound_season_number,
 	for rows.Next() {
 		var bangumiID int64
 		var episode AnimeMatchedEpisode
-		if err := rows.Scan(&bangumiID, &episode.SeasonNumber, &episode.EpisodeType, &episode.EpisodeNumber); err != nil {
+		var mediaCompleted int
+		if err := rows.Scan(&bangumiID, &episode.SeasonNumber, &episode.EpisodeType, &episode.EpisodeNumber, &mediaCompleted); err != nil {
 			return err
 		}
 		episode.Status = "matched"
+		if mediaCompleted > 0 {
+			episode.Status = "completed"
+		}
 		if index, ok := indexByID[bangumiID]; ok {
 			items[index].MatchedEpisodes = append(items[index].MatchedEpisodes, episode)
 		}

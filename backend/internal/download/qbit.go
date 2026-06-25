@@ -162,6 +162,36 @@ func (c *qBitClient) deleteTorrents(ctx context.Context, hashes []string, delete
 	return nil
 }
 
+func (c *qBitClient) deleteTags(ctx context.Context, tags []string) error {
+	normalized := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag != "" {
+			normalized = append(normalized, tag)
+		}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	values := url.Values{}
+	values.Set("tags", strings.Join(normalized, ","))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v2/torrents/deleteTags", strings.NewReader(values.Encode()))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := c.client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("qBittorrent delete tags failed: HTTP %d %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
 func (c *qBitClient) torrentsByTag(ctx context.Context, tag string) ([]qBitTorrent, error) {
 	endpoint := c.baseURL + "/api/v2/torrents/info?tag=" + url.QueryEscape(tag)
 	return c.fetchTorrents(ctx, endpoint)

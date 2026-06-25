@@ -82,6 +82,43 @@ export interface DownloadRetryResult {
   action: DownloadRetryAction
 }
 
+export type MediaJobStatus = 'pending' | 'transcoding' | 'completed' | 'failed'
+
+export interface MediaJob {
+  id: number
+  downloadJobId: number
+  subscriptionItemId: number
+  title: string
+  bangumiId: number
+  animeName: string
+  seasonNumber: number
+  episodeType: string
+  episodeNumber: string
+  status: MediaJobStatus
+  sourceFile: string
+  subtitleFile: string
+  outputFile: string
+  videoCodec: string
+  audioCodec: string
+  hasInternalSubtitles: boolean
+  hasExternalSubtitles: boolean
+  needsTranscode: boolean
+  action: string
+  errorMessage: string
+  startedAt: number | null
+  completedAt: number | null
+  failedAt: number | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface MediaJobPage {
+  items: MediaJob[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 export type LogLevel = 'INFO' | 'WARNING' | 'ERROR'
 
 export interface SystemLog {
@@ -97,7 +134,7 @@ export interface AnimeMatchedEpisode {
   seasonNumber: number
   episodeType: string
   episodeNumber: string
-  status: 'matched'
+  status: 'matched' | 'completed'
 }
 
 export interface AnimeListItem {
@@ -368,6 +405,11 @@ export const api = {
       method: 'POST',
       body: '{}',
     }),
+  mediaJobs: (page: number, pageSize: number, status?: MediaJobStatus) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    if (status) params.set('status', status)
+    return request<MediaJobPage>(`/api/media/jobs?${params}`)
+  },
   confirmSubscriptionBinding: (itemId: number) =>
     request<{ item: SubscriptionItem }>(`/api/subscription/items/${itemId}/confirm`, {
       method: 'POST',
