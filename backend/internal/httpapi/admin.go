@@ -418,6 +418,8 @@ func (a *AdminAPI) subscriptionHistorySyncError(w http.ResponseWriter, err error
 	switch {
 	case errors.Is(err, subscription.ErrHistorySourceNotFound):
 		writeError(w, http.StatusConflict, "history_source_not_found", "该番剧没有可用于同步历史的已绑定话数")
+	case errors.Is(err, subscription.ErrHistoryRSSURLRequired):
+		writeError(w, http.StatusBadRequest, "history_rss_url_required", "没有已绑定话数时，番剧 RSS 链接必填")
 	case errors.Is(err, subscription.ErrInvalidHistorySearch):
 		writeError(w, http.StatusBadRequest, "invalid_history_search", "无法从最新绑定标题中生成历史话数搜索条件")
 	case errors.Is(err, subscription.ErrInvalidHistoryRSSURL):

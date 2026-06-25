@@ -44,6 +44,7 @@ var (
 	ErrItemNotFound          = errors.New("subscription item not found")
 	ErrInvalidBinding        = errors.New("invalid subscription binding")
 	ErrHistorySourceNotFound = errors.New("history source not found")
+	ErrHistoryRSSURLRequired = errors.New("history rss url required")
 	ErrInvalidHistorySearch  = errors.New("invalid history search")
 	ErrInvalidHistoryRSSURL  = errors.New("invalid history rss url")
 )
@@ -256,7 +257,7 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 	if bangumiID < 1 {
 		return HistorySyncResult{}, ErrInvalidBinding
 	}
-	source, err := s.latestHistorySource(ctx, bangumiID)
+	source, err := s.historySourceForSync(ctx, bangumiID, options)
 	if err != nil {
 		return HistorySyncResult{}, err
 	}
@@ -295,7 +296,11 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 			continue
 		}
 		identity, ok := historyEpisodeIdentity(item.Title)
-		if !ok || identity.SeasonNumber != source.SeasonNumber || identity.EpisodeType != source.EpisodeType {
+		if !ok {
+			result.SkippedUnmatched++
+			continue
+		}
+		if source.ItemID > 0 && (identity.SeasonNumber != source.SeasonNumber || identity.EpisodeType != source.EpisodeType) {
 			result.SkippedUnmatched++
 			continue
 		}
@@ -330,6 +335,25 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 		"skipped_existing", result.SkippedExisting, "skipped_ignored", result.SkippedIgnored,
 		"skipped_unmatched", result.SkippedUnmatched)
 	return result, nil
+}
+
+func (s *Service) historySourceForSync(ctx context.Context, bangumiID int64, options HistorySyncOptions) (historySource, error) {
+	source, err := s.latestHistorySource(ctx, bangumiID)
+	if err == nil {
+		return source, nil
+	}
+	if !errors.Is(err, ErrHistorySourceNotFound) {
+		return historySource{}, err
+	}
+
+	animeName, err := animeNameByDB(ctx, s.db, bangumiID)
+	if err != nil {
+		return historySource{}, err
+	}
+	if strings.TrimSpace(options.RSSURL) == "" {
+		return historySource{}, ErrHistoryRSSURLRequired
+	}
+	return historySource{BangumiID: bangumiID, AnimeName: animeName}, nil
 }
 
 func (s *Service) latestHistorySource(ctx context.Context, bangumiID int64) (historySource, error) {

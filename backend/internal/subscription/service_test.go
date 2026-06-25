@@ -3,6 +3,7 @@ package subscription
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -76,6 +77,85 @@ WHERE item_key = 'ep10' AND binding_status = 'bound'`,
 	}
 	assertItemMissing(t, ctx, db, "ep11")
 	assertItemMissing(t, ctx, db, "ep12")
+}
+
+func TestSyncHistoryWithoutBoundSourceRequiresManualRSS(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	insertAnime(t, ctx, db, 1001, now)
+
+	service := NewService(db, testSettingsProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err = service.SyncHistory(ctx, 1001, HistorySyncOptions{})
+	if !errors.Is(err, ErrHistoryRSSURLRequired) {
+		t.Fatalf("expected ErrHistoryRSSURLRequired, got %v", err)
+	}
+}
+
+func TestSyncHistoryManualRSSWithoutBoundSource(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	insertAnime(t, ctx, db, 1001, now)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<item><guid isPermaLink="false">ep01</guid><title>[字幕组][原作标题][01][繁体内嵌]</title><link>https://mikanani.me/Home/Episode/ep01</link><enclosure type="application/x-bittorrent" length="100" url="https://mikanani.me/Download/ep01.torrent"/></item>
+<item><guid isPermaLink="false">ep02</guid><title>[字幕组][原作标题][02][繁体内嵌]</title><link>https://mikanani.me/Home/Episode/ep02</link><enclosure type="application/x-bittorrent" length="100" url="https://mikanani.me/Download/ep02.torrent"/></item>
+<item><guid isPermaLink="false">credit</guid><title>[字幕组][原作标题][NCOP][繁体内嵌]</title><link>https://mikanani.me/Home/Episode/credit</link><enclosure type="application/x-bittorrent" length="100" url="https://mikanani.me/Download/credit.torrent"/></item>
+</channel></rss>`)
+	}))
+	t.Cleanup(server.Close)
+
+	service := NewService(db, testSettingsProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.now = func() time.Time { return now }
+
+	result, err := service.SyncHistory(ctx, 1001, HistorySyncOptions{RSSURL: server.URL + "/RSS/Bangumi?bangumiId=3926&subgroupid=6"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Fetched != 3 || result.Inserted != 2 || result.Bound != 2 || result.SkippedUnmatched != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.SourceTitle != "" || result.SearchTitle != "" {
+		t.Fatalf("manual RSS without source should not report source/search title: %+v", result)
+	}
+
+	var boundCount int
+	if err := db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM subscription_items
+WHERE binding_status = ? AND bound_bangumi_id = ?`, BindingStatusBound, 1001).Scan(&boundCount); err != nil {
+		t.Fatal(err)
+	}
+	if boundCount != 2 {
+		t.Fatalf("expected 2 bound history items, got %d", boundCount)
+	}
+
+	var animeName, episodeNumber string
+	if err := db.QueryRowContext(ctx, `
+SELECT bound_anime_name, bound_episode_number
+FROM subscription_items
+WHERE item_key = 'ep01' AND binding_status = 'bound'`,
+	).Scan(&animeName, &episodeNumber); err != nil {
+		t.Fatal(err)
+	}
+	if animeName != "原作标题" || episodeNumber != "01" {
+		t.Fatalf("unexpected bound item: anime=%q episode=%q", animeName, episodeNumber)
+	}
+	assertItemMissing(t, ctx, db, "credit")
 }
 
 func insertAnime(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64, now time.Time) {

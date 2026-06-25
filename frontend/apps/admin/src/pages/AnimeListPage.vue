@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { Delete, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api, type AnimeListItem } from '../api'
@@ -16,6 +16,8 @@ const syncingHistoryId = ref<number | null>(null)
 const historySyncVisible = ref(false)
 const historySyncTarget = ref<AnimeListItem | null>(null)
 const historySyncForm = reactive({ rssUrl: '', excludeTitle: '', includeTitle: '' })
+const historySyncRSSRequired = computed(() => historySyncTarget.value !== null && historySyncTarget.value.matchedEpisodes.length === 0)
+const historySyncConfirmDisabled = computed(() => historySyncTarget.value === null || (historySyncRSSRequired.value && historySyncForm.rssUrl.trim() === ''))
 const addVisible = ref(false)
 const adding = ref(false)
 const addBangumiId = ref('')
@@ -125,7 +127,7 @@ function clearHistorySyncDialog() {
 }
 
 function openHistorySyncDialog(anime: AnimeListItem) {
-  if (syncingHistoryId.value !== null || anime.matchedEpisodes.length === 0) {
+  if (syncingHistoryId.value !== null) {
     return
   }
   clearHistorySyncDialog()
@@ -141,6 +143,10 @@ function resetHistorySyncDialog() {
 
 async function syncHistory() {
   if (syncingHistoryId.value !== null || historySyncTarget.value === null) {
+    return
+  }
+  if (historySyncRSSRequired.value && historySyncForm.rssUrl.trim() === '') {
+    ElMessage.warning('没有已绑定话数时，请填写番剧 RSS 链接')
     return
   }
   const anime = historySyncTarget.value
@@ -245,7 +251,6 @@ onMounted(load)
               size="small"
               :icon="Search"
               plain
-              :disabled="anime.matchedEpisodes.length === 0"
               :loading="syncingHistoryId === anime.bangumiId"
               @click="openHistorySyncDialog(anime)"
             >同步历史话数</el-button>
@@ -295,8 +300,8 @@ onMounted(load)
       @closed="resetHistorySyncDialog"
     >
       <el-form class="history-sync-dialog" label-position="top" @submit.prevent>
-        <el-form-item label="番剧RSS链接">
-          <el-input v-model.trim="historySyncForm.rssUrl" placeholder="留空自动搜索" clearable @keyup.enter="syncHistory" />
+        <el-form-item label="番剧RSS链接" :required="historySyncRSSRequired">
+          <el-input v-model.trim="historySyncForm.rssUrl" :placeholder="historySyncRSSRequired ? '请输入番剧 RSS 链接' : '留空自动搜索'" clearable @keyup.enter="syncHistory" />
         </el-form-item>
         <el-form-item label="过滤字段">
           <el-input v-model.trim="historySyncForm.excludeTitle" placeholder="标题包含该字段时跳过" clearable @keyup.enter="syncHistory" />
@@ -309,7 +314,7 @@ onMounted(load)
         <el-button @click="historySyncVisible = false">取消</el-button>
         <el-button
           type="primary"
-          :disabled="historySyncTarget === null"
+          :disabled="historySyncConfirmDisabled"
           :loading="historySyncTarget !== null && syncingHistoryId === historySyncTarget.bangumiId"
           @click="syncHistory"
         >确认</el-button>
