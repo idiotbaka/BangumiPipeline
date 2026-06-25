@@ -30,6 +30,57 @@ export interface SubscriptionSettings {
   rssUrl: string
   updatedAt: number
 }
+export interface DownloadSettings {
+  host: string
+  port: number
+  username: string
+  password: string
+  maxConcurrentDownloads: number
+  updatedAt: number
+}
+
+export interface DownloadConnectionTestResult {
+  version: string
+}
+
+export type DownloadStatus = 'pending' | 'downloading' | 'completed' | 'failed'
+export type DownloadRetryAction = 'corrected' | 'reset' | 'deleted_reset'
+
+export interface DownloadJob {
+  id: number
+  subscriptionItemId: number
+  title: string
+  bangumiId: number
+  animeName: string
+  seasonNumber: number
+  episodeType: string
+  episodeNumber: string
+  status: DownloadStatus
+  folderName: string
+  qbitName: string
+  progress: number
+  totalSize: number
+  downloadedSize: number
+  downloadSpeed: number
+  errorMessage: string
+  startedAt: number | null
+  completedAt: number | null
+  failedAt: number | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface DownloadJobPage {
+  items: DownloadJob[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface DownloadRetryResult {
+  job: DownloadJob
+  action: DownloadRetryAction
+}
 
 export type LogLevel = 'INFO' | 'WARNING' | 'ERROR'
 
@@ -261,6 +312,17 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ rssUrl }),
     }),
+  downloadSettings: () => request<{ settings: DownloadSettings }>('/api/settings/download'),
+  updateDownloadSettings: (settings: Omit<DownloadSettings, 'updatedAt'>) =>
+    request<{ settings: DownloadSettings }>('/api/settings/download', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+  testDownloadSettings: (settings: Omit<DownloadSettings, 'updatedAt'>) =>
+    request<{ result: DownloadConnectionTestResult }>('/api/settings/download/test', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    }),
   systemLogs: (levels: LogLevel[]) => {
     const query = new URLSearchParams()
     levels.forEach((level) => query.append('level', level))
@@ -296,6 +358,16 @@ export const api = {
     if (bindingStatus) params.set('bindingStatus', bindingStatus)
     return request<SubscriptionItemPage>(`/api/subscription/items?${params}`)
   },
+  downloadJobs: (page: number, pageSize: number, status?: DownloadStatus) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    if (status) params.set('status', status)
+    return request<DownloadJobPage>(`/api/download/jobs?${params}`)
+  },
+  retryDownloadJob: (jobId: number) =>
+    request<{ result: DownloadRetryResult }>(`/api/download/jobs/${jobId}/retry`, {
+      method: 'POST',
+      body: '{}',
+    }),
   confirmSubscriptionBinding: (itemId: number) =>
     request<{ item: SubscriptionItem }>(`/api/subscription/items/${itemId}/confirm`, {
       method: 'POST',

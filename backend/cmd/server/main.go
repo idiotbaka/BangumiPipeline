@@ -15,6 +15,7 @@ import (
 	"bangumipipeline.local/server/internal/bangumi"
 	"bangumipipeline.local/server/internal/config"
 	"bangumipipeline.local/server/internal/database"
+	"bangumipipeline.local/server/internal/download"
 	"bangumipipeline.local/server/internal/httpapi"
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
@@ -54,9 +55,11 @@ func run(logger *slog.Logger) error {
 		APIInterval: 2 * time.Second, RequestTimeout: 20 * time.Second,
 	})
 	subscriptionService := subscription.NewService(db, systemService, logger)
+	downloadService := download.NewService(db, systemService, logger, download.Config{DownloadDir: cfg.DownloadDir})
 	scheduler := system.NewScheduler(systemService, logger, cfg.SchedulerPoll)
 	scheduler.Register("bangumi-season-metadata", metadataSyncer)
 	scheduler.Register(subscription.TaskKey, subscriptionService)
+	scheduler.Register(download.TaskKey, downloadService)
 	if err := scheduler.Start(ctx); err != nil {
 		return err
 	}
@@ -65,7 +68,7 @@ func run(logger *slog.Logger) error {
 		Addr: cfg.AdminAddr,
 		Handler: httpapi.NewAdminHandler(
 			authService, systemService, scheduler, logService, bangumi.NewCatalog(db),
-			metadataSyncer, subscriptionService, logger, cfg.CookieSecure, cfg.AdminWebDir,
+			metadataSyncer, subscriptionService, downloadService, logger, cfg.CookieSecure, cfg.AdminWebDir,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

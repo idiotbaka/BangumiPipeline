@@ -2,18 +2,29 @@
 import { onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Connection, Link } from '@element-plus/icons-vue'
+import { Connection, Download, Link } from '@element-plus/icons-vue'
 import { api } from '../api'
 
 const formRef = ref<FormInstance>()
 const subscriptionFormRef = ref<FormInstance>()
+const downloadFormRef = ref<FormInstance>()
 const loading = ref(true)
 const saving = ref(false)
 const savingSubscription = ref(false)
+const savingDownload = ref(false)
+const testingDownload = ref(false)
 const updatedAt = ref(0)
 const subscriptionUpdatedAt = ref(0)
+const downloadUpdatedAt = ref(0)
 const form = reactive({ httpProxy: '', httpsProxy: '' })
 const subscriptionForm = reactive({ rssUrl: '' })
+const downloadForm = reactive({
+  host: '127.0.0.1',
+  port: 8080,
+  username: '',
+  password: '',
+  maxConcurrentDownloads: 2,
+})
 
 function validateProxy(_rule: unknown, value: string, callback: (error?: Error) => void) {
   if (!value) {
@@ -41,6 +52,18 @@ function validateHTTPURL(_rule: unknown, value: string, callback: (error?: Error
   }
 }
 
+function validateHost(_rule: unknown, value: string, callback: (error?: Error) => void) {
+  if (!value.trim()) {
+    callback(new Error('请输入 qBittorrent WebUI IP 地址'))
+    return
+  }
+  if (/[\\/]/.test(value)) {
+    callback(new Error('只填写 IP 或主机名，不包含 http:// 和路径'))
+    return
+  }
+  callback()
+}
+
 const rules: FormRules<typeof form> = {
   httpProxy: [{ validator: validateProxy, trigger: 'blur' }],
   httpsProxy: [{ validator: validateProxy, trigger: 'blur' }],
@@ -50,18 +73,31 @@ const subscriptionRules: FormRules<typeof subscriptionForm> = {
   rssUrl: [{ validator: validateHTTPURL, trigger: 'blur' }],
 }
 
+const downloadRules: FormRules<typeof downloadForm> = {
+  host: [{ validator: validateHost, trigger: 'blur' }],
+  port: [{ type: 'number', min: 1, max: 65535, message: '端口号必须在 1 到 65535 之间', trigger: 'change' }],
+  maxConcurrentDownloads: [{ type: 'number', min: 1, max: 50, message: '并发下载数必须在 1 到 50 之间', trigger: 'change' }],
+}
+
 async function loadSettings() {
   loading.value = true
   try {
-    const [network, subscription] = await Promise.all([
+    const [network, subscription, download] = await Promise.all([
       api.networkSettings(),
       api.subscriptionSettings(),
+      api.downloadSettings(),
     ])
     form.httpProxy = network.settings.httpProxy
     form.httpsProxy = network.settings.httpsProxy
     updatedAt.value = network.settings.updatedAt
     subscriptionForm.rssUrl = subscription.settings.rssUrl
     subscriptionUpdatedAt.value = subscription.settings.updatedAt
+    downloadForm.host = download.settings.host
+    downloadForm.port = download.settings.port
+    downloadForm.username = download.settings.username
+    downloadForm.password = download.settings.password
+    downloadForm.maxConcurrentDownloads = download.settings.maxConcurrentDownloads
+    downloadUpdatedAt.value = download.settings.updatedAt
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载设置失败')
   } finally {
@@ -100,6 +136,48 @@ async function saveSubscription() {
   }
 }
 
+function downloadPayload() {
+  return {
+    host: downloadForm.host.trim(),
+    port: downloadForm.port,
+    username: downloadForm.username.trim(),
+    password: downloadForm.password,
+    maxConcurrentDownloads: downloadForm.maxConcurrentDownloads,
+  }
+}
+
+async function saveDownload() {
+  if (!(await downloadFormRef.value?.validate().catch(() => false))) return
+  savingDownload.value = true
+  try {
+    const { settings } = await api.updateDownloadSettings(downloadPayload())
+    downloadForm.host = settings.host
+    downloadForm.port = settings.port
+    downloadForm.username = settings.username
+    downloadForm.password = settings.password
+    downloadForm.maxConcurrentDownloads = settings.maxConcurrentDownloads
+    downloadUpdatedAt.value = settings.updatedAt
+    ElMessage.success('下载设置已保存')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存下载设置失败')
+  } finally {
+    savingDownload.value = false
+  }
+}
+
+async function testDownload() {
+  if (!(await downloadFormRef.value?.validate().catch(() => false))) return
+  testingDownload.value = true
+  try {
+    const { result } = await api.testDownloadSettings(downloadPayload())
+    ElMessage.success(`qBittorrent 连接正常：${result.version}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '测试连接失败')
+  } finally {
+    testingDownload.value = false
+  }
+}
+
 function formatTime(timestamp: number) {
   return timestamp ? new Date(timestamp * 1000).toLocaleString() : '尚未保存'
 }
@@ -112,7 +190,7 @@ onMounted(loadSettings)
     <div>
       <p class="eyebrow">SYSTEM SETTINGS</p>
       <h1>系统设置</h1>
-      <p>配置外部请求使用的网络代理和番剧 RSS 订阅源。</p>
+      <p>配置外部请求使用的网络代理、下载器和番剧 RSS 订阅源。</p>
     </div>
   </header>
 
@@ -139,6 +217,48 @@ onMounted(loadSettings)
       <div class="settings-actions">
         <span>最后更新：{{ formatTime(updatedAt) }}</span>
         <el-button type="primary" size="large" native-type="submit" :loading="saving">保存设置</el-button>
+      </div>
+    </el-form>
+  </el-card>
+
+  <el-card class="content-card settings-card" shadow="never" v-loading="loading">
+    <template #header>
+      <div class="settings-title">
+        <div class="task-icon"><el-icon><Download /></el-icon></div>
+        <div>
+          <h2>下载设置</h2>
+          <p>连接本机 qBittorrent WebUI，并控制自动下载并发数。</p>
+        </div>
+      </div>
+    </template>
+
+    <el-form ref="downloadFormRef" :model="downloadForm" :rules="downloadRules" label-position="top" @submit.prevent="saveDownload">
+      <div class="download-settings-grid">
+        <el-form-item label="qBittorrent IP 地址" prop="host">
+          <el-input v-model.trim="downloadForm.host" size="large" placeholder="127.0.0.1" clearable />
+        </el-form-item>
+        <el-form-item label="端口号" prop="port">
+          <el-input-number v-model="downloadForm.port" :min="1" :max="65535" size="large" controls-position="right" />
+        </el-form-item>
+      </div>
+      <div class="download-settings-grid">
+        <el-form-item label="用户名">
+          <el-input v-model.trim="downloadForm.username" size="large" placeholder="admin" clearable />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="downloadForm.password" size="large" type="password" show-password placeholder="123456" clearable />
+        </el-form-item>
+      </div>
+      <el-form-item label="并发下载数" prop="maxConcurrentDownloads">
+        <el-input-number v-model="downloadForm.maxConcurrentDownloads" :min="1" :max="50" size="large" controls-position="right" />
+        <div class="form-help">计划任务只会在当前下载中任务少于该数量时创建新的 qBittorrent 下载。</div>
+      </el-form-item>
+      <div class="settings-actions">
+        <span>最后更新：{{ formatTime(downloadUpdatedAt) }}</span>
+        <div class="settings-button-row">
+          <el-button size="large" :loading="testingDownload" @click="testDownload">测试连接</el-button>
+          <el-button type="primary" size="large" native-type="submit" :loading="savingDownload">保存下载设置</el-button>
+        </div>
       </div>
     </el-form>
   </el-card>

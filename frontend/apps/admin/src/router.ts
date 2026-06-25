@@ -10,6 +10,7 @@ import SystemLogsPage from './pages/SystemLogsPage.vue'
 import AnimeListPage from './pages/AnimeListPage.vue'
 import AnimeDetailPage from './pages/AnimeDetailPage.vue'
 import SubscriptionMatchesPage from './pages/SubscriptionMatchesPage.vue'
+import DownloadManagementPage from './pages/DownloadManagementPage.vue'
 import AdminLayout from './components/AdminLayout.vue'
 
 const router = createRouter({
@@ -28,6 +29,7 @@ const router = createRouter({
         { path: 'anime', name: 'anime', component: AnimeListPage },
         { path: 'anime/:bangumiId', name: 'anime-detail', component: AnimeDetailPage },
         { path: 'subscriptions', name: 'subscriptions', component: SubscriptionMatchesPage },
+        { path: 'downloads', name: 'downloads', component: DownloadManagementPage },
         { path: 'system-logs', name: 'system-logs', component: SystemLogsPage },
         { path: 'settings', name: 'settings', component: SettingsPage },
       ],

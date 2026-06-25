@@ -496,6 +496,62 @@ INSERT INTO schema_migrations(version, applied_at) VALUES (9, unixepoch());`); e
 			return fmt.Errorf("commit version 9 migration: %w", err)
 		}
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS download_settings (
+    id                       INTEGER PRIMARY KEY CHECK (id = 1),
+    host                     TEXT NOT NULL DEFAULT '127.0.0.1',
+    port                     INTEGER NOT NULL DEFAULT 8080,
+    username                 TEXT NOT NULL DEFAULT '',
+    password                 TEXT NOT NULL DEFAULT '',
+    max_concurrent_downloads INTEGER NOT NULL DEFAULT 2,
+    updated_at               INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO download_settings(
+    id, host, port, username, password, max_concurrent_downloads, updated_at
+) VALUES (1, '127.0.0.1', 8080, '', '', 2, unixepoch());
+
+CREATE TABLE IF NOT EXISTS download_jobs (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    subscription_item_id INTEGER NOT NULL UNIQUE REFERENCES subscription_items(id) ON DELETE CASCADE,
+    status               TEXT NOT NULL DEFAULT 'pending',
+    source_url           TEXT NOT NULL DEFAULT '',
+    folder_name          TEXT NOT NULL DEFAULT '',
+    save_path            TEXT NOT NULL DEFAULT '',
+    qbit_hash            TEXT NOT NULL DEFAULT '',
+    qbit_name            TEXT NOT NULL DEFAULT '',
+    progress             REAL NOT NULL DEFAULT 0,
+    total_size           INTEGER NOT NULL DEFAULT 0,
+    downloaded_size      INTEGER NOT NULL DEFAULT 0,
+    download_speed       INTEGER NOT NULL DEFAULT 0,
+    error_message        TEXT NOT NULL DEFAULT '',
+    started_at           INTEGER,
+    completed_at         INTEGER,
+    failed_at            INTEGER,
+    created_at           INTEGER NOT NULL,
+    updated_at           INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_download_jobs_status ON download_jobs(status, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_download_jobs_qbit_hash ON download_jobs(qbit_hash);
+
+INSERT OR IGNORE INTO scheduled_tasks(
+    task_key, name, description, schedule, enabled, interval_minutes, created_at, updated_at
+) VALUES (
+    'download-bound-episodes',
+    '下载番剧',
+    '将已确认绑定但尚未下载的话数提交到 qBittorrent，并同步下载进度。',
+    'interval',
+    0,
+    1,
+    unixepoch(),
+    unixepoch()
+);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (10, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 10 migration: %w", err)
+	}
 	return nil
 }
 

@@ -18,14 +18,18 @@ const (
 
 	MinIntervalMinutes = 1
 	MaxIntervalMinutes = 43200
+
+	MinConcurrentDownloads = 1
+	MaxConcurrentDownloads = 50
 )
 
 var (
-	ErrTaskNotFound       = errors.New("scheduled task not found")
-	ErrTaskAlreadyRunning = errors.New("scheduled task is already running")
-	ErrInvalidInterval    = errors.New("interval minutes must be between 1 and 43200")
-	ErrInvalidProxy       = errors.New("proxy must be an HTTP or HTTPS URL")
-	ErrInvalidRSSURL      = errors.New("RSS URL must be an HTTP or HTTPS URL")
+	ErrTaskNotFound            = errors.New("scheduled task not found")
+	ErrTaskAlreadyRunning      = errors.New("scheduled task is already running")
+	ErrInvalidInterval         = errors.New("interval minutes must be between 1 and 43200")
+	ErrInvalidProxy            = errors.New("proxy must be an HTTP or HTTPS URL")
+	ErrInvalidRSSURL           = errors.New("RSS URL must be an HTTP or HTTPS URL")
+	ErrInvalidDownloadSettings = errors.New("invalid download settings")
 )
 
 type ScheduledTask struct {
@@ -59,6 +63,14 @@ type SubscriptionSettings struct {
 	UpdatedAt int64  `json:"updatedAt"`
 }
 
+type DownloadSettings struct {
+	Host                   string `json:"host"`
+	Port                   int    `json:"port"`
+	Username               string `json:"username"`
+	Password               string `json:"password"`
+	MaxConcurrentDownloads int    `json:"maxConcurrentDownloads"`
+	UpdatedAt              int64  `json:"updatedAt"`
+}
 type Service struct {
 	db  *sql.DB
 	now func() time.Time
@@ -275,6 +287,51 @@ WHERE id = 1`, rssURL, s.now().UTC().Unix())
 	return s.GetSubscriptionSettings(ctx)
 }
 
+func (s *Service) GetDownloadSettings(ctx context.Context) (DownloadSettings, error) {
+	var settings DownloadSettings
+	err := s.db.QueryRowContext(ctx, `
+SELECT host, port, username, password, max_concurrent_downloads, updated_at
+FROM download_settings
+WHERE id = 1`).Scan(
+		&settings.Host, &settings.Port, &settings.Username, &settings.Password,
+		&settings.MaxConcurrentDownloads, &settings.UpdatedAt,
+	)
+	return settings, err
+}
+
+func (s *Service) UpdateDownloadSettings(ctx context.Context, settings DownloadSettings) (DownloadSettings, error) {
+	settings.Host = strings.TrimSpace(settings.Host)
+	settings.Username = strings.TrimSpace(settings.Username)
+	if err := validateDownloadSettings(settings); err != nil {
+		return DownloadSettings{}, err
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+UPDATE download_settings
+SET host = ?, port = ?, username = ?, password = ?, max_concurrent_downloads = ?, updated_at = ?
+WHERE id = 1`, settings.Host, settings.Port, settings.Username, settings.Password,
+		settings.MaxConcurrentDownloads, s.now().UTC().Unix())
+	if err != nil {
+		return DownloadSettings{}, err
+	}
+	return s.GetDownloadSettings(ctx)
+}
+func validateDownloadSettings(settings DownloadSettings) error {
+	if settings.Host == "" || strings.ContainsAny(settings.Host, "/\\") {
+		return ErrInvalidDownloadSettings
+	}
+	if settings.Port < 1 || settings.Port > 65535 {
+		return ErrInvalidDownloadSettings
+	}
+	if settings.MaxConcurrentDownloads < MinConcurrentDownloads || settings.MaxConcurrentDownloads > MaxConcurrentDownloads {
+		return ErrInvalidDownloadSettings
+	}
+	parsed, err := url.Parse("//" + settings.Host)
+	if err != nil || parsed.Host == "" {
+		return ErrInvalidDownloadSettings
+	}
+	return nil
+}
 func validateProxy(value string) error {
 	if value == "" {
 		return nil

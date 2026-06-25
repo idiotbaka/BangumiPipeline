@@ -14,6 +14,7 @@ import (
 	"bangumipipeline.local/server/internal/applog"
 	"bangumipipeline.local/server/internal/auth"
 	"bangumipipeline.local/server/internal/bangumi"
+	"bangumipipeline.local/server/internal/download"
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
 )
@@ -30,14 +31,15 @@ type AdminAPI struct {
 	catalog      *bangumi.Catalog
 	syncer       *bangumi.Syncer
 	subscription *subscription.Service
+	download     *download.Service
 	logger       *slog.Logger
 	cookieSecure bool
 }
 
-func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
+func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, downloadService *download.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
 	api := &AdminAPI{
 		auth: authService, system: systemService, scheduler: scheduler, logs: logs,
-		catalog: catalog, syncer: syncer, subscription: subscriptionService, logger: logger, cookieSecure: cookieSecure,
+		catalog: catalog, syncer: syncer, subscription: subscriptionService, download: downloadService, logger: logger, cookieSecure: cookieSecure,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
@@ -53,6 +55,9 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("PUT /api/settings/network", api.updateNetworkSettings)
 	mux.HandleFunc("GET /api/settings/subscription", api.getSubscriptionSettings)
 	mux.HandleFunc("PUT /api/settings/subscription", api.updateSubscriptionSettings)
+	mux.HandleFunc("GET /api/settings/download", api.getDownloadSettings)
+	mux.HandleFunc("PUT /api/settings/download", api.updateDownloadSettings)
+	mux.HandleFunc("POST /api/settings/download/test", api.testDownloadSettings)
 	mux.HandleFunc("GET /api/system-logs", api.listSystemLogs)
 	mux.HandleFunc("GET /api/system-logs/stream", api.streamSystemLogs)
 	mux.HandleFunc("GET /api/anime", api.listAnime)
@@ -65,6 +70,8 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/characters/{characterID}/image", api.characterImage)
 	mux.HandleFunc("GET /api/actors/{actorID}/image", api.actorImage)
+	mux.HandleFunc("GET /api/download/jobs", api.listDownloadJobs)
+	mux.HandleFunc("POST /api/download/jobs/{jobID}/retry", api.retryDownloadJob)
 	mux.HandleFunc("GET /api/subscription/items", api.listSubscriptionItems)
 	mux.HandleFunc("POST /api/subscription/items/{itemID}/confirm", api.confirmSubscriptionBinding)
 	mux.HandleFunc("PUT /api/subscription/items/{itemID}/binding", api.bindSubscriptionItem)
@@ -728,6 +735,99 @@ func (a *AdminAPI) updateSubscriptionSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) getDownloadSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	settings, err := a.system.GetDownloadSettings(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) updateDownloadSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	var input system.DownloadSettings
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	settings, err := a.system.UpdateDownloadSettings(r.Context(), input)
+	if err != nil {
+		if errors.Is(err, system.ErrInvalidDownloadSettings) {
+			writeError(w, http.StatusBadRequest, "invalid_download_settings", "下载设置不完整或超出允许范围")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) testDownloadSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	var input system.DownloadSettings
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := a.download.TestConnection(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "download_connection_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result})
+}
+
+func (a *AdminAPI) listDownloadJobs(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
+	result, err := a.download.ListJobs(r.Context(), page, pageSize, r.URL.Query().Get("status"))
+	if err != nil {
+		if errors.Is(err, download.ErrInvalidStatus) {
+			writeError(w, http.StatusBadRequest, "invalid_download_status", "下载状态筛选条件无效")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *AdminAPI) retryDownloadJob(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("jobID"))
+	if !ok {
+		return
+	}
+	result, err := a.download.RetryFailedJob(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, download.ErrDownloadJobNotFound):
+			writeError(w, http.StatusNotFound, "download_job_not_found", "下载任务不存在")
+		case errors.Is(err, download.ErrRetryNotAllowed):
+			writeError(w, http.StatusConflict, "download_retry_not_allowed", "只有下载失败的任务可以重试")
+		case errors.Is(err, download.ErrQBitUnavailable):
+			writeError(w, http.StatusBadGateway, "download_qbit_failed", "qBittorrent 操作失败："+err.Error())
+		default:
+			a.internalError(w, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result})
 }
 
 func (a *AdminAPI) requireAdministrator(w http.ResponseWriter, r *http.Request) bool {
