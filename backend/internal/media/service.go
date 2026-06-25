@@ -136,6 +136,12 @@ type mediaPlan struct {
 	action               string
 }
 
+type processResult struct {
+	action         string
+	needsTranscode bool
+	planned        bool
+}
+
 func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
 	mediaDir := strings.TrimSpace(config.MediaDir)
 	if mediaDir == "" {
@@ -161,24 +167,50 @@ func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
 
 func (s *Service) Execute(ctx context.Context) error {
 	s.logger.Info("媒体处理任务开始", "source", "media")
-	if _, err := s.EnqueueCompletedDownloads(ctx); err != nil {
+	enqueued, err := s.EnqueueCompletedDownloads(ctx)
+	if err != nil {
 		return fmt.Errorf("创建待处理媒体任务: %w", err)
 	}
 	if err := s.recoverInterruptedJobs(ctx); err != nil {
 		return fmt.Errorf("恢复中断媒体任务: %w", err)
 	}
-	job, ok, err := s.nextPendingJob(ctx)
-	if err != nil {
-		return err
+
+	processed := 0
+	copied := 0
+	ffmpegJobs := 0
+	for {
+		job, ok, err := s.nextPendingJob(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			break
+		}
+		result, err := s.processJob(ctx, job)
+		if err != nil {
+			return err
+		}
+		processed++
+		if result.action == "copy" {
+			copied++
+		}
+		if !result.planned || result.needsTranscode {
+			if result.needsTranscode {
+				ffmpegJobs++
+			}
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 	}
-	if !ok {
-		s.logger.Info("媒体处理任务完成：没有待处理视频", "source", "media")
+	if processed == 0 {
+		s.logger.Info("媒体处理任务完成：没有待处理视频", "source", "media", "enqueued", enqueued)
 		return nil
 	}
-	if err := s.processJob(ctx, job); err != nil {
-		return err
-	}
-	s.logger.Info("媒体处理任务完成", "source", "media", "media_job_id", job.ID)
+	s.logger.Info("媒体处理任务完成", "source", "media", "enqueued", enqueued, "processed", processed, "copied", copied, "ffmpeg_jobs", ffmpegJobs)
 	return nil
 }
 
@@ -327,22 +359,26 @@ LIMIT 1`, StatusPending).Scan(
 	return job, true, nil
 }
 
-func (s *Service) processJob(ctx context.Context, job pendingJob) error {
+func (s *Service) processJob(ctx context.Context, job pendingJob) (processResult, error) {
+	var result processResult
 	now := s.now().UTC().Unix()
 	if _, err := s.db.ExecContext(ctx, `
 UPDATE media_jobs
 SET status = ?, error_message = '', started_at = COALESCE(started_at, ?), failed_at = NULL, updated_at = ?
 WHERE id = ? AND status = ?`, StatusTranscoding, now, now, job.ID, StatusPending); err != nil {
-		return err
+		return result, err
 	}
 
 	plan, err := s.planJob(ctx, job)
 	if err != nil {
 		_ = s.markFailed(ctx, job.ID, err.Error())
-		return nil
+		return result, nil
 	}
+	result.planned = true
+	result.action = plan.action
+	result.needsTranscode = plan.needsTranscode
 	if err := s.persistPlan(ctx, job.ID, plan); err != nil {
-		return err
+		return result, err
 	}
 
 	s.logger.Info("媒体处理开始", "source", "media", "media_job_id", job.ID, "action", plan.action, "source_file", filepath.Base(plan.sourcePath))
@@ -354,10 +390,10 @@ WHERE id = ? AND status = ?`, StatusTranscoding, now, now, job.ID, StatusPending
 	if err != nil {
 		_ = s.markFailed(ctx, job.ID, err.Error())
 		s.logger.Error("媒体处理失败", "source", "media", "media_job_id", job.ID, "action", plan.action, "error", err)
-		return nil
+		return result, nil
 	}
 	if err := s.markCompleted(ctx, job.ID); err != nil {
-		return err
+		return result, err
 	}
 	if err := s.cleanupDownload(ctx, job); err != nil {
 		message := "最终产物已完成，但 qBittorrent 下载清理失败: " + err.Error()
@@ -367,7 +403,7 @@ WHERE id = ? AND status = ?`, StatusTranscoding, now, now, job.ID, StatusPending
 		s.logger.Info("媒体处理完成后 qBittorrent 下载已清理", "source", "media", "media_job_id", job.ID, "download_job_id", job.DownloadJobID)
 	}
 	s.logger.Info("媒体处理成功", "source", "media", "media_job_id", job.ID, "action", plan.action, "output_file", filepath.Base(plan.outputPath))
-	return nil
+	return result, nil
 }
 
 func (s *Service) cleanupDownload(ctx context.Context, job pendingJob) error {
