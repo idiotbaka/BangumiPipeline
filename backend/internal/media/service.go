@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -33,6 +35,12 @@ var (
 	ErrInvalidStatus    = errors.New("invalid media status")
 	ErrMediaJobNotFound = errors.New("media job not found")
 	ErrRetryNotAllowed  = errors.New("media job retry not allowed")
+	ErrAnimeNotFound    = errors.New("anime not found")
+
+	ErrInvalidStorageRoot    = errors.New("invalid media storage root")
+	ErrStorageMoveInProgress = errors.New("media storage move is in progress")
+	ErrAnimeTranscoding      = errors.New("anime has transcoding media jobs")
+	ErrStorageTargetConflict = errors.New("media storage target already exists")
 )
 
 type Config struct {
@@ -54,6 +62,7 @@ type Service struct {
 	ffprobePath string
 	cleaner     DownloadCleaner
 	now         func() time.Time
+	storageMu   sync.Mutex
 }
 
 type JobPage struct {
@@ -105,6 +114,7 @@ type pendingJob struct {
 	EpisodeType        string
 	EpisodeNumber      string
 	SavePath           string
+	StorageRoot        string
 }
 
 type mediaFile struct {
@@ -150,6 +160,30 @@ type processResult struct {
 	planned        bool
 }
 
+type StorageMoveResult struct {
+	BangumiID   int64  `json:"bangumiId"`
+	StorageRoot string `json:"storageRoot"`
+	StoragePath string `json:"storagePath"`
+	Moved       bool   `json:"moved"`
+}
+
+type animeStorageInfo struct {
+	BangumiID    int64
+	Name         string
+	NameCN       string
+	StorageRoot  string
+	StoragePath  string
+	StoredRoot   string
+	CurrentRoot  string
+	TargetRoot   string
+	TargetStored string
+}
+
+type pathMove struct {
+	Source string
+	Target string
+}
+
 func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
 	mediaDir := strings.TrimSpace(config.MediaDir)
 	if mediaDir == "" {
@@ -173,6 +207,10 @@ func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
 	}
 }
 
+func (s *Service) DefaultMediaDir() string {
+	return s.mediaDir
+}
+
 func (s *Service) Execute(ctx context.Context) error {
 	s.logger.Info("媒体处理任务开始", "source", "media")
 	enqueued, err := s.EnqueueCompletedDownloads(ctx)
@@ -187,7 +225,7 @@ func (s *Service) Execute(ctx context.Context) error {
 	copied := 0
 	ffmpegJobs := 0
 	for {
-		job, ok, err := s.nextPendingJob(ctx)
+		job, ok, err := s.reserveNextPendingJob(ctx)
 		if err != nil {
 			return err
 		}
@@ -220,6 +258,33 @@ func (s *Service) Execute(ctx context.Context) error {
 	}
 	s.logger.Info("媒体处理任务完成", "source", "media", "enqueued", enqueued, "processed", processed, "copied", copied, "ffmpeg_jobs", ffmpegJobs)
 	return nil
+}
+
+func (s *Service) reserveNextPendingJob(ctx context.Context) (pendingJob, bool, error) {
+	s.storageMu.Lock()
+	defer s.storageMu.Unlock()
+	job, ok, err := s.nextPendingJob(ctx)
+	if err != nil || !ok {
+		return job, ok, err
+	}
+	now := s.now().UTC().Unix()
+	result, err := s.db.ExecContext(ctx, `
+UPDATE media_jobs
+SET status = ?, error_message = '', progress = 0, processed_duration_ms = 0,
+    total_duration_ms = 0, progress_updated_at = NULL, started_at = COALESCE(started_at, ?),
+    failed_at = NULL, updated_at = ?
+WHERE id = ? AND status = ?`, StatusTranscoding, now, now, job.ID, StatusPending)
+	if err != nil {
+		return pendingJob{}, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return pendingJob{}, false, err
+	}
+	if affected == 0 {
+		return pendingJob{}, false, nil
+	}
+	return job, true, nil
 }
 
 func (s *Service) ListJobs(ctx context.Context, page, pageSize int, status string) (JobPage, error) {
@@ -287,6 +352,221 @@ func (s *Service) CountJobsByStatuses(ctx context.Context, statuses ...string) (
 		result[status] = count
 	}
 	return result, nil
+}
+
+func (s *Service) MoveAnimeStorage(ctx context.Context, bangumiID int64, targetRoot string) (StorageMoveResult, error) {
+	targetRoot, err := s.normalizeStorageRoot(targetRoot)
+	if err != nil {
+		return StorageMoveResult{}, err
+	}
+	s.storageMu.Lock()
+	defer s.storageMu.Unlock()
+
+	info, err := s.animeStorageInfo(ctx, bangumiID, targetRoot)
+	if err != nil {
+		return StorageMoveResult{}, err
+	}
+	transcoding, err := s.animeTranscodingCount(ctx, bangumiID)
+	if err != nil {
+		return StorageMoveResult{}, err
+	}
+	if transcoding > 0 {
+		return StorageMoveResult{}, ErrAnimeTranscoding
+	}
+	if err := os.MkdirAll(info.TargetRoot, 0o755); err != nil {
+		return StorageMoveResult{}, err
+	}
+	if samePath(info.CurrentRoot, info.TargetRoot) {
+		if err := s.persistAnimeStorage(ctx, info, nil); err != nil {
+			return StorageMoveResult{}, err
+		}
+		return StorageMoveResult{
+			BangumiID: info.BangumiID, StorageRoot: info.TargetRoot, StoragePath: info.StoragePath, Moved: false,
+		}, nil
+	}
+
+	sourceDirs, err := s.animeOutputDirs(ctx, bangumiID, info.CurrentRoot)
+	if err != nil {
+		return StorageMoveResult{}, err
+	}
+	fallbackSource := storagePathForNames(info.CurrentRoot, info.NameCN, info.Name)
+	if len(sourceDirs) == 0 {
+		if exists, err := dirExists(fallbackSource); err != nil {
+			return StorageMoveResult{}, err
+		} else if exists {
+			sourceDirs = append(sourceDirs, fallbackSource)
+		}
+	}
+
+	mappings := make([]pathMove, 0, len(sourceDirs))
+	moved := false
+	for _, sourceDir := range sourceDirs {
+		targetDir := info.StoragePath
+		mappings = append(mappings, pathMove{Source: sourceDir, Target: targetDir})
+		exists, err := dirExists(sourceDir)
+		if err != nil {
+			return StorageMoveResult{}, err
+		}
+		if !exists || samePath(sourceDir, targetDir) {
+			continue
+		}
+		if err := moveDirectory(sourceDir, targetDir); err != nil {
+			return StorageMoveResult{}, err
+		}
+		moved = true
+	}
+
+	if err := s.persistAnimeStorage(ctx, info, mappings); err != nil {
+		return StorageMoveResult{}, err
+	}
+	s.logger.Info("番剧成品存储路径已移动", "source", "media", "bangumi_id", bangumiID,
+		"from", info.CurrentRoot, "to", info.TargetRoot, "moved", moved)
+	return StorageMoveResult{
+		BangumiID: info.BangumiID, StorageRoot: info.TargetRoot, StoragePath: info.StoragePath, Moved: moved,
+	}, nil
+}
+
+func (s *Service) normalizeStorageRoot(root string) (string, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		root = s.mediaDir
+	}
+	root = filepath.Clean(root)
+	if !filepath.IsAbs(root) {
+		return "", ErrInvalidStorageRoot
+	}
+	return root, nil
+}
+
+func (s *Service) animeStorageInfo(ctx context.Context, bangumiID int64, targetRoot string) (animeStorageInfo, error) {
+	var info animeStorageInfo
+	err := s.db.QueryRowContext(ctx, `
+SELECT bangumi_id, name, name_cn, media_storage_root
+FROM anime_metadata
+WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(
+		&info.BangumiID, &info.Name, &info.NameCN, &info.StoredRoot,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return animeStorageInfo{}, ErrAnimeNotFound
+	}
+	if err != nil {
+		return animeStorageInfo{}, err
+	}
+	info.CurrentRoot = strings.TrimSpace(info.StoredRoot)
+	if info.CurrentRoot == "" {
+		info.CurrentRoot = s.mediaDir
+	}
+	info.TargetRoot = targetRoot
+	if samePath(targetRoot, s.mediaDir) {
+		info.TargetStored = ""
+	} else {
+		info.TargetStored = targetRoot
+	}
+	info.StorageRoot = info.TargetRoot
+	info.StoragePath = storagePathForNames(info.TargetRoot, info.NameCN, info.Name)
+	return info, nil
+}
+
+func (s *Service) animeTranscodingCount(ctx context.Context, bangumiID int64) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM media_jobs
+WHERE bangumi_id = ? AND status = ?`, bangumiID, StatusTranscoding).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Service) animeOutputDirs(ctx context.Context, bangumiID int64, root string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT output_path
+FROM media_jobs
+WHERE bangumi_id = ? AND output_path != ''`, bangumiID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]string, 0)
+	seen := make(map[string]struct{})
+	for rows.Next() {
+		var outputPath string
+		if err := rows.Scan(&outputPath); err != nil {
+			return nil, err
+		}
+		rel, ok := relativePath(root, outputPath)
+		if !ok || rel == "." {
+			continue
+		}
+		first := strings.Split(rel, string(os.PathSeparator))[0]
+		if first == "" || first == "." {
+			continue
+		}
+		dir := filepath.Join(root, first)
+		if _, exists := seen[dir]; exists {
+			continue
+		}
+		seen[dir] = struct{}{}
+		result = append(result, dir)
+	}
+	return result, rows.Err()
+}
+
+func (s *Service) persistAnimeStorage(ctx context.Context, info animeStorageInfo, moves []pathMove) error {
+	type mediaOutput struct {
+		ID   int64
+		Path string
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, output_path
+FROM media_jobs
+WHERE bangumi_id = ? AND output_path != ''`, info.BangumiID)
+	if err != nil {
+		return err
+	}
+	outputs := make([]mediaOutput, 0)
+	for rows.Next() {
+		var output mediaOutput
+		if err := rows.Scan(&output.ID, &output.Path); err != nil {
+			rows.Close()
+			return err
+		}
+		outputs = append(outputs, output)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE anime_metadata
+SET media_storage_root = ?
+WHERE bangumi_id = ?`, info.TargetStored, info.BangumiID); err != nil {
+		return err
+	}
+	for _, output := range outputs {
+		updated := output.Path
+		for _, move := range moves {
+			if rel, ok := relativePath(move.Source, output.Path); ok {
+				updated = filepath.Join(move.Target, rel)
+				break
+			}
+		}
+		if updated == output.Path {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE media_jobs
+SET output_path = ?, updated_at = ?
+WHERE id = ?`, updated, s.now().UTC().Unix(), output.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (Job, error) {
@@ -381,14 +661,17 @@ func (s *Service) nextPendingJob(ctx context.Context) (pendingJob, bool, error) 
 	var job pendingJob
 	err := s.db.QueryRowContext(ctx, `
 SELECT mj.id, mj.download_job_id, mj.subscription_item_id, mj.bangumi_id, mj.anime_name,
-       mj.season_number, mj.episode_type, mj.episode_number, dj.save_path
+       mj.season_number, mj.episode_type, mj.episode_number, dj.save_path,
+       COALESCE(NULLIF(am.media_storage_root, ''), ?)
 FROM media_jobs mj
 JOIN download_jobs dj ON dj.id = mj.download_job_id
+JOIN anime_metadata am ON am.bangumi_id = mj.bangumi_id
 WHERE mj.status = ?
 ORDER BY mj.created_at, mj.id
-LIMIT 1`, StatusPending).Scan(
+LIMIT 1`, s.mediaDir, StatusPending).Scan(
 		&job.ID, &job.DownloadJobID, &job.SubscriptionItemID, &job.BangumiID,
 		&job.AnimeName, &job.SeasonNumber, &job.EpisodeType, &job.EpisodeNumber, &job.SavePath,
+		&job.StorageRoot,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return pendingJob{}, false, nil
@@ -401,16 +684,6 @@ LIMIT 1`, StatusPending).Scan(
 
 func (s *Service) processJob(ctx context.Context, job pendingJob) (processResult, error) {
 	var result processResult
-	now := s.now().UTC().Unix()
-	if _, err := s.db.ExecContext(ctx, `
-UPDATE media_jobs
-SET status = ?, error_message = '', progress = 0, processed_duration_ms = 0,
-    total_duration_ms = 0, progress_updated_at = NULL, started_at = COALESCE(started_at, ?),
-    failed_at = NULL, updated_at = ?
-WHERE id = ? AND status = ?`, StatusTranscoding, now, now, job.ID, StatusPending); err != nil {
-		return result, err
-	}
-
 	plan, err := s.planJob(ctx, job)
 	if err != nil {
 		_ = s.markFailed(ctx, job.ID, err.Error())
@@ -470,7 +743,7 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 	}
 	totalDurationMS := probeDurationMS(probe, videoStream)
 	subtitlePath := findExternalSubtitle(video.Path)
-	outputPath := finalOutputPath(s.mediaDir, job)
+	outputPath := finalOutputPath(job.StorageRoot, job)
 	webPlayable := isBrowserPlayable(video.Path, videoStream, audioStream)
 	hasInternal := len(subtitleStreams) > 0
 	hasExternal := subtitlePath != ""
@@ -881,6 +1154,48 @@ func finalOutputPath(mediaDir string, job pendingJob) string {
 	return filepath.Join(mediaDir, animeName, seasonFolder, fileName)
 }
 
+func storagePathForNames(root, nameCN, name string) string {
+	displayName := nameCN
+	if strings.TrimSpace(displayName) == "" {
+		displayName = name
+	}
+	return filepath.Join(root, safePathSegment(displayName))
+}
+
+func relativePath(root, path string) (string, bool) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", false
+	}
+	if rel == "." {
+		return rel, true
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	return rel, true
+}
+
+func samePath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+func dirExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return info.IsDir(), nil
+}
+
 func seasonFolderName(job pendingJob) string {
 	episodeType := strings.ToLower(strings.TrimSpace(job.EpisodeType))
 	if episodeType == "" || episodeType == "episode" {
@@ -979,6 +1294,96 @@ func copyToFinal(source, destination string) error {
 		return err
 	}
 	return nil
+}
+
+func moveDirectory(source, destination string) error {
+	if samePath(source, destination) {
+		return nil
+	}
+	if rel, ok := relativePath(source, destination); ok && rel != "." {
+		return ErrStorageTargetConflict
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+	if info, err := os.Stat(destination); err == nil {
+		if !info.IsDir() {
+			return ErrStorageTargetConflict
+		}
+		if err := copyDirectoryContents(source, destination); err != nil {
+			return err
+		}
+		return os.RemoveAll(source)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(source, destination); err == nil {
+		return nil
+	}
+	if err := copyDirectory(source, destination); err != nil {
+		return err
+	}
+	return os.RemoveAll(source)
+}
+
+func copyDirectory(source, destination string) error {
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		return err
+	}
+	return copyDirectoryContents(source, destination)
+}
+
+func copyDirectoryContents(source, destination string) error {
+	return filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		target := filepath.Join(destination, rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		if info.Mode()&os.ModeType != 0 {
+			return fmt.Errorf("不支持移动特殊文件: %s", filepath.Base(path))
+		}
+		return copyFileNoOverwrite(path, target, info.Mode())
+	})
+}
+
+func copyFileNoOverwrite(source, destination string, mode os.FileMode) error {
+	if _, err := os.Stat(destination); err == nil {
+		return ErrStorageTargetConflict
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(output, input)
+	closeErr := output.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func replaceFile(source, destination string) error {

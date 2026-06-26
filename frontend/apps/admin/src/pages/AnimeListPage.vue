@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Delete, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
+import { Delete, FolderOpened, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api, type AnimeListItem } from '../api'
+import { api, type AnimeListItem, type MediaStorageSettings } from '../api'
 import AnimeDetailPanel from '../components/AnimeDetailPanel.vue'
 
 const items = ref<AnimeListItem[]>([])
@@ -12,7 +12,12 @@ const pageSize = 24
 const loading = ref(false)
 const deletingId = ref<number | null>(null)
 const refreshingId = ref<number | null>(null)
+const movingStorageId = ref<number | null>(null)
 const syncingHistoryId = ref<number | null>(null)
+const storageSettings = ref<MediaStorageSettings | null>(null)
+const storageMoveVisible = ref(false)
+const storageMoveTarget = ref<AnimeListItem | null>(null)
+const storageMoveRoot = ref('')
 const historySyncVisible = ref(false)
 const historySyncTarget = ref<AnimeListItem | null>(null)
 const historySyncForm = reactive({ rssUrl: '', excludeTitle: '', includeTitle: '' })
@@ -26,13 +31,22 @@ const selectedBangumiId = ref<number | null>(null)
 const selectedAnimeTitle = ref('')
 
 const weekdays = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
+const storageTargets = computed(() => {
+  if (!storageSettings.value) return []
+  return [storageSettings.value.defaultRoot, ...storageSettings.value.extraRoots]
+})
+const storageMoveDisabled = computed(() => storageMoveTarget.value === null || storageMoveRoot.value === '' || storageMoveRoot.value === storageMoveTarget.value.storageRoot)
 
 async function load() {
   loading.value = true
   try {
-    const result = await api.animeList(page.value, pageSize)
+    const [result, storage] = await Promise.all([
+      api.animeList(page.value, pageSize),
+      api.mediaStorageSettings(),
+    ])
     items.value = result.items
     total.value = result.total
+    storageSettings.value = storage.settings
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '番剧列表加载失败')
   } finally {
@@ -69,6 +83,35 @@ function episodeTagLabel(episode: AnimeListItem['matchedEpisodes'][number]) {
 
 function episodeTagType(episode: AnimeListItem['matchedEpisodes'][number]) {
   return episode.status === 'completed' ? 'success' : 'warning'
+}
+
+function openStorageMoveDialog(anime: AnimeListItem) {
+  storageMoveTarget.value = anime
+  storageMoveRoot.value = anime.storageRoot
+  storageMoveVisible.value = true
+}
+
+function clearStorageMoveDialog() {
+  storageMoveTarget.value = null
+  storageMoveRoot.value = ''
+}
+
+async function moveStorage() {
+  if (storageMoveTarget.value === null || storageMoveDisabled.value) {
+    return
+  }
+  const anime = storageMoveTarget.value
+  movingStorageId.value = anime.bangumiId
+  try {
+    await api.moveAnimeStorage(anime.bangumiId, storageMoveRoot.value)
+    ElMessage.success('存储路径已移动')
+    storageMoveVisible.value = false
+    await load()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '移动存储路径失败')
+  } finally {
+    movingStorageId.value = null
+  }
 }
 
 function openAddDialog() {
@@ -231,6 +274,7 @@ onMounted(load)
               <div><dt>首播</dt><dd>{{ anime.airDate || '未定' }} {{ weekdays[anime.airWeekday] || '' }}</dd></div>
               <div><dt>话数</dt><dd>{{ anime.episodes > 0 ? `${anime.episodes} 话` : '未知' }}</dd></div>
             </dl>
+            <p class="anime-storage-path" :title="anime.storagePath">存储：{{ anime.storagePath }}</p>
             <div v-if="anime.matchedEpisodes.length > 0" class="anime-episode-tags">
               <el-tag
                 v-for="episode in anime.matchedEpisodes"
@@ -258,6 +302,13 @@ onMounted(load)
               :loading="syncingHistoryId === anime.bangumiId"
               @click="openHistorySyncDialog(anime)"
             >同步历史话数</el-button>
+            <el-button
+              size="small"
+              :icon="FolderOpened"
+              plain
+              :loading="movingStorageId === anime.bangumiId"
+              @click="openStorageMoveDialog(anime)"
+            >移动存储路径</el-button>
             <el-popconfirm
               width="240"
               confirm-button-text="删除"
@@ -292,6 +343,45 @@ onMounted(load)
       <template #footer>
         <el-button @click="addVisible = false">取消</el-button>
         <el-button type="primary" :loading="adding" @click="addAnime">添加</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="storageMoveVisible"
+      title="移动存储路径"
+      width="min(560px, calc(100vw - 32px))"
+      destroy-on-close
+      append-to-body
+      @closed="clearStorageMoveDialog"
+    >
+      <div v-if="storageMoveTarget" class="storage-move-dialog">
+        <div class="storage-current-box">
+          <span>当前路径</span>
+          <strong>{{ storageMoveTarget.storagePath }}</strong>
+        </div>
+        <el-form label-position="top" @submit.prevent>
+          <el-form-item label="目标存储根目录">
+            <el-select v-model="storageMoveRoot" size="large" filterable>
+              <el-option
+                v-for="root in storageTargets"
+                :key="root"
+                :label="root"
+                :value="root"
+                :disabled="root === storageMoveTarget.storageRoot"
+              />
+            </el-select>
+            <div class="form-help">移动会实时搬迁该番剧的成品文件夹；存在转码中任务时后端会拒绝移动。</div>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="storageMoveVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="storageMoveDisabled"
+          :loading="storageMoveTarget !== null && movingStorageId === storageMoveTarget.bangumiId"
+          @click="moveStorage"
+        >移动</el-button>
       </template>
     </el-dialog>
 

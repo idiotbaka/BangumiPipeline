@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 var (
@@ -16,11 +18,19 @@ var (
 )
 
 type Catalog struct {
-	db *sql.DB
+	db       *sql.DB
+	mediaDir string
 }
 
-func NewCatalog(db *sql.DB) *Catalog {
-	return &Catalog{db: db}
+func NewCatalog(db *sql.DB, mediaDir ...string) *Catalog {
+	root := "./data/bangumi"
+	if len(mediaDir) > 0 && strings.TrimSpace(mediaDir[0]) != "" {
+		root = strings.TrimSpace(mediaDir[0])
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	return &Catalog{db: db, mediaDir: root}
 }
 
 type AnimeListItem struct {
@@ -34,6 +44,8 @@ type AnimeListItem struct {
 	ImageStatus     string                `json:"imageStatus"`
 	HasCover        bool                  `json:"hasCover"`
 	DetailStatus    string                `json:"detailStatus"`
+	StorageRoot     string                `json:"storageRoot"`
+	StoragePath     string                `json:"storagePath"`
 	MatchedEpisodes []AnimeMatchedEpisode `json:"matchedEpisodes"`
 	CreatedAt       int64                 `json:"createdAt"`
 }
@@ -118,6 +130,8 @@ type AnimeDetail struct {
 	DetailStatus   string           `json:"detailStatus"`
 	CharacterState string           `json:"characterStatus"`
 	EpisodesStatus string           `json:"episodesStatus"`
+	StorageRoot    string           `json:"storageRoot"`
+	StoragePath    string           `json:"storagePath"`
 	Infobox        []map[string]any `json:"infobox"`
 	Rating         map[string]any   `json:"rating"`
 	Collection     map[string]any   `json:"collection"`
@@ -143,7 +157,7 @@ func (c *Catalog) List(ctx context.Context, page, pageSize int) (AnimePage, erro
 	rows, err := c.db.QueryContext(ctx, `
 SELECT bangumi_id, name, name_cn, air_date, air_weekday,
        CASE WHEN total_episodes > 0 THEN total_episodes ELSE eps END,
-       platform, image_status, image_local_path != '', detail_status, created_at
+       platform, image_status, image_local_path != '', detail_status, media_storage_root, created_at
 FROM anime_metadata
 WHERE deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
@@ -156,11 +170,13 @@ LIMIT ? OFFSET ?`, pageSize, (page-1)*pageSize)
 		if err := rows.Scan(
 			&item.BangumiID, &item.Name, &item.NameCN, &item.AirDate, &item.AirWeekday,
 			&item.Episodes, &item.Platform, &item.ImageStatus, &item.HasCover,
-			&item.DetailStatus, &item.CreatedAt,
+			&item.DetailStatus, &item.StorageRoot, &item.CreatedAt,
 		); err != nil {
 			rows.Close()
 			return result, err
 		}
+		item.StorageRoot = c.storageRoot(item.StorageRoot)
+		item.StoragePath = animeStoragePath(item.StorageRoot, item.NameCN, item.Name)
 		item.MatchedEpisodes = make([]AnimeMatchedEpisode, 0)
 		result.Items = append(result.Items, item)
 	}
@@ -274,14 +290,14 @@ func (c *Catalog) Detail(ctx context.Context, bangumiID int64) (AnimeDetail, err
 SELECT bangumi_id, url, name, name_cn, air_date, air_weekday, detail_date,
        platform, summary, eps, total_episodes, volumes, series, locked, nsfw,
        image_local_path != '', image_status, detail_status, characters_status, episodes_status,
-       infobox_json, rating_json, collection_json, meta_tags_json, created_at
+       media_storage_root, infobox_json, rating_json, collection_json, meta_tags_json, created_at
 FROM anime_metadata WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(
 		&detail.BangumiID, &detail.URL, &detail.Name, &detail.NameCN, &detail.AirDate,
 		&detail.AirWeekday, &detail.DetailDate, &detail.Platform, &detail.Summary,
 		&detail.Eps, &detail.TotalEpisodes, &detail.Volumes, &detail.Series,
 		&detail.Locked, &detail.NSFW, &detail.HasCover, &detail.ImageStatus,
 		&detail.DetailStatus, &detail.CharacterState, &detail.EpisodesStatus,
-		&infoboxJSON, &ratingJSON, &collectionJSON, &metaTagsJSON, &detail.CreatedAt,
+		&detail.StorageRoot, &infoboxJSON, &ratingJSON, &collectionJSON, &metaTagsJSON, &detail.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AnimeDetail{}, ErrAnimeNotFound
@@ -297,6 +313,8 @@ FROM anime_metadata WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Sca
 	_ = json.Unmarshal([]byte(ratingJSON), &detail.Rating)
 	_ = json.Unmarshal([]byte(collectionJSON), &detail.Collection)
 	_ = json.Unmarshal([]byte(metaTagsJSON), &detail.MetaTags)
+	detail.StorageRoot = c.storageRoot(detail.StorageRoot)
+	detail.StoragePath = animeStoragePath(detail.StorageRoot, detail.NameCN, detail.Name)
 
 	if detail.Tags, err = c.tags(ctx, bangumiID); err != nil {
 		return AnimeDetail{}, err
@@ -471,4 +489,39 @@ func (c *Catalog) imagePath(ctx context.Context, query string, args ...any) (str
 		return "", fmt.Errorf("%w: image unavailable", ErrAnimeNotFound)
 	}
 	return path, nil
+}
+
+func (c *Catalog) storageRoot(stored string) string {
+	stored = strings.TrimSpace(stored)
+	if stored == "" {
+		return c.mediaDir
+	}
+	return stored
+}
+
+func animeStoragePath(root, nameCN, name string) string {
+	displayName := nameCN
+	if strings.TrimSpace(displayName) == "" {
+		displayName = name
+	}
+	return filepath.Join(root, safePathSegment(displayName))
+}
+
+func safePathSegment(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '_'
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	value = strings.Trim(value, " ._")
+	if value == "" {
+		value = "media"
+	}
+	runes := []rune(value)
+	if len(runes) > 120 {
+		value = string(runes[:120])
+	}
+	return value
 }

@@ -39,6 +39,19 @@ export interface DownloadSettings {
   updatedAt: number
 }
 
+export interface MediaStorageSettings {
+  defaultRoot: string
+  extraRoots: string[]
+  updatedAt: number
+}
+
+export interface StorageMoveResult {
+  bangumiId: number
+  storageRoot: string
+  storagePath: string
+  moved: boolean
+}
+
 export interface DownloadConnectionTestResult {
   version: string
 }
@@ -168,6 +181,8 @@ export interface AnimeListItem {
   imageStatus: string
   hasCover: boolean
   detailStatus: string
+  storageRoot: string
+  storagePath: string
   matchedEpisodes: AnimeMatchedEpisode[]
   createdAt: number
 }
@@ -301,6 +316,8 @@ export interface AnimeDetail {
   detailStatus: string
   characterStatus: string
   episodesStatus: string
+  storageRoot: string
+  storagePath: string
   infobox: Array<{ key?: string; value?: unknown }>
   rating: Record<string, unknown>
   collection: Record<string, unknown>
@@ -393,6 +410,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(settings),
     }),
+  mediaStorageSettings: () => request<{ settings: MediaStorageSettings }>('/api/settings/media-storage'),
+  updateMediaStorageSettings: (extraRoots: string[]) =>
+    request<{ settings: MediaStorageSettings }>('/api/settings/media-storage', {
+      method: 'PUT',
+      body: JSON.stringify({ extraRoots }),
+    }),
   testDownloadSettings: (settings: Omit<DownloadSettings, 'updatedAt'>) =>
     request<{ result: DownloadConnectionTestResult }>('/api/settings/download/test', {
       method: 'POST',
@@ -421,6 +444,11 @@ export const api = {
     request<{ result: HistorySyncResult }>(`/api/anime/${bangumiId}/sync-history`, {
       method: 'POST',
       body: JSON.stringify(input),
+    }),
+  moveAnimeStorage: (bangumiId: number, storageRoot: string) =>
+    request<{ result: StorageMoveResult }>(`/api/anime/${bangumiId}/storage`, {
+      method: 'POST',
+      body: JSON.stringify({ storageRoot }),
     }),
   deleteAnime: (bangumiId: number) =>
     request<void>(`/api/anime/${bangumiId}`, { method: 'DELETE' }),

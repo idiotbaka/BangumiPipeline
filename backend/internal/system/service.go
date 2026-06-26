@@ -3,9 +3,11 @@ package system
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -30,6 +32,7 @@ var (
 	ErrInvalidProxy            = errors.New("proxy must be an HTTP or HTTPS URL")
 	ErrInvalidRSSURL           = errors.New("RSS URL must be an HTTP or HTTPS URL")
 	ErrInvalidDownloadSettings = errors.New("invalid download settings")
+	ErrInvalidMediaStoragePath = errors.New("invalid media storage path")
 )
 
 type ScheduledTask struct {
@@ -71,6 +74,12 @@ type DownloadSettings struct {
 	MaxConcurrentDownloads int    `json:"maxConcurrentDownloads"`
 	UpdatedAt              int64  `json:"updatedAt"`
 }
+
+type MediaStorageSettings struct {
+	ExtraRoots []string `json:"extraRoots"`
+	UpdatedAt  int64    `json:"updatedAt"`
+}
+
 type Service struct {
 	db  *sql.DB
 	now func() time.Time
@@ -316,6 +325,44 @@ WHERE id = 1`, settings.Host, settings.Port, settings.Username, settings.Passwor
 	}
 	return s.GetDownloadSettings(ctx)
 }
+
+func (s *Service) GetMediaStorageSettings(ctx context.Context) (MediaStorageSettings, error) {
+	var settings MediaStorageSettings
+	var rawJSON string
+	if err := s.db.QueryRowContext(ctx, `
+SELECT extra_roots_json, updated_at
+FROM media_storage_settings
+WHERE id = 1`).Scan(&rawJSON, &settings.UpdatedAt); err != nil {
+		return MediaStorageSettings{}, err
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &settings.ExtraRoots); err != nil {
+		settings.ExtraRoots = make([]string, 0)
+	}
+	if settings.ExtraRoots == nil {
+		settings.ExtraRoots = make([]string, 0)
+	}
+	return settings, nil
+}
+
+func (s *Service) UpdateMediaStorageSettings(ctx context.Context, extraRoots []string) (MediaStorageSettings, error) {
+	normalized, err := normalizeMediaStorageRoots(extraRoots)
+	if err != nil {
+		return MediaStorageSettings{}, err
+	}
+	rawJSON, err := json.Marshal(normalized)
+	if err != nil {
+		return MediaStorageSettings{}, err
+	}
+	_, err = s.db.ExecContext(ctx, `
+UPDATE media_storage_settings
+SET extra_roots_json = ?, updated_at = ?
+WHERE id = 1`, string(rawJSON), s.now().UTC().Unix())
+	if err != nil {
+		return MediaStorageSettings{}, err
+	}
+	return s.GetMediaStorageSettings(ctx)
+}
+
 func validateDownloadSettings(settings DownloadSettings) error {
 	if settings.Host == "" || strings.ContainsAny(settings.Host, "/\\") {
 		return ErrInvalidDownloadSettings
@@ -332,6 +379,28 @@ func validateDownloadSettings(settings DownloadSettings) error {
 	}
 	return nil
 }
+
+func normalizeMediaStorageRoots(paths []string) ([]string, error) {
+	result := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		cleaned := filepath.Clean(path)
+		if !filepath.IsAbs(cleaned) {
+			return nil, ErrInvalidMediaStoragePath
+		}
+		if _, exists := seen[cleaned]; exists {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		result = append(result, cleaned)
+	}
+	return result, nil
+}
+
 func validateProxy(value string) error {
 	if value == "" {
 		return nil

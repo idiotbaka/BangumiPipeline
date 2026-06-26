@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +64,8 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/settings/download", api.getDownloadSettings)
 	mux.HandleFunc("PUT /api/settings/download", api.updateDownloadSettings)
 	mux.HandleFunc("POST /api/settings/download/test", api.testDownloadSettings)
+	mux.HandleFunc("GET /api/settings/media-storage", api.getMediaStorageSettings)
+	mux.HandleFunc("PUT /api/settings/media-storage", api.updateMediaStorageSettings)
 	mux.HandleFunc("GET /api/system-logs", api.listSystemLogs)
 	mux.HandleFunc("GET /api/system-logs/stream", api.streamSystemLogs)
 	mux.HandleFunc("GET /api/anime", api.listAnime)
@@ -70,6 +75,7 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("DELETE /api/anime/{bangumiID}", api.deleteAnime)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/refresh", api.refreshAnime)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/sync-history", api.syncAnimeHistory)
+	mux.HandleFunc("POST /api/anime/{bangumiID}/storage", api.moveAnimeStorage)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/characters/{characterID}/image", api.characterImage)
 	mux.HandleFunc("GET /api/actors/{actorID}/image", api.actorImage)
@@ -102,6 +108,12 @@ type dashboardOverview struct {
 		Transcoding int `json:"transcoding"`
 		Failed      int `json:"failed"`
 	} `json:"media"`
+}
+
+type mediaStorageSettingsResponse struct {
+	DefaultRoot string   `json:"defaultRoot"`
+	ExtraRoots  []string `json:"extraRoots"`
+	UpdatedAt   int64    `json:"updatedAt"`
 }
 
 func (a *AdminAPI) dashboardOverview(w http.ResponseWriter, r *http.Request) {
@@ -141,6 +153,49 @@ func (a *AdminAPI) dashboardOverview(w http.ResponseWriter, r *http.Request) {
 	overview.Media.Transcoding = mediaCounts[media.StatusTranscoding]
 	overview.Media.Failed = mediaCounts[media.StatusFailed]
 	writeJSON(w, http.StatusOK, map[string]any{"overview": overview})
+}
+
+func (a *AdminAPI) getMediaStorageSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	settings, err := a.system.GetMediaStorageSettings(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": a.mediaStorageSettingsResponse(settings)})
+}
+
+func (a *AdminAPI) updateMediaStorageSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	var input struct {
+		ExtraRoots []string `json:"extraRoots"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	settings, err := a.system.UpdateMediaStorageSettings(r.Context(), input.ExtraRoots)
+	if err != nil {
+		if errors.Is(err, system.ErrInvalidMediaStoragePath) {
+			writeError(w, http.StatusBadRequest, "invalid_media_storage_path", "额外磁盘存储路径必须是服务器上的绝对路径")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": a.mediaStorageSettingsResponse(settings)})
+}
+
+func (a *AdminAPI) mediaStorageSettingsResponse(settings system.MediaStorageSettings) mediaStorageSettingsResponse {
+	return mediaStorageSettingsResponse{
+		DefaultRoot: a.media.DefaultMediaDir(),
+		ExtraRoots:  settings.ExtraRoots,
+		UpdatedAt:   settings.UpdatedAt,
+	}
 }
 
 func (a *AdminAPI) listSystemLogs(w http.ResponseWriter, r *http.Request) {
@@ -348,6 +403,43 @@ func (a *AdminAPI) syncAnimeHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"result": result})
 }
 
+func (a *AdminAPI) moveAnimeStorage(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	var input struct {
+		StorageRoot string `json:"storageRoot"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	root, err := normalizeStorageRootInput(input.StorageRoot)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_media_storage_path", "目标存储路径必须是服务器上的绝对路径")
+		return
+	}
+	allowed, err := a.allowedMediaStorageRoots(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	if !storageRootAllowed(root, allowed) {
+		writeError(w, http.StatusBadRequest, "media_storage_path_not_configured", "目标存储路径需要先在系统设置中配置")
+		return
+	}
+	result, err := a.media.MoveAnimeStorage(r.Context(), id, root)
+	if err != nil {
+		a.mediaStorageMoveError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result})
+}
+
 func (a *AdminAPI) deleteAnime(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdministrator(w, r) {
 		return
@@ -519,6 +611,62 @@ func (a *AdminAPI) animeSyncError(w http.ResponseWriter, err error) {
 	default:
 		a.internalError(w, err)
 	}
+}
+
+func (a *AdminAPI) mediaStorageMoveError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, media.ErrAnimeNotFound):
+		writeError(w, http.StatusNotFound, "anime_not_found", "番剧不存在")
+	case errors.Is(err, media.ErrInvalidStorageRoot):
+		writeError(w, http.StatusBadRequest, "invalid_media_storage_path", "目标存储路径必须是服务器上的绝对路径")
+	case errors.Is(err, media.ErrAnimeTranscoding):
+		writeError(w, http.StatusConflict, "anime_transcoding", "该番剧有转码中的任务，暂不能移动存储路径")
+	case errors.Is(err, media.ErrStorageTargetConflict):
+		writeError(w, http.StatusConflict, "media_storage_target_conflict", "目标路径已存在同名文件，请先处理后再移动")
+	default:
+		a.internalError(w, err)
+	}
+}
+
+func (a *AdminAPI) allowedMediaStorageRoots(ctx context.Context) ([]string, error) {
+	settings, err := a.system.GetMediaStorageSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	roots := make([]string, 0, len(settings.ExtraRoots)+1)
+	roots = append(roots, a.media.DefaultMediaDir())
+	roots = append(roots, settings.ExtraRoots...)
+	return roots, nil
+}
+
+func normalizeStorageRootInput(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("empty storage root")
+	}
+	value = filepath.Clean(value)
+	if !filepath.IsAbs(value) {
+		return "", errors.New("relative storage root")
+	}
+	return value, nil
+}
+
+func storageRootAllowed(root string, allowed []string) bool {
+	for _, candidate := range allowed {
+		if sameStorageRoot(root, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameStorageRoot(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func (a *AdminAPI) serveCatalogImage(w http.ResponseWriter, r *http.Request, resolve func() (string, error)) {

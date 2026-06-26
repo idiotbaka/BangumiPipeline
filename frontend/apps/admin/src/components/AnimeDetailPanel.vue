@@ -199,6 +199,11 @@ watch(() => props.bangumiId, (bangumiId) => {
           </el-card>
 
           <el-card class="detail-section" shadow="never">
+            <h2>存储位置</h2>
+            <p class="detail-storage-path">{{ anime.storagePath }}</p>
+          </el-card>
+
+          <el-card class="detail-section" shadow="never">
             <h2>完整元数据</h2>
             <dl class="infobox-list">
               <div v-for="(item, index) in anime.infobox" :key="`${item.key}-${index}`">

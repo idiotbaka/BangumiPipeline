@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS anime_metadata (
     episodes_status TEXT NOT NULL DEFAULT 'pending',
     episodes_error TEXT NOT NULL DEFAULT '',
     episodes_fetched_at INTEGER,
+    media_storage_root TEXT NOT NULL DEFAULT '',
     deleted_at       INTEGER,
     created_at       INTEGER NOT NULL
 );
@@ -232,6 +233,15 @@ CREATE TABLE IF NOT EXISTS anime_episodes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_anime_episodes_bangumi_sort ON anime_episodes(bangumi_id, type, sort_number, episode_id);
+
+CREATE TABLE IF NOT EXISTS media_storage_settings (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    extra_roots_json TEXT NOT NULL DEFAULT '[]',
+    updated_at       INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO media_storage_settings(id, extra_roots_json, updated_at)
+VALUES (1, '[]', unixepoch());
 
 CREATE TABLE IF NOT EXISTS system_logs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -673,6 +683,21 @@ CREATE INDEX IF NOT EXISTS idx_anime_episodes_status ON anime_metadata(episodes_
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (13, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 13 migration: %w", err)
+	}
+	if err := ensureColumn(ctx, db, "anime_metadata", "media_storage_root", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS media_storage_settings (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    extra_roots_json TEXT NOT NULL DEFAULT '[]',
+    updated_at       INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO media_storage_settings(id, extra_roots_json, updated_at)
+VALUES (1, '[]', unixepoch());
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (14, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 14 migration: %w", err)
 	}
 	return nil
 }

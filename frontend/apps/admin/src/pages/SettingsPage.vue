@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Connection, Download, Link } from '@element-plus/icons-vue'
+import { Connection, Delete, Download, FolderOpened, Link, Plus } from '@element-plus/icons-vue'
 import { api } from '../api'
 
 const formRef = ref<FormInstance>()
@@ -12,10 +12,13 @@ const loading = ref(true)
 const saving = ref(false)
 const savingSubscription = ref(false)
 const savingDownload = ref(false)
+const savingStorage = ref(false)
 const testingDownload = ref(false)
 const updatedAt = ref(0)
 const subscriptionUpdatedAt = ref(0)
 const downloadUpdatedAt = ref(0)
+const storageUpdatedAt = ref(0)
+const defaultMediaRoot = ref('')
 const form = reactive({ httpProxy: '', httpsProxy: '' })
 const subscriptionForm = reactive({ rssUrl: '' })
 const downloadForm = reactive({
@@ -24,6 +27,9 @@ const downloadForm = reactive({
   username: '',
   password: '',
   maxConcurrentDownloads: 2,
+})
+const storageForm = reactive({
+  extraRoots: [] as string[],
 })
 
 function validateProxy(_rule: unknown, value: string, callback: (error?: Error) => void) {
@@ -82,10 +88,11 @@ const downloadRules: FormRules<typeof downloadForm> = {
 async function loadSettings() {
   loading.value = true
   try {
-    const [network, subscription, download] = await Promise.all([
+    const [network, subscription, download, storage] = await Promise.all([
       api.networkSettings(),
       api.subscriptionSettings(),
       api.downloadSettings(),
+      api.mediaStorageSettings(),
     ])
     form.httpProxy = network.settings.httpProxy
     form.httpsProxy = network.settings.httpsProxy
@@ -98,10 +105,40 @@ async function loadSettings() {
     downloadForm.password = download.settings.password
     downloadForm.maxConcurrentDownloads = download.settings.maxConcurrentDownloads
     downloadUpdatedAt.value = download.settings.updatedAt
+    defaultMediaRoot.value = storage.settings.defaultRoot
+    storageForm.extraRoots = [...storage.settings.extraRoots]
+    storageUpdatedAt.value = storage.settings.updatedAt
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载设置失败')
   } finally {
     loading.value = false
+  }
+}
+
+function addStorageRoot() {
+  storageForm.extraRoots.push('')
+}
+
+function removeStorageRoot(index: number) {
+  storageForm.extraRoots.splice(index, 1)
+}
+
+function storagePayload() {
+  return storageForm.extraRoots.map((path) => path.trim()).filter(Boolean)
+}
+
+async function saveStorage() {
+  savingStorage.value = true
+  try {
+    const { settings } = await api.updateMediaStorageSettings(storagePayload())
+    defaultMediaRoot.value = settings.defaultRoot
+    storageForm.extraRoots = [...settings.extraRoots]
+    storageUpdatedAt.value = settings.updatedAt
+    ElMessage.success('额外磁盘存储路径已保存')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存存储路径失败')
+  } finally {
+    savingStorage.value = false
   }
 }
 
@@ -219,6 +256,38 @@ onMounted(loadSettings)
         <el-button type="primary" size="large" native-type="submit" :loading="saving">保存设置</el-button>
       </div>
     </el-form>
+  </el-card>
+
+  <el-card class="content-card settings-card" shadow="never" v-loading="loading">
+    <template #header>
+      <div class="settings-title">
+        <div class="task-icon"><el-icon><FolderOpened /></el-icon></div>
+        <div>
+          <h2>额外磁盘存储路径</h2>
+          <p>配置可用于存放成品视频的其他磁盘根目录。</p>
+        </div>
+      </div>
+    </template>
+
+    <div class="storage-settings-form">
+      <el-form-item label="默认媒体目录">
+        <el-input :model-value="defaultMediaRoot" size="large" disabled />
+        <div class="form-help">未移动存储路径的番剧会继续使用该目录。</div>
+      </el-form-item>
+
+      <div class="storage-root-list">
+        <div v-for="(_root, index) in storageForm.extraRoots" :key="index" class="storage-root-row">
+          <el-input v-model.trim="storageForm.extraRoots[index]" size="large" placeholder="E:\media 或 /opt/drive2" clearable />
+          <el-button :icon="Delete" type="danger" plain @click="removeStorageRoot(index)" />
+        </div>
+      </div>
+      <el-button :icon="Plus" plain @click="addStorageRoot">添加路径</el-button>
+      <div class="form-help">路径必须是运行服务器上的绝对路径；移动番剧时只能选择默认目录或这里配置的目录。</div>
+      <div class="settings-actions">
+        <span>最后更新：{{ formatTime(storageUpdatedAt) }}</span>
+        <el-button type="primary" size="large" :loading="savingStorage" @click="saveStorage">保存存储路径</el-button>
+      </div>
+    </div>
   </el-card>
 
   <el-card class="content-card settings-card" shadow="never" v-loading="loading">
