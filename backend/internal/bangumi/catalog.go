@@ -82,6 +82,21 @@ type AnimeCharacter struct {
 	Actors      []AnimeActor `json:"actors"`
 }
 
+type AnimeEpisode struct {
+	EpisodeID       int64   `json:"episodeId"`
+	EpNumber        int     `json:"epNumber"`
+	SortNumber      float64 `json:"sortNumber"`
+	Type            int     `json:"type"`
+	Disc            int     `json:"disc"`
+	Airdate         string  `json:"airdate"`
+	Name            string  `json:"name"`
+	NameCN          string  `json:"nameCN"`
+	Duration        string  `json:"duration"`
+	DurationSeconds int     `json:"durationSeconds"`
+	Description     string  `json:"description"`
+	CommentCount    int     `json:"commentCount"`
+}
+
 type AnimeDetail struct {
 	BangumiID      int64            `json:"bangumiId"`
 	URL            string           `json:"url"`
@@ -102,6 +117,7 @@ type AnimeDetail struct {
 	ImageStatus    string           `json:"imageStatus"`
 	DetailStatus   string           `json:"detailStatus"`
 	CharacterState string           `json:"characterStatus"`
+	EpisodesStatus string           `json:"episodesStatus"`
 	Infobox        []map[string]any `json:"infobox"`
 	Rating         map[string]any   `json:"rating"`
 	Collection     map[string]any   `json:"collection"`
@@ -109,6 +125,7 @@ type AnimeDetail struct {
 	Tags           []AnimeTag       `json:"tags"`
 	Aliases        []string         `json:"aliases"`
 	Characters     []AnimeCharacter `json:"characters"`
+	Episodes       []AnimeEpisode   `json:"episodes"`
 	CreatedAt      int64            `json:"createdAt"`
 }
 
@@ -256,15 +273,15 @@ func (c *Catalog) Detail(ctx context.Context, bangumiID int64) (AnimeDetail, err
 	err := c.db.QueryRowContext(ctx, `
 SELECT bangumi_id, url, name, name_cn, air_date, air_weekday, detail_date,
        platform, summary, eps, total_episodes, volumes, series, locked, nsfw,
-       image_local_path != '', image_status, detail_status, characters_status,
+       image_local_path != '', image_status, detail_status, characters_status, episodes_status,
        infobox_json, rating_json, collection_json, meta_tags_json, created_at
 FROM anime_metadata WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(
 		&detail.BangumiID, &detail.URL, &detail.Name, &detail.NameCN, &detail.AirDate,
 		&detail.AirWeekday, &detail.DetailDate, &detail.Platform, &detail.Summary,
 		&detail.Eps, &detail.TotalEpisodes, &detail.Volumes, &detail.Series,
 		&detail.Locked, &detail.NSFW, &detail.HasCover, &detail.ImageStatus,
-		&detail.DetailStatus, &detail.CharacterState, &infoboxJSON, &ratingJSON,
-		&collectionJSON, &metaTagsJSON, &detail.CreatedAt,
+		&detail.DetailStatus, &detail.CharacterState, &detail.EpisodesStatus,
+		&infoboxJSON, &ratingJSON, &collectionJSON, &metaTagsJSON, &detail.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AnimeDetail{}, ErrAnimeNotFound
@@ -288,6 +305,9 @@ FROM anime_metadata WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Sca
 		return AnimeDetail{}, err
 	}
 	if detail.Characters, err = c.characters(ctx, bangumiID); err != nil {
+		return AnimeDetail{}, err
+	}
+	if detail.Episodes, err = c.episodes(ctx, bangumiID); err != nil {
 		return AnimeDetail{}, err
 	}
 	return detail, nil
@@ -394,6 +414,35 @@ ORDER BY ca.sort_order, a.actor_id`, bangumiID, characters[index].CharacterID)
 		}
 	}
 	return characters, nil
+}
+
+func (c *Catalog) episodes(ctx context.Context, bangumiID int64) ([]AnimeEpisode, error) {
+	rows, err := c.db.QueryContext(ctx, `
+SELECT episode_id, ep_number, sort_number, type, disc, airdate, name, name_cn,
+       duration, duration_seconds, description, comment_count
+FROM anime_episodes
+WHERE bangumi_id = ?
+ORDER BY sort_number,
+         CASE WHEN type = 0 THEN 0 ELSE 1 END,
+         episode_id`, bangumiID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]AnimeEpisode, 0)
+	for rows.Next() {
+		var episode AnimeEpisode
+		if err := rows.Scan(
+			&episode.EpisodeID, &episode.EpNumber, &episode.SortNumber, &episode.Type,
+			&episode.Disc, &episode.Airdate, &episode.Name, &episode.NameCN,
+			&episode.Duration, &episode.DurationSeconds, &episode.Description,
+			&episode.CommentCount,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, episode)
+	}
+	return result, rows.Err()
 }
 
 func (c *Catalog) AnimeImagePath(ctx context.Context, bangumiID int64) (string, error) {

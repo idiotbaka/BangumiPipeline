@@ -34,6 +34,41 @@ function renderInfobox(value: unknown): string {
   return value ? JSON.stringify(value) : '—'
 }
 
+function formatEpisodeSort(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return ''
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '')
+}
+
+function episodeTypeLabel(type: number): string {
+  const labels: Record<number, string> = {
+    0: '正片',
+    1: 'SP',
+    2: 'OP',
+    3: 'ED',
+    4: 'PV',
+    5: 'MAD',
+  }
+  return labels[type] ?? '其他'
+}
+
+function episodeBadge(episode: AnimeDetail['episodes'][number]): string {
+  if (episode.type === 0 && episode.epNumber > 0) {
+    return `EP ${String(episode.epNumber).padStart(2, '0')}`
+  }
+  const sort = formatEpisodeSort(episode.sortNumber)
+  return sort ? `${episodeTypeLabel(episode.type)} ${sort}` : episodeTypeLabel(episode.type)
+}
+
+function episodeTitle(episode: AnimeDetail['episodes'][number]): string {
+  return episode.nameCN || episode.name || '未命名分集'
+}
+
+function episodeEmptyDescription(status: string): string {
+  if (status === 'failed') return '分集元数据抓取失败'
+  if (status === 'completed') return '暂无分集元数据'
+  return '分集元数据尚未抓取'
+}
+
 async function load(bangumiId: number) {
   const token = ++loadToken
   anime.value = null
@@ -100,6 +135,34 @@ watch(() => props.bangumiId, (bangumiId) => {
           <el-card class="detail-section" shadow="never">
             <h2>剧情简介</h2>
             <p class="anime-summary">{{ anime.summary || '暂无简介。' }}</p>
+          </el-card>
+
+          <el-card class="detail-section episode-section" shadow="never">
+            <div class="section-title-line">
+              <h2>分集信息</h2>
+              <span>{{ anime.episodes.length }} 条</span>
+            </div>
+            <div v-if="anime.episodes.length" class="episode-list">
+              <article v-for="episode in anime.episodes" :key="episode.episodeId" class="episode-row">
+                <div class="episode-index">
+                  <strong>{{ episodeBadge(episode) }}</strong>
+                  <span v-if="episode.airdate">{{ episode.airdate }}</span>
+                </div>
+                <div class="episode-copy">
+                  <div class="episode-title-line">
+                    <h3>{{ episodeTitle(episode) }}</h3>
+                    <el-tag size="small" effect="plain">{{ episodeTypeLabel(episode.type) }}</el-tag>
+                  </div>
+                  <p v-if="episode.nameCN && episode.name && episode.nameCN !== episode.name" class="episode-original-title">{{ episode.name }}</p>
+                  <p class="episode-description">{{ episode.description || '暂无简介。' }}</p>
+                  <div class="episode-meta-line">
+                    <span v-if="episode.duration">{{ episode.duration }}</span>
+                    <span v-if="episode.commentCount > 0">{{ episode.commentCount }} 条评论</span>
+                  </div>
+                </div>
+              </article>
+            </div>
+            <el-empty v-else :description="episodeEmptyDescription(anime.episodesStatus)" :image-size="72" />
           </el-card>
 
           <el-card class="detail-section" shadow="never">

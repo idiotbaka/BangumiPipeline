@@ -249,6 +249,21 @@ export interface AnimeCharacter {
   actors: AnimeActor[]
 }
 
+export interface AnimeEpisode {
+  episodeId: number
+  epNumber: number
+  sortNumber: number
+  type: number
+  disc: number
+  airdate: string
+  name: string
+  nameCN: string
+  duration: string
+  durationSeconds: number
+  description: string
+  commentCount: number
+}
+
 export interface AnimeDetail {
   bangumiId: number
   url: string
@@ -269,6 +284,7 @@ export interface AnimeDetail {
   imageStatus: string
   detailStatus: string
   characterStatus: string
+  episodesStatus: string
   infobox: Array<{ key?: string; value?: unknown }>
   rating: Record<string, unknown>
   collection: Record<string, unknown>
@@ -276,6 +292,7 @@ export interface AnimeDetail {
   tags: Array<{ name: string; count: number }>
   aliases: string[]
   characters: AnimeCharacter[]
+  episodes: AnimeEpisode[]
   createdAt: number
 }
 

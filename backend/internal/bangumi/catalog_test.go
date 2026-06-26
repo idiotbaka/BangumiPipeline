@@ -23,7 +23,14 @@ INSERT INTO anime_metadata(
     '[{"key":"话数","value":"12"}]', '{"score":8.2}', '{}', '["TV"]', 100
 );
 INSERT INTO anime_tags(bangumi_id, name, count) VALUES (1234, '动画', 10);
-INSERT INTO anime_aliases(bangumi_id, alias, sort_order) VALUES (1234, 'Alias', 0);`)
+INSERT INTO anime_aliases(bangumi_id, alias, sort_order) VALUES (1234, 'Alias', 0);
+INSERT INTO anime_episodes(
+    bangumi_id, episode_id, ep_number, sort_number, type, airdate,
+    name, name_cn, duration, duration_seconds, description, comment_count,
+    created_at, updated_at
+) VALUES
+    (1234, 9001, 1, 1, 0, '2026-07-01', 'Episode 1', '第一话', '00:24:00', 1440, 'Episode summary', 5, 101, 101),
+    (1234, 9002, 0, 1.5, 1, '2026-07-08', 'Intermission', '', '00:12:00', 720, 'Special summary', 2, 102, 102);`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,8 +56,11 @@ INSERT INTO anime_characters(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.NameCN != "中文标题" || len(detail.Tags) != 1 || len(detail.Aliases) != 1 || len(detail.Characters) != 10 {
+	if detail.NameCN != "中文标题" || len(detail.Tags) != 1 || len(detail.Aliases) != 1 || len(detail.Characters) != 10 || len(detail.Episodes) != 2 {
 		t.Fatalf("unexpected anime detail: %+v", detail)
+	}
+	if detail.Episodes[0].NameCN != "第一话" || detail.Episodes[1].SortNumber != 1.5 || detail.Episodes[1].Type != 1 {
+		t.Fatalf("unexpected episode metadata: %+v", detail.Episodes)
 	}
 }
 
