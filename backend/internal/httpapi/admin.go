@@ -108,6 +108,21 @@ type dashboardOverview struct {
 		Transcoding int `json:"transcoding"`
 		Failed      int `json:"failed"`
 	} `json:"media"`
+	Storage struct {
+		Roots []dashboardStorageRoot `json:"roots"`
+	} `json:"storage"`
+}
+
+type dashboardStorageRoot struct {
+	Label        string  `json:"label"`
+	Path         string  `json:"path"`
+	IsDefault    bool    `json:"isDefault"`
+	Available    bool    `json:"available"`
+	FreeBytes    uint64  `json:"freeBytes"`
+	TotalBytes   uint64  `json:"totalBytes"`
+	UsedBytes    uint64  `json:"usedBytes"`
+	UsedPercent  float64 `json:"usedPercent"`
+	ErrorMessage string  `json:"errorMessage"`
 }
 
 type mediaStorageSettingsResponse struct {
@@ -152,6 +167,11 @@ func (a *AdminAPI) dashboardOverview(w http.ResponseWriter, r *http.Request) {
 	overview.Media.Pending = mediaCounts[media.StatusPending]
 	overview.Media.Transcoding = mediaCounts[media.StatusTranscoding]
 	overview.Media.Failed = mediaCounts[media.StatusFailed]
+	overview.Storage.Roots, err = a.dashboardStorageRoots(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"overview": overview})
 }
 
@@ -196,6 +216,49 @@ func (a *AdminAPI) mediaStorageSettingsResponse(settings system.MediaStorageSett
 		ExtraRoots:  settings.ExtraRoots,
 		UpdatedAt:   settings.UpdatedAt,
 	}
+}
+
+func (a *AdminAPI) dashboardStorageRoots(ctx context.Context) ([]dashboardStorageRoot, error) {
+	settings, err := a.system.GetMediaStorageSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(settings.ExtraRoots)+1)
+	paths = append(paths, a.media.DefaultMediaDir())
+	for _, root := range settings.ExtraRoots {
+		if storageRootAllowed(root, paths) {
+			continue
+		}
+		paths = append(paths, root)
+	}
+	roots := make([]dashboardStorageRoot, 0, len(paths))
+	for index, path := range paths {
+		root := dashboardStorageRoot{
+			Label:     "默认媒体目录",
+			Path:      path,
+			IsDefault: index == 0,
+		}
+		if index > 0 {
+			root.Label = fmt.Sprintf("额外存储 %d", index)
+		}
+		stats, err := diskSpaceForPath(path)
+		if err != nil {
+			root.ErrorMessage = err.Error()
+			roots = append(roots, root)
+			continue
+		}
+		root.Available = true
+		root.FreeBytes = stats.FreeBytes
+		root.TotalBytes = stats.TotalBytes
+		if stats.TotalBytes >= stats.FreeBytes {
+			root.UsedBytes = stats.TotalBytes - stats.FreeBytes
+		}
+		if stats.TotalBytes > 0 {
+			root.UsedPercent = float64(root.UsedBytes) / float64(stats.TotalBytes) * 100
+		}
+		roots = append(roots, root)
+	}
+	return roots, nil
 }
 
 func (a *AdminAPI) listSystemLogs(w http.ResponseWriter, r *http.Request) {

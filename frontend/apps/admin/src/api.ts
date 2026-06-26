@@ -152,6 +152,21 @@ export interface DashboardOverview {
     transcoding: number
     failed: number
   }
+  storage: {
+    roots: DashboardStorageRoot[]
+  }
+}
+
+export interface DashboardStorageRoot {
+  label: string
+  path: string
+  isDefault: boolean
+  available: boolean
+  freeBytes: number
+  totalBytes: number
+  usedBytes: number
+  usedPercent: number
+  errorMessage: string
 }
 
 export interface SystemLog {
