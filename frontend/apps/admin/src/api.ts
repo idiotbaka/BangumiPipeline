@@ -111,6 +111,9 @@ export interface MediaJob {
   sourceFile: string
   subtitleFile: string
   outputFile: string
+  coverFile: string
+  coverStatus: 'pending' | 'completed' | 'failed'
+  coverError: string
   videoCodec: string
   audioCodec: string
   hasInternalSubtitles: boolean

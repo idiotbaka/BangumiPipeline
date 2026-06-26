@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"log/slog"
 	"os"
@@ -18,6 +20,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	_ "image/png"
 )
 
 const (
@@ -29,6 +33,10 @@ const (
 	StatusFailed      = "failed"
 
 	downloadStatusCompleted = "completed"
+
+	CoverStatusPending   = "pending"
+	CoverStatusCompleted = "completed"
+	CoverStatusFailed    = "failed"
 )
 
 var (
@@ -86,6 +94,9 @@ type Job struct {
 	SourceFile           string  `json:"sourceFile"`
 	SubtitleFile         string  `json:"subtitleFile"`
 	OutputFile           string  `json:"outputFile"`
+	CoverFile            string  `json:"coverFile"`
+	CoverStatus          string  `json:"coverStatus"`
+	CoverError           string  `json:"coverError"`
 	VideoCodec           string  `json:"videoCodec"`
 	AudioCodec           string  `json:"audioCodec"`
 	HasInternalSubtitles bool    `json:"hasInternalSubtitles"`
@@ -184,6 +195,13 @@ type pathMove struct {
 	Target string
 }
 
+type coverCandidate struct {
+	ID          int64
+	OutputPath  string
+	CoverPath   string
+	CoverStatus string
+}
+
 func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
 	mediaDir := strings.TrimSpace(config.MediaDir)
 	if mediaDir == "" {
@@ -220,6 +238,10 @@ func (s *Service) Execute(ctx context.Context) error {
 	if err := s.recoverInterruptedJobs(ctx); err != nil {
 		return fmt.Errorf("恢复中断媒体任务: %w", err)
 	}
+	coverBackfilled, err := s.backfillMissingCovers(ctx)
+	if err != nil {
+		return fmt.Errorf("补齐视频封面图: %w", err)
+	}
 
 	processed := 0
 	copied := 0
@@ -253,10 +275,10 @@ func (s *Service) Execute(ctx context.Context) error {
 		}
 	}
 	if processed == 0 {
-		s.logger.Info("媒体处理任务完成：没有待处理视频", "source", "media", "enqueued", enqueued)
+		s.logger.Info("媒体处理任务完成：没有待处理视频", "source", "media", "enqueued", enqueued, "cover_backfilled", coverBackfilled)
 		return nil
 	}
-	s.logger.Info("媒体处理任务完成", "source", "media", "enqueued", enqueued, "processed", processed, "copied", copied, "ffmpeg_jobs", ffmpegJobs)
+	s.logger.Info("媒体处理任务完成", "source", "media", "enqueued", enqueued, "processed", processed, "copied", copied, "ffmpeg_jobs", ffmpegJobs, "cover_backfilled", coverBackfilled)
 	return nil
 }
 
@@ -480,9 +502,9 @@ WHERE bangumi_id = ? AND status = ?`, bangumiID, StatusTranscoding).Scan(&count)
 
 func (s *Service) animeOutputDirs(ctx context.Context, bangumiID int64, root string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT output_path
+SELECT output_path, cover_path
 FROM media_jobs
-WHERE bangumi_id = ? AND output_path != ''`, bangumiID)
+WHERE bangumi_id = ? AND (output_path != '' OR cover_path != '')`, bangumiID)
 	if err != nil {
 		return nil, err
 	}
@@ -490,44 +512,47 @@ WHERE bangumi_id = ? AND output_path != ''`, bangumiID)
 	result := make([]string, 0)
 	seen := make(map[string]struct{})
 	for rows.Next() {
-		var outputPath string
-		if err := rows.Scan(&outputPath); err != nil {
+		var outputPath, coverPath string
+		if err := rows.Scan(&outputPath, &coverPath); err != nil {
 			return nil, err
 		}
-		rel, ok := relativePath(root, outputPath)
-		if !ok || rel == "." {
-			continue
+		for _, mediaPath := range []string{outputPath, coverPath} {
+			rel, ok := relativePath(root, mediaPath)
+			if !ok || rel == "." {
+				continue
+			}
+			first := strings.Split(rel, string(os.PathSeparator))[0]
+			if first == "" || first == "." {
+				continue
+			}
+			dir := filepath.Join(root, first)
+			if _, exists := seen[dir]; exists {
+				continue
+			}
+			seen[dir] = struct{}{}
+			result = append(result, dir)
 		}
-		first := strings.Split(rel, string(os.PathSeparator))[0]
-		if first == "" || first == "." {
-			continue
-		}
-		dir := filepath.Join(root, first)
-		if _, exists := seen[dir]; exists {
-			continue
-		}
-		seen[dir] = struct{}{}
-		result = append(result, dir)
 	}
 	return result, rows.Err()
 }
 
 func (s *Service) persistAnimeStorage(ctx context.Context, info animeStorageInfo, moves []pathMove) error {
 	type mediaOutput struct {
-		ID   int64
-		Path string
+		ID        int64
+		Output    string
+		CoverPath string
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, output_path
+SELECT id, output_path, cover_path
 FROM media_jobs
-WHERE bangumi_id = ? AND output_path != ''`, info.BangumiID)
+WHERE bangumi_id = ? AND (output_path != '' OR cover_path != '')`, info.BangumiID)
 	if err != nil {
 		return err
 	}
 	outputs := make([]mediaOutput, 0)
 	for rows.Next() {
 		var output mediaOutput
-		if err := rows.Scan(&output.ID, &output.Path); err != nil {
+		if err := rows.Scan(&output.ID, &output.Output, &output.CoverPath); err != nil {
 			rows.Close()
 			return err
 		}
@@ -549,24 +574,33 @@ WHERE bangumi_id = ?`, info.TargetStored, info.BangumiID); err != nil {
 		return err
 	}
 	for _, output := range outputs {
-		updated := output.Path
-		for _, move := range moves {
-			if rel, ok := relativePath(move.Source, output.Path); ok {
-				updated = filepath.Join(move.Target, rel)
-				break
-			}
-		}
-		if updated == output.Path {
+		updatedOutput := movedPath(output.Output, moves)
+		updatedCover := movedPath(output.CoverPath, moves)
+		if updatedOutput == output.Output && updatedCover == output.CoverPath {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
 UPDATE media_jobs
-SET output_path = ?, updated_at = ?
-WHERE id = ?`, updated, s.now().UTC().Unix(), output.ID); err != nil {
+SET output_path = ?, cover_path = ?, updated_at = ?
+WHERE id = ?`, updatedOutput, updatedCover, s.now().UTC().Unix(), output.ID); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+func movedPath(path string, moves []pathMove) string {
+	updated := path
+	if strings.TrimSpace(path) == "" {
+		return updated
+	}
+	for _, move := range moves {
+		if rel, ok := relativePath(move.Source, path); ok {
+			updated = filepath.Join(move.Target, rel)
+			break
+		}
+	}
+	return updated
 }
 
 func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (Job, error) {
@@ -574,13 +608,14 @@ func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (Job, error) 
 	result, err := s.db.ExecContext(ctx, `
 UPDATE media_jobs
 SET status = ?, source_path = '', subtitle_path = '', output_path = '',
+    cover_path = '', cover_status = ?, cover_error = '',
     video_codec = '', audio_codec = '', has_internal_subtitles = 0,
     has_external_subtitles = 0, needs_transcode = 0, action = '',
     progress = 0, processed_duration_ms = 0, total_duration_ms = 0,
     progress_updated_at = NULL, error_message = '',
     started_at = NULL, completed_at = NULL, failed_at = NULL,
     updated_at = ?
-WHERE id = ? AND status = ?`, StatusPending, now, jobID, StatusFailed)
+WHERE id = ? AND status = ?`, StatusPending, CoverStatusPending, now, jobID, StatusFailed)
 	if err != nil {
 		return Job{}, err
 	}
@@ -707,6 +742,9 @@ func (s *Service) processJob(ctx context.Context, job pendingJob) (processResult
 		s.logger.Error("媒体处理失败", "source", "media", "media_job_id", job.ID, "action", plan.action, "error", err)
 		return result, nil
 	}
+	if err := s.generateCoverForJob(ctx, job.ID, plan.outputPath); err != nil {
+		s.logger.Warn("视频封面图生成失败", "source", "media", "media_job_id", job.ID, "output_file", filepath.Base(plan.outputPath), "error", err)
+	}
 	if err := s.markCompleted(ctx, job.ID); err != nil {
 		return result, err
 	}
@@ -785,6 +823,179 @@ func (s *Service) probe(ctx context.Context, path string) (probeResult, error) {
 		return probeResult{}, fmt.Errorf("解析 ffprobe 输出失败: %w", err)
 	}
 	return result, nil
+}
+
+func (s *Service) backfillMissingCovers(ctx context.Context) (int, error) {
+	s.storageMu.Lock()
+	defer s.storageMu.Unlock()
+
+	candidates, err := s.coverBackfillCandidates(ctx)
+	if err != nil {
+		return 0, err
+	}
+	generated := 0
+	for _, candidate := range candidates {
+		select {
+		case <-ctx.Done():
+			return generated, ctx.Err()
+		default:
+		}
+		if candidate.CoverStatus == CoverStatusCompleted && strings.TrimSpace(candidate.CoverPath) != "" {
+			if exists, err := fileExists(candidate.CoverPath); err != nil {
+				s.logger.Warn("检查视频封面图失败", "source", "media", "media_job_id", candidate.ID, "error", err)
+			} else if exists {
+				continue
+			}
+		}
+		if err := s.generateCoverForJob(ctx, candidate.ID, candidate.OutputPath); err != nil {
+			s.logger.Warn("历史视频封面图生成失败", "source", "media", "media_job_id", candidate.ID, "output_file", filepath.Base(candidate.OutputPath), "error", err)
+			continue
+		}
+		generated++
+	}
+	return generated, nil
+}
+
+func (s *Service) coverBackfillCandidates(ctx context.Context) ([]coverCandidate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, output_path, cover_path, cover_status
+FROM media_jobs
+WHERE status = ? AND output_path != ''
+ORDER BY COALESCE(completed_at, updated_at), id`, StatusCompleted)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	candidates := make([]coverCandidate, 0)
+	for rows.Next() {
+		var candidate coverCandidate
+		if err := rows.Scan(&candidate.ID, &candidate.OutputPath, &candidate.CoverPath, &candidate.CoverStatus); err != nil {
+			return nil, err
+		}
+		if candidate.CoverStatus == "" || candidate.CoverStatus == CoverStatusPending ||
+			candidate.CoverStatus == CoverStatusFailed || candidate.CoverPath == "" ||
+			candidate.CoverStatus == CoverStatusCompleted {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates, rows.Err()
+}
+
+func (s *Service) generateCoverForJob(ctx context.Context, jobID int64, outputPath string) error {
+	coverPath := coverPathForOutput(outputPath)
+	if err := s.generateCover(ctx, outputPath, coverPath); err != nil {
+		_ = s.markCoverFailed(ctx, jobID, err.Error())
+		return err
+	}
+	if err := s.markCoverCompleted(ctx, jobID, coverPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) generateCover(ctx context.Context, outputPath, coverPath string) error {
+	outputPath = strings.TrimSpace(outputPath)
+	if outputPath == "" {
+		return errors.New("缺少最终产物视频路径")
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		return fmt.Errorf("访问最终产物视频失败: %w", err)
+	}
+	durationMS, err := s.videoDurationMS(ctx, outputPath)
+	if err != nil {
+		return err
+	}
+	if durationMS <= 0 {
+		return errors.New("无法获取视频总时长")
+	}
+	if err := os.MkdirAll(filepath.Dir(coverPath), 0o755); err != nil {
+		return err
+	}
+	tempPNG := coverPath + ".tmp.png"
+	tempJPG := coverPath + ".tmp.jpg"
+	_ = os.Remove(tempPNG)
+	_ = os.Remove(tempJPG)
+	timestamp := strconv.FormatFloat(float64(durationMS)/2000, 'f', 3, 64)
+	scaleFilter := "scale='if(gt(iw,ih),min(480,iw),-2)':'if(gt(iw,ih),-2,min(480,ih))'"
+	command := exec.CommandContext(ctx, s.ffmpegPath,
+		"-hide_banner", "-nostats", "-loglevel", "warning",
+		"-y", "-ss", timestamp, "-i", outputPath,
+		"-frames:v", "1", "-an", "-sn", "-vf", scaleFilter, tempPNG,
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		if len(message) > 2000 {
+			message = message[len(message)-2000:]
+		}
+		return fmt.Errorf("ffmpeg 截取封面图失败: %s", message)
+	}
+	if err := encodeJPEGCover(tempPNG, tempJPG); err != nil {
+		return err
+	}
+	if err := replaceFile(tempJPG, coverPath); err != nil {
+		return err
+	}
+	_ = os.Remove(tempPNG)
+	return nil
+}
+
+func (s *Service) videoDurationMS(ctx context.Context, path string) (int64, error) {
+	probe, err := s.probe(ctx, path)
+	if err != nil {
+		return 0, err
+	}
+	videoStream, _, _ := classifyStreams(probe.Streams)
+	if videoStream.CodecName == "" {
+		return 0, errors.New("未找到视频流")
+	}
+	return probeDurationMS(probe, videoStream), nil
+}
+
+func encodeJPEGCover(sourcePNG, destinationJPG string) error {
+	input, err := os.Open(sourcePNG)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	img, _, err := image.Decode(input)
+	if err != nil {
+		return fmt.Errorf("解析封面图失败: %w", err)
+	}
+	output, err := os.OpenFile(destinationJPG, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	encodeErr := jpeg.Encode(output, img, &jpeg.Options{Quality: 80})
+	closeErr := output.Close()
+	if encodeErr != nil {
+		return fmt.Errorf("写入 JPG 封面图失败: %w", encodeErr)
+	}
+	return closeErr
+}
+
+func (s *Service) markCoverCompleted(ctx context.Context, jobID int64, coverPath string) error {
+	now := s.now().UTC().Unix()
+	_, err := s.db.ExecContext(ctx, `
+UPDATE media_jobs
+SET cover_path = ?, cover_status = ?, cover_error = '', updated_at = ?
+WHERE id = ?`, coverPath, CoverStatusCompleted, now, jobID)
+	return err
+}
+
+func (s *Service) markCoverFailed(ctx context.Context, jobID int64, message string) error {
+	if len(message) > 1000 {
+		message = message[:1000]
+	}
+	now := s.now().UTC().Unix()
+	_, err := s.db.ExecContext(ctx, `
+UPDATE media_jobs
+SET cover_path = '', cover_status = ?, cover_error = ?, updated_at = ?
+WHERE id = ?`, CoverStatusFailed, message, now, jobID)
+	return err
 }
 
 func (s *Service) runFFmpeg(ctx context.Context, jobID int64, plan mediaPlan) error {
@@ -955,11 +1166,13 @@ func (s *Service) persistPlan(ctx context.Context, jobID int64, plan mediaPlan) 
 	now := s.now().UTC().Unix()
 	_, err := s.db.ExecContext(ctx, `
 UPDATE media_jobs
-SET source_path = ?, subtitle_path = ?, output_path = ?, video_codec = ?, audio_codec = ?,
+SET source_path = ?, subtitle_path = ?, output_path = ?,
+    cover_path = '', cover_status = ?, cover_error = '',
+    video_codec = ?, audio_codec = ?,
     has_internal_subtitles = ?, has_external_subtitles = ?, needs_transcode = ?, action = ?,
     progress = 0, processed_duration_ms = 0, total_duration_ms = ?, progress_updated_at = NULL,
     updated_at = ?
-WHERE id = ?`, plan.sourcePath, plan.subtitlePath, plan.outputPath, plan.videoCodec, plan.audioCodec,
+WHERE id = ?`, plan.sourcePath, plan.subtitlePath, plan.outputPath, CoverStatusPending, plan.videoCodec, plan.audioCodec,
 		plan.hasInternalSubtitles, plan.hasExternalSubtitles, plan.needsTranscode, plan.action,
 		plan.totalDurationMS, now, jobID)
 	return err
@@ -1194,6 +1407,25 @@ func dirExists(path string) (bool, error) {
 		return false, err
 	}
 	return info.IsDir(), nil
+}
+
+func fileExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !info.IsDir(), nil
+}
+
+func coverPathForOutput(outputPath string) string {
+	ext := filepath.Ext(outputPath)
+	if ext == "" {
+		return outputPath + ".jpg"
+	}
+	return strings.TrimSuffix(outputPath, ext) + ".jpg"
 }
 
 func seasonFolderName(job pendingJob) string {
@@ -1438,7 +1670,8 @@ JOIN subscription_items si ON si.id = mj.subscription_item_id`
 const mediaJobSelect = `
 SELECT mj.id, mj.download_job_id, mj.subscription_item_id, si.title, mj.bangumi_id,
        mj.anime_name, mj.season_number, mj.episode_type, mj.episode_number, mj.status,
-       mj.source_path, mj.subtitle_path, mj.output_path, mj.video_codec, mj.audio_codec,
+       mj.source_path, mj.subtitle_path, mj.output_path, mj.cover_path, mj.cover_status, mj.cover_error,
+       mj.video_codec, mj.audio_codec,
        mj.has_internal_subtitles, mj.has_external_subtitles, mj.needs_transcode,
        mj.action, mj.progress, mj.processed_duration_ms, mj.total_duration_ms,
        mj.error_message, mj.progress_updated_at, mj.started_at, mj.completed_at, mj.failed_at,
@@ -1451,7 +1684,8 @@ func scanJob(row interface{ Scan(dest ...any) error }) (Job, error) {
 	if err := row.Scan(
 		&job.ID, &job.DownloadJobID, &job.SubscriptionItemID, &job.Title, &job.BangumiID,
 		&job.AnimeName, &job.SeasonNumber, &job.EpisodeType, &job.EpisodeNumber, &job.Status,
-		&job.SourceFile, &job.SubtitleFile, &job.OutputFile, &job.VideoCodec, &job.AudioCodec,
+		&job.SourceFile, &job.SubtitleFile, &job.OutputFile, &job.CoverFile, &job.CoverStatus, &job.CoverError,
+		&job.VideoCodec, &job.AudioCodec,
 		&job.HasInternalSubtitles, &job.HasExternalSubtitles, &job.NeedsTranscode,
 		&job.Action, &job.Progress, &job.ProcessedDurationMS, &job.TotalDurationMS,
 		&job.ErrorMessage, &progressUpdatedAt, &startedAt, &completedAt, &failedAt,
@@ -1462,6 +1696,7 @@ func scanJob(row interface{ Scan(dest ...any) error }) (Job, error) {
 	job.SourceFile = baseName(job.SourceFile)
 	job.SubtitleFile = baseName(job.SubtitleFile)
 	job.OutputFile = baseName(job.OutputFile)
+	job.CoverFile = baseName(job.CoverFile)
 	job.ProgressUpdatedAt = nullableInt64(progressUpdatedAt)
 	job.StartedAt = nullableInt64(startedAt)
 	job.CompletedAt = nullableInt64(completedAt)

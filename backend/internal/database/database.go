@@ -605,6 +605,9 @@ CREATE TABLE IF NOT EXISTS media_jobs (
     source_path            TEXT NOT NULL DEFAULT '',
     subtitle_path          TEXT NOT NULL DEFAULT '',
     output_path            TEXT NOT NULL DEFAULT '',
+    cover_path             TEXT NOT NULL DEFAULT '',
+    cover_status           TEXT NOT NULL DEFAULT 'pending',
+    cover_error            TEXT NOT NULL DEFAULT '',
     video_codec            TEXT NOT NULL DEFAULT '',
     audio_codec            TEXT NOT NULL DEFAULT '',
     has_internal_subtitles INTEGER NOT NULL DEFAULT 0 CHECK (has_internal_subtitles IN (0, 1)),
@@ -698,6 +701,21 @@ VALUES (1, '[]', unixepoch());
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (14, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 14 migration: %w", err)
+	}
+	for name, definition := range map[string]string{
+		"cover_path":   "TEXT NOT NULL DEFAULT ''",
+		"cover_status": "TEXT NOT NULL DEFAULT 'pending'",
+		"cover_error":  "TEXT NOT NULL DEFAULT ''",
+	} {
+		if err := ensureColumn(ctx, db, "media_jobs", name, definition); err != nil {
+			return err
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS idx_media_jobs_cover_status ON media_jobs(cover_status, updated_at DESC, id DESC);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (15, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 15 migration: %w", err)
 	}
 	return nil
 }
