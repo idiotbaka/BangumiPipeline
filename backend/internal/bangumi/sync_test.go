@@ -27,7 +27,7 @@ func TestSyncStoresDetailCharactersImagesAndSkipsCompletedStages(t *testing.T) {
 	db := openDatabase(t, ctx)
 	settings := system.NewService(db)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	var calendarRequests, detailRequests, characterRequests, imageRequests atomic.Int32
+	var calendarRequests, detailRequests, characterRequests, episodeRequests, imageRequests atomic.Int32
 	const userAgent = "test-user/BangumiPipeline/0.1"
 
 	var server *httptest.Server
@@ -57,6 +57,12 @@ func TestSyncStoresDetailCharactersImagesAndSkipsCompletedStages(t *testing.T) {
                     "images":{"large":%q},"name":"角色一","summary":"角色简介","relation":"主角",
 					"actors":[{"id":9001,"name":"声优一","career":["seiyu"],"images":{"large":%q}}],"type":1,"id":501
                 }]`, server.URL+"/character.jpg", server.URL+"/actor.jpg"))
+		case "/v0/episodes":
+			episodeRequests.Add(1)
+			if got := r.URL.Query().Get("subject_id"); got != "101" {
+				t.Errorf("unexpected episode subject_id: %q", got)
+			}
+			writeEpisodes(w, 101, 12, true)
 		case "/cover.jpg", "/character.jpg", "/actor.jpg":
 			imageRequests.Add(1)
 			w.Header().Set("Content-Type", "image/jpeg")
@@ -116,13 +122,40 @@ FROM anime_characters WHERE bangumi_id = 101 AND character_id = 501`).Scan(
 		t.Fatalf("unexpected normalized actor: name=%q career=%s", actorName, careerJSON)
 	}
 	assertFileExists(t, actorImage)
+	assertCount(t, db, "SELECT COUNT(*) FROM anime_episodes WHERE bangumi_id = 101", 13)
+	var episodeName, episodeNameCN, episodeDescription string
+	var epNumber, durationSeconds int
+	var sortNumber float64
+	if err := db.QueryRowContext(ctx, `
+SELECT ep_number, sort_number, name, name_cn, description, duration_seconds
+FROM anime_episodes WHERE bangumi_id = 101 AND episode_id = 101001`).Scan(
+		&epNumber, &sortNumber, &episodeName, &episodeNameCN, &episodeDescription, &durationSeconds,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if epNumber != 1 || sortNumber != 1 || episodeName != "第1話" || episodeNameCN != "第1集" ||
+		episodeDescription != "第1集简介" || durationSeconds != 1441 {
+		t.Fatalf("unexpected episode metadata: ep=%d sort=%v name=%q name_cn=%q desc=%q seconds=%d",
+			epNumber, sortNumber, episodeName, episodeNameCN, episodeDescription, durationSeconds)
+	}
+	var specialType int
+	if err := db.QueryRowContext(ctx, `
+SELECT ep_number, sort_number, type FROM anime_episodes WHERE bangumi_id = 101 AND episode_id = 101999`).Scan(
+		&epNumber, &sortNumber, &specialType,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if epNumber != 0 || sortNumber != 9.5 || specialType != 1 {
+		t.Fatalf("unexpected special episode: ep=%d sort=%v type=%d", epNumber, sortNumber, specialType)
+	}
 
 	if err := syncer.Execute(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if calendarRequests.Load() != 2 || detailRequests.Load() != 1 || characterRequests.Load() != 1 || imageRequests.Load() != 3 {
-		t.Fatalf("completed stages were fetched again: calendar=%d detail=%d characters=%d images=%d",
-			calendarRequests.Load(), detailRequests.Load(), characterRequests.Load(), imageRequests.Load())
+	if calendarRequests.Load() != 2 || detailRequests.Load() != 1 || characterRequests.Load() != 1 ||
+		episodeRequests.Load() != 1 || imageRequests.Load() != 3 {
+		t.Fatalf("completed stages were fetched again: calendar=%d detail=%d characters=%d episodes=%d images=%d",
+			calendarRequests.Load(), detailRequests.Load(), characterRequests.Load(), episodeRequests.Load(), imageRequests.Load())
 	}
 }
 
@@ -149,6 +182,8 @@ func TestActorsAreDeduplicatedAcrossSubjects(t *testing.T) {
 			writeJSON(w, fmt.Sprintf(`[{"id":11,"name":"Character 1","actors":[{"id":777,"name":"Shared Actor","images":{"large":%q}}]}]`, server.URL+"/shared-actor.jpg"))
 		case "/v0/subjects/2/characters":
 			writeJSON(w, fmt.Sprintf(`[{"id":22,"name":"Character 2","actors":[{"id":777,"name":"Shared Actor","images":{"large":%q}}]}]`, server.URL+"/shared-actor.jpg"))
+		case "/v0/episodes":
+			writeEpisodes(w, 0, 0, false)
 		case "/shared-actor.jpg":
 			actorImageRequests.Add(1)
 			w.Header().Set("Content-Type", "image/jpeg")
@@ -187,6 +222,8 @@ func TestImage404IsTerminalAndNotRetried(t *testing.T) {
 			writeJSON(w, `{"id":505,"name":"Missing Images","tags":[],"infobox":[],"meta_tags":[]}`)
 		case "/v0/subjects/505/characters":
 			writeJSON(w, fmt.Sprintf(`[{"id":55,"name":"Missing Character","images":{"large":%q},"actors":[{"id":555,"name":"Missing Actor","images":{"large":%q}}]}]`, server.URL+"/missing-character.jpg", server.URL+"/missing-actor.jpg"))
+		case "/v0/episodes":
+			writeEpisodes(w, 505, 0, false)
 		case "/missing-cover.jpg":
 			coverRequests.Add(1)
 			http.NotFound(w, r)
@@ -234,6 +271,8 @@ func TestTransientCharacterImageFailureRetriesOnNextRun(t *testing.T) {
 			writeJSON(w, `{"id":606,"name":"Retry Image","tags":[],"infobox":[],"meta_tags":[]}`)
 		case "/v0/subjects/606/characters":
 			writeJSON(w, fmt.Sprintf(`[{"id":66,"name":"Retry Character","images":{"large":%q},"actors":[]}]`, server.URL+"/retry-character.jpg"))
+		case "/v0/episodes":
+			writeEpisodes(w, 606, 0, false)
 		case "/retry-character.jpg":
 			if imageRequests.Add(1) == 1 {
 				http.Error(w, "temporary", http.StatusBadGateway)
@@ -279,6 +318,8 @@ func TestTransientAnimeCoverFailureIsPersistedAndRetried(t *testing.T) {
 			writeJSON(w, `{"id":707,"name":"Retry Cover","tags":[],"infobox":[],"meta_tags":[]}`)
 		case "/v0/subjects/707/characters":
 			writeJSON(w, `[]`)
+		case "/v0/episodes":
+			writeEpisodes(w, 707, 0, false)
 		case "/retry-cover.jpg":
 			if coverRequests.Add(1) == 1 {
 				http.Error(w, "temporary", http.StatusServiceUnavailable)
@@ -327,6 +368,8 @@ func TestFailedCharacterStageRetriesWithoutRefetchingCompletedDetail(t *testing.
 				return
 			}
 			writeJSON(w, `[]`)
+		case "/v0/episodes":
+			writeEpisodes(w, 303, 0, false)
 		default:
 			http.NotFound(w, r)
 		}
@@ -370,6 +413,8 @@ func TestSubjectAPIRequestsRespectConfiguredInterval(t *testing.T) {
 			writeJSON(w, `{"id":404,"name":"Limited","tags":[],"infobox":[],"meta_tags":[]}`)
 		case "/v0/subjects/404/characters":
 			writeJSON(w, `[]`)
+		case "/v0/episodes":
+			writeEpisodes(w, 404, 0, false)
 		default:
 			http.NotFound(w, r)
 		}
@@ -387,8 +432,8 @@ func TestSubjectAPIRequestsRespectConfiguredInterval(t *testing.T) {
 	mu.Lock()
 	times := append([]time.Time(nil), requestTimes...)
 	mu.Unlock()
-	if len(times) != 3 {
-		t.Fatalf("expected three API requests, got %d", len(times))
+	if len(times) != 4 {
+		t.Fatalf("expected four API requests, got %d", len(times))
 	}
 	for index := 1; index < len(times); index++ {
 		if gap := times[index].Sub(times[index-1]); gap < interval-5*time.Millisecond {
@@ -416,6 +461,8 @@ func TestSyncStoresOnlyFirstTenCharacters(t *testing.T) {
 				characters = append(characters, fmt.Sprintf(`{"id":%d,"name":"Character %d","images":{},"actors":[]}`, id, id))
 			}
 			writeJSON(w, "["+strings.Join(characters, ",")+"]")
+		case "/v0/episodes":
+			writeEpisodes(w, 919, 0, false)
 		default:
 			http.NotFound(w, r)
 		}
@@ -440,6 +487,45 @@ func newTestSyncer(db *sql.DB, settings *system.Service, logger *slog.Logger, ba
 func writeJSON(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, body)
+}
+
+func writeEpisodes(w http.ResponseWriter, subjectID int64, regular int, includeSpecial bool) {
+	items := make([]string, 0, regular+1)
+	for ep := 1; ep <= regular; ep++ {
+		items = append(items, fmt.Sprintf(`{
+            "airdate":"2026-07-%02d",
+            "name":"第%d話",
+            "name_cn":"第%d集",
+            "duration":"00:24:%02d",
+            "desc":"第%d集简介",
+            "ep":%d,
+            "sort":%d,
+            "id":%d,
+            "subject_id":%d,
+            "comment":%d,
+            "type":0,
+            "disc":0,
+            "duration_seconds":%d
+        }`, ep, ep, ep, ep, ep, ep, ep, subjectID*1000+int64(ep), subjectID, ep, 1440+ep))
+	}
+	if includeSpecial {
+		items = append(items, fmt.Sprintf(`{
+            "airdate":"2026-09-05",
+            "name":"幕間",
+            "name_cn":"",
+            "duration":"00:25:00",
+            "desc":"",
+            "ep":0,
+            "sort":9.5,
+            "id":%d,
+            "subject_id":%d,
+            "comment":19,
+            "type":1,
+            "disc":0,
+            "duration_seconds":1500
+        }`, subjectID*1000+999, subjectID))
+	}
+	writeJSON(w, fmt.Sprintf(`{"data":[%s],"total":%d,"limit":100,"offset":0}`, strings.Join(items, ","), len(items)))
 }
 
 func assertFileExists(t *testing.T, path string) {

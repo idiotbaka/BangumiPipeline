@@ -75,7 +75,7 @@ func (s *Syncer) Execute(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("查询待补全番剧: %w", err)
 	}
-	detailCompleted, characterCompleted := 0, 0
+	detailCompleted, characterCompleted, episodeCompleted := 0, 0, 0
 	for _, subject := range incomplete {
 		if subject.DetailStatus != stageStatusCompleted {
 			if err := s.syncDetail(ctx, client, subject.BangumiID); err != nil {
@@ -91,11 +91,19 @@ func (s *Syncer) Execute(ctx context.Context) error {
 				characterCompleted++
 			}
 		}
+		if subject.EpisodesStatus != stageStatusCompleted || subject.EpisodesMissing {
+			if err := s.syncEpisodes(ctx, client, subject.BangumiID); err != nil {
+				failures = append(failures, err.Error())
+			} else {
+				episodeCompleted++
+			}
+		}
 	}
 
 	s.logger.Info("Bangumi metadata synchronized",
 		"base_inserted", inserted, "base_skipped", skipped,
 		"details_completed", detailCompleted, "characters_completed", characterCompleted,
+		"episodes_completed", episodeCompleted,
 		"failed", len(failures),
 	)
 	if len(failures) > 0 {
@@ -175,6 +183,9 @@ func (s *Syncer) syncSubjectMetadata(ctx context.Context, client *apiClient, ban
 		failures = append(failures, combineStageError("详情抓取", runErr, markDetailFailed(ctx, s.db, bangumiID, runErr)).Error())
 	}
 	if err := s.syncCharacters(ctx, client, bangumiID); err != nil {
+		failures = append(failures, err.Error())
+	}
+	if err := s.syncEpisodes(ctx, client, bangumiID); err != nil {
 		failures = append(failures, err.Error())
 	}
 	if len(failures) == 0 {
@@ -306,6 +317,58 @@ func (s *Syncer) syncCharacters(ctx context.Context, client *apiClient, bangumiI
 		return combineStageError("角色抓取", runErr, markCharactersFailed(ctx, s.db, bangumiID, runErr))
 	}
 	return nil
+}
+
+func (s *Syncer) syncEpisodes(ctx context.Context, client *apiClient, bangumiID int64) error {
+	episodes, err := s.fetchEpisodes(ctx, client, bangumiID)
+	if err != nil {
+		return combineStageError("分集抓取", err, markEpisodesFailed(ctx, s.db, bangumiID, err))
+	}
+	if err := saveEpisodes(ctx, s.db, bangumiID, episodes, s.now()); err != nil {
+		runErr := fmt.Errorf("Bangumi #%d 分集入库失败: %w", bangumiID, err)
+		return combineStageError("分集抓取", runErr, markEpisodesFailed(ctx, s.db, bangumiID, runErr))
+	}
+	return nil
+}
+
+func (s *Syncer) fetchEpisodes(ctx context.Context, client *apiClient, bangumiID int64) ([]episodeDetail, error) {
+	firstPath := fmt.Sprintf("/v0/episodes?subject_id=%d", bangumiID)
+	var response episodesResponse
+	if err := client.getJSON(ctx, firstPath, &response); err != nil {
+		return nil, fmt.Errorf("Bangumi #%d 分集请求失败: %w", bangumiID, err)
+	}
+	episodes := append([]episodeDetail(nil), response.Data...)
+	total := response.Total
+	limit := response.Limit
+	offset := response.Offset + len(response.Data)
+	if limit <= 0 {
+		limit = len(response.Data)
+	}
+	for total > len(episodes) && limit > 0 && offset < total {
+		var page episodesResponse
+		path := fmt.Sprintf("/v0/episodes?subject_id=%d&limit=%d&offset=%d", bangumiID, limit, offset)
+		if err := client.getJSON(ctx, path, &page); err != nil {
+			return nil, fmt.Errorf("Bangumi #%d 分集分页请求失败: %w", bangumiID, err)
+		}
+		if page.Total > total {
+			total = page.Total
+		}
+		if len(page.Data) == 0 {
+			break
+		}
+		episodes = append(episodes, page.Data...)
+		offset = page.Offset + len(page.Data)
+	}
+	for _, episode := range episodes {
+		if episode.ID == 0 {
+			return nil, fmt.Errorf("Bangumi #%d 分集响应缺少 episode id", bangumiID)
+		}
+		if episode.SubjectID != 0 && episode.SubjectID != bangumiID {
+			return nil, fmt.Errorf("Bangumi #%d 分集响应 subject_id 不匹配: episode #%d subject_id=%d",
+				bangumiID, episode.ID, episode.SubjectID)
+		}
+	}
+	return episodes, nil
 }
 
 func (s *Syncer) syncActor(ctx context.Context, client *apiClient, actor relatedActor) error {

@@ -92,7 +92,7 @@ INSERT OR IGNORE INTO scheduled_tasks(
 ) VALUES (
     'bangumi-season-metadata',
     '从 bangumi.tv 抓取当季新番元数据',
-    '从 Bangumi Calendar API 同步当季动画基础元数据和大图封面。',
+    '从 Bangumi API 同步当季动画基础元数据、制作信息、角色信息和分集元数据。',
     'interval',
     0,
     unixepoch(),
@@ -143,6 +143,9 @@ CREATE TABLE IF NOT EXISTS anime_metadata (
     characters_status TEXT NOT NULL DEFAULT 'pending',
     characters_error TEXT NOT NULL DEFAULT '',
     characters_fetched_at INTEGER,
+    episodes_status TEXT NOT NULL DEFAULT 'pending',
+    episodes_error TEXT NOT NULL DEFAULT '',
+    episodes_fetched_at INTEGER,
     deleted_at       INTEGER,
     created_at       INTEGER NOT NULL
 );
@@ -208,6 +211,28 @@ CREATE TABLE IF NOT EXISTS character_actors (
 CREATE INDEX IF NOT EXISTS idx_anime_characters_bangumi_id ON anime_characters(bangumi_id);
 CREATE INDEX IF NOT EXISTS idx_character_actors_actor_id ON character_actors(actor_id);
 
+CREATE TABLE IF NOT EXISTS anime_episodes (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    bangumi_id       INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    episode_id       INTEGER NOT NULL,
+    ep_number        INTEGER NOT NULL DEFAULT 0,
+    sort_number      REAL NOT NULL DEFAULT 0,
+    type             INTEGER NOT NULL DEFAULT 0,
+    disc             INTEGER NOT NULL DEFAULT 0,
+    airdate          TEXT NOT NULL DEFAULT '',
+    name             TEXT NOT NULL DEFAULT '',
+    name_cn          TEXT NOT NULL DEFAULT '',
+    duration         TEXT NOT NULL DEFAULT '',
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    description      TEXT NOT NULL DEFAULT '',
+    comment_count    INTEGER NOT NULL DEFAULT 0,
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    UNIQUE (bangumi_id, episode_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_anime_episodes_bangumi_sort ON anime_episodes(bangumi_id, type, sort_number, episode_id);
+
 CREATE TABLE IF NOT EXISTS system_logs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     level       TEXT NOT NULL,
@@ -244,7 +269,7 @@ SET interval_minutes = 15
 WHERE interval_minutes IS NULL OR interval_minutes < 1;
 UPDATE scheduled_tasks
 SET name = '从 bangumi.tv 抓取当季新番元数据',
-    description = '从 Bangumi Calendar API 同步当季动画基础元数据和大图封面。',
+    description = '从 Bangumi API 同步当季动画基础元数据、制作信息、角色信息和分集元数据。',
     schedule = 'interval'
 WHERE task_key = 'bangumi-season-metadata';
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
@@ -272,6 +297,9 @@ VALUES (3, unixepoch());`); err != nil {
 		"characters_status":     "TEXT NOT NULL DEFAULT 'pending'",
 		"characters_error":      "TEXT NOT NULL DEFAULT ''",
 		"characters_fetched_at": "INTEGER",
+		"episodes_status":       "TEXT NOT NULL DEFAULT 'pending'",
+		"episodes_error":        "TEXT NOT NULL DEFAULT ''",
+		"episodes_fetched_at":   "INTEGER",
 	}
 	for name, definition := range animeColumns {
 		if err := ensureColumn(ctx, db, "anime_metadata", name, definition); err != nil {
@@ -281,6 +309,7 @@ VALUES (3, unixepoch());`); err != nil {
 	if _, err := db.ExecContext(ctx, `
 CREATE INDEX IF NOT EXISTS idx_anime_detail_status ON anime_metadata(detail_status);
 CREATE INDEX IF NOT EXISTS idx_anime_characters_status ON anime_metadata(characters_status);
+CREATE INDEX IF NOT EXISTS idx_anime_episodes_status ON anime_metadata(episodes_status);
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (4, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 4 migration: %w", err)
@@ -618,6 +647,32 @@ VALUES (11, unixepoch());`); err != nil {
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (12, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 12 migration: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS anime_episodes (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    bangumi_id       INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    episode_id       INTEGER NOT NULL,
+    ep_number        INTEGER NOT NULL DEFAULT 0,
+    sort_number      REAL NOT NULL DEFAULT 0,
+    type             INTEGER NOT NULL DEFAULT 0,
+    disc             INTEGER NOT NULL DEFAULT 0,
+    airdate          TEXT NOT NULL DEFAULT '',
+    name             TEXT NOT NULL DEFAULT '',
+    name_cn          TEXT NOT NULL DEFAULT '',
+    duration         TEXT NOT NULL DEFAULT '',
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    description      TEXT NOT NULL DEFAULT '',
+    comment_count    INTEGER NOT NULL DEFAULT 0,
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    UNIQUE (bangumi_id, episode_id)
+);
+CREATE INDEX IF NOT EXISTS idx_anime_episodes_bangumi_sort ON anime_episodes(bangumi_id, type, sort_number, episode_id);
+CREATE INDEX IF NOT EXISTS idx_anime_episodes_status ON anime_metadata(episodes_status);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (13, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 13 migration: %w", err)
 	}
 	return nil
 }

@@ -90,6 +90,8 @@ type incompleteSubject struct {
 	BangumiID       int64
 	DetailStatus    string
 	CharacterStatus string
+	EpisodesStatus  string
+	EpisodesMissing bool
 }
 
 type storedCharacter struct {
@@ -128,4 +130,27 @@ type actorImageState struct {
 type pendingAnimeImage struct {
 	BangumiID int64
 	SourceURL string
+}
+
+type episodesResponse struct {
+	Data   []episodeDetail `json:"data"`
+	Total  int             `json:"total"`
+	Limit  int             `json:"limit"`
+	Offset int             `json:"offset"`
+}
+
+type episodeDetail struct {
+	Airdate         string  `json:"airdate"`
+	Name            string  `json:"name"`
+	NameCN          string  `json:"name_cn"`
+	Duration        string  `json:"duration"`
+	Description     string  `json:"desc"`
+	Ep              int     `json:"ep"`
+	Sort            float64 `json:"sort"`
+	ID              int64   `json:"id"`
+	SubjectID       int64   `json:"subject_id"`
+	Comment         int     `json:"comment"`
+	Type            int     `json:"type"`
+	Disc            int     `json:"disc"`
+	DurationSeconds int     `json:"duration_seconds"`
 }

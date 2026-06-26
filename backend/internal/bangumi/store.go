@@ -61,6 +61,8 @@ ON CONFLICT(bangumi_id) DO UPDATE SET
     detail_error = '',
     characters_status = 'pending',
     characters_error = '',
+    episodes_status = 'pending',
+    episodes_error = '',
     deleted_at = NULL,
     created_at = CASE WHEN anime_metadata.deleted_at IS NULL THEN anime_metadata.created_at ELSE excluded.created_at END`,
 		bangumiID, fmt.Sprintf("https://bgm.tv/subject/%d", bangumiID), detail.Name, detail.NameCN,
@@ -114,10 +116,34 @@ WHERE bangumi_id = ?`, download.Path, download.Status, errorMessage, bangumiID)
 
 func listIncompleteSubjects(ctx context.Context, db *sql.DB) ([]incompleteSubject, error) {
 	rows, err := db.QueryContext(ctx, `
-SELECT bangumi_id, detail_status, characters_status
+SELECT bangumi_id, detail_status, characters_status, episodes_status,
+       (
+           (CASE WHEN total_episodes > 0 THEN total_episodes ELSE eps END) > 0
+           AND (
+               SELECT COUNT(DISTINCT ep_number)
+               FROM anime_episodes
+               WHERE anime_episodes.bangumi_id = anime_metadata.bangumi_id
+                 AND anime_episodes.type = 0
+                 AND anime_episodes.ep_number > 0
+           ) < (CASE WHEN total_episodes > 0 THEN total_episodes ELSE eps END)
+       ) AS episodes_missing
 FROM anime_metadata
-WHERE deleted_at IS NULL AND (detail_status != ? OR characters_status != ?)
-ORDER BY bangumi_id`, stageStatusCompleted, stageStatusCompleted)
+WHERE deleted_at IS NULL AND (
+    detail_status != ?
+    OR characters_status != ?
+    OR episodes_status != ?
+    OR (
+        (CASE WHEN total_episodes > 0 THEN total_episodes ELSE eps END) > 0
+        AND (
+            SELECT COUNT(DISTINCT ep_number)
+            FROM anime_episodes
+            WHERE anime_episodes.bangumi_id = anime_metadata.bangumi_id
+              AND anime_episodes.type = 0
+              AND anime_episodes.ep_number > 0
+        ) < (CASE WHEN total_episodes > 0 THEN total_episodes ELSE eps END)
+    )
+)
+ORDER BY bangumi_id`, stageStatusCompleted, stageStatusCompleted, stageStatusCompleted)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +151,7 @@ ORDER BY bangumi_id`, stageStatusCompleted, stageStatusCompleted)
 	result := make([]incompleteSubject, 0)
 	for rows.Next() {
 		var subject incompleteSubject
-		if err := rows.Scan(&subject.BangumiID, &subject.DetailStatus, &subject.CharacterStatus); err != nil {
+		if err := rows.Scan(&subject.BangumiID, &subject.DetailStatus, &subject.CharacterStatus, &subject.EpisodesStatus, &subject.EpisodesMissing); err != nil {
 			return nil, err
 		}
 		result = append(result, subject)
@@ -245,6 +271,46 @@ WHERE bangumi_id = ?`, timestamp, bangumiID); err != nil {
 	return tx.Commit()
 }
 
+func saveEpisodes(ctx context.Context, db *sql.DB, bangumiID int64, episodes []episodeDetail, now time.Time) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM anime_episodes WHERE bangumi_id = ?", bangumiID); err != nil {
+		return err
+	}
+	timestamp := now.UTC().Unix()
+	for _, episode := range episodes {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO anime_episodes(
+    bangumi_id, episode_id, ep_number, sort_number, type, disc,
+    airdate, name, name_cn, duration, duration_seconds, description,
+    comment_count, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			bangumiID, episode.ID, episode.Ep, episode.Sort, episode.Type, episode.Disc,
+			episode.Airdate, episode.Name, episode.NameCN, episode.Duration, episode.DurationSeconds,
+			episode.Description, episode.Comment, timestamp, timestamp,
+		); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE anime_metadata
+SET episodes_status = 'completed', episodes_error = '', episodes_fetched_at = ?
+WHERE bangumi_id = ?`, timestamp, bangumiID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+		if err != nil {
+			return err
+		}
+		return errors.New("anime metadata record not found")
+	}
+	return tx.Commit()
+}
+
 func getActorImageState(ctx context.Context, db *sql.DB, actorID int64) (actorImageState, error) {
 	var state actorImageState
 	err := db.QueryRowContext(ctx, `
@@ -296,6 +362,13 @@ UPDATE anime_metadata SET detail_status = 'failed', detail_error = ? WHERE bangu
 func markCharactersFailed(ctx context.Context, db *sql.DB, bangumiID int64, runErr error) error {
 	_, err := db.ExecContext(ctx, `
 UPDATE anime_metadata SET characters_status = 'failed', characters_error = ? WHERE bangumi_id = ?`,
+		truncateError(runErr), bangumiID)
+	return err
+}
+
+func markEpisodesFailed(ctx context.Context, db *sql.DB, bangumiID int64, runErr error) error {
+	_, err := db.ExecContext(ctx, `
+UPDATE anime_metadata SET episodes_status = 'failed', episodes_error = ? WHERE bangumi_id = ?`,
 		truncateError(runErr), bangumiID)
 	return err
 }
