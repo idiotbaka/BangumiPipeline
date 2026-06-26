@@ -228,6 +228,19 @@ LIMIT ? OFFSET ?`
 	return result, rows.Err()
 }
 
+func (s *Service) CountJobsByStatus(ctx context.Context, status string) (int, error) {
+	status = normalizeStatus(status)
+	if status == "" || status == "invalid" {
+		return 0, ErrInvalidStatus
+	}
+	where, args := jobListWhere(status)
+	var count int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) "+where, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (RetryResult, error) {
 	job, err := s.failedJob(ctx, jobID)
 	if err != nil {

@@ -261,6 +261,34 @@ LIMIT ? OFFSET ?`
 	return result, rows.Err()
 }
 
+func (s *Service) CountJobsByStatus(ctx context.Context, status string) (int, error) {
+	counts, err := s.CountJobsByStatuses(ctx, status)
+	if err != nil {
+		return 0, err
+	}
+	return counts[normalizeStatus(status)], nil
+}
+
+func (s *Service) CountJobsByStatuses(ctx context.Context, statuses ...string) (map[string]int, error) {
+	if _, err := s.EnqueueCompletedDownloads(ctx); err != nil {
+		return nil, err
+	}
+	result := make(map[string]int, len(statuses))
+	for _, status := range statuses {
+		status = normalizeStatus(status)
+		if status == "" || status == "invalid" {
+			return nil, ErrInvalidStatus
+		}
+		where, args := mediaJobWhere(status)
+		var count int
+		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) "+where, args...).Scan(&count); err != nil {
+			return nil, err
+		}
+		result[status] = count
+	}
+	return result, nil
+}
+
 func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (Job, error) {
 	now := s.now().UTC().Unix()
 	result, err := s.db.ExecContext(ctx, `

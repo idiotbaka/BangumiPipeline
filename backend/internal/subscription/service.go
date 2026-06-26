@@ -562,6 +562,21 @@ LIMIT ? OFFSET ?`
 	return result, rows.Err()
 }
 
+func (s *Service) CountItemsByBindingStatus(ctx context.Context, bindingStatus string) (int, error) {
+	bindingStatus = strings.TrimSpace(bindingStatus)
+	if bindingStatus != BindingStatusPending && bindingStatus != BindingStatusBound && bindingStatus != BindingStatusIgnored {
+		bindingStatus = BindingStatusPending
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM subscription_items
+WHERE binding_status = ?`, bindingStatus).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 const itemSelect = `
 SELECT id, guid, title, description, link, enclosure_url, torrent_url, content_length,
        pub_date, published_at, match_status, bangumi_id, matched_name, parsed_name,

@@ -125,6 +125,22 @@ export interface MediaJobPage {
 
 export type LogLevel = 'INFO' | 'WARNING' | 'ERROR'
 
+export interface DashboardOverview {
+  subscription: {
+    pendingBindings: number
+  }
+  download: {
+    pending: number
+    downloading: number
+    failed: number
+  }
+  media: {
+    pending: number
+    transcoding: number
+    failed: number
+  }
+}
+
 export interface SystemLog {
   id: number
   level: LogLevel
@@ -347,6 +363,7 @@ export const api = {
     }),
   me: () => request<{ user: User }>('/api/auth/me'),
   logout: () => request<void>('/api/auth/logout', { method: 'POST', body: '{}' }),
+  dashboardOverview: () => request<{ overview: DashboardOverview }>('/api/dashboard/overview'),
   scheduledTasks: () => request<{ tasks: ScheduledTask[] }>('/api/scheduled-tasks'),
   updateScheduledTask: (key: string, update: { enabled?: boolean; intervalMinutes?: number }) =>
     request<{ task: ScheduledTask }>(`/api/scheduled-tasks/${encodeURIComponent(key)}`, {

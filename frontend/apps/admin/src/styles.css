@@ -65,6 +65,25 @@ button, input { font: inherit; }
 .module-icon { width: 44px !important; height: 44px !important; border-radius: 12px; color: #3867ff; background: #edf1ff; font-size: 22px !important; }
 .module-card h2 { margin: 20px 0 8px; font-size: 19px; }
 .module-card p { margin: 0 0 22px; color: #667085; }
+.overview-grid { min-height: 180px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-top: 24px; }
+.overview-card { display: grid; gap: 20px; align-content: start; min-width: 0; padding: 24px; border: 1px solid #e1e6ee; border-radius: 14px; background: #fff; box-shadow: 0 10px 28px rgba(16, 24, 40, .06); }
+.overview-card-header { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.overview-icon { flex: none; width: 46px !important; height: 46px !important; border-radius: 12px; color: #3867ff; background: #edf1ff; font-size: 22px !important; }
+.overview-card-header h2 { margin: 0; color: #101828; font-size: 18px; line-height: 1.35; }
+.overview-card-header span { display: block; margin-top: 4px; color: #98a2b3; font-size: 12px; }
+.overview-stat-list { display: grid; gap: 10px; }
+.overview-stat-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 54px; padding: 12px 14px; border-radius: 10px; background: #f7f9fc; }
+.overview-stat-row span { color: #475467; font-size: 13px; font-weight: 600; }
+.overview-stat-row strong { color: #101828; font-size: 28px; line-height: 1; }
+.overview-primary { background: #eef4ff; }
+.overview-primary strong { color: #2f63ff; }
+.overview-warning { background: #fff7e6; }
+.overview-warning strong { color: #b76e00; }
+.overview-danger { background: #fff1f3; }
+.overview-danger strong { color: #d92d20; }
+.overview-link { justify-self: start; color: #3867ff; font-size: 13px; font-weight: 700; text-decoration: none; }
+.overview-link:hover { color: #254edb; }
+.dashboard-note { display: flex; align-items: center; gap: 10px; margin-top: 18px; color: #667085; font-size: 13px; }
 .content-card { margin-top: 24px; border: 1px solid #e4e8ef !important; border-radius: 14px !important; }
 .task-list-card .el-card__body { padding: 0; }
 .task-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 20px; align-items: center; padding: 26px 28px; }
@@ -237,6 +256,7 @@ button, input { font: inherit; }
   .logout-button { margin: 0 0 0 auto; width: auto; }
   .sidebar-menu { order: 3; display: flex; width: 100%; margin-top: 12px; }
   .sidebar-menu .el-menu-item { flex: 1; justify-content: center; padding: 0 10px; }
+  .overview-grid { grid-template-columns: 1fr; }
   .module-grid { grid-template-columns: 1fr; }
   .task-row { grid-template-columns: auto minmax(0, 1fr); padding: 22px 18px; }
   .task-toggle { grid-column: 2; flex-direction: row; align-items: center; justify-content: flex-end; }
