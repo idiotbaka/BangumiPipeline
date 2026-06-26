@@ -33,6 +33,7 @@ var (
 	ErrInvalidRSSURL           = errors.New("RSS URL must be an HTTP or HTTPS URL")
 	ErrInvalidDownloadSettings = errors.New("invalid download settings")
 	ErrInvalidMediaStoragePath = errors.New("invalid media storage path")
+	ErrInvalidLLMSettings      = errors.New("invalid llm settings")
 )
 
 type ScheduledTask struct {
@@ -78,6 +79,17 @@ type DownloadSettings struct {
 type MediaStorageSettings struct {
 	ExtraRoots []string `json:"extraRoots"`
 	UpdatedAt  int64    `json:"updatedAt"`
+}
+
+type LLMSettings struct {
+	BaseURL   string `json:"baseUrl"`
+	APIKey    string `json:"apiKey"`
+	Model     string `json:"model"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
+func (s LLMSettings) Configured() bool {
+	return strings.TrimSpace(s.BaseURL) != "" && strings.TrimSpace(s.Model) != ""
 }
 
 type Service struct {
@@ -363,6 +375,32 @@ WHERE id = 1`, string(rawJSON), s.now().UTC().Unix())
 	return s.GetMediaStorageSettings(ctx)
 }
 
+func (s *Service) GetLLMSettings(ctx context.Context) (LLMSettings, error) {
+	var settings LLMSettings
+	err := s.db.QueryRowContext(ctx, `
+SELECT base_url, api_key, model, updated_at
+FROM llm_settings
+WHERE id = 1`).Scan(&settings.BaseURL, &settings.APIKey, &settings.Model, &settings.UpdatedAt)
+	return settings, err
+}
+
+func (s *Service) UpdateLLMSettings(ctx context.Context, settings LLMSettings) (LLMSettings, error) {
+	settings.BaseURL = strings.TrimSpace(settings.BaseURL)
+	settings.APIKey = strings.TrimSpace(settings.APIKey)
+	settings.Model = strings.TrimSpace(settings.Model)
+	if err := validateLLMSettings(settings); err != nil {
+		return LLMSettings{}, err
+	}
+	_, err := s.db.ExecContext(ctx, `
+UPDATE llm_settings
+SET base_url = ?, api_key = ?, model = ?, updated_at = ?
+WHERE id = 1`, settings.BaseURL, settings.APIKey, settings.Model, s.now().UTC().Unix())
+	if err != nil {
+		return LLMSettings{}, err
+	}
+	return s.GetLLMSettings(ctx)
+}
+
 func validateDownloadSettings(settings DownloadSettings) error {
 	if settings.Host == "" || strings.ContainsAny(settings.Host, "/\\") {
 		return ErrInvalidDownloadSettings
@@ -399,6 +437,20 @@ func normalizeMediaStorageRoots(paths []string) ([]string, error) {
 		result = append(result, cleaned)
 	}
 	return result, nil
+}
+
+func validateLLMSettings(settings LLMSettings) error {
+	if strings.TrimSpace(settings.BaseURL) == "" && strings.TrimSpace(settings.APIKey) == "" && strings.TrimSpace(settings.Model) == "" {
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(settings.BaseURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ErrInvalidLLMSettings
+	}
+	if strings.TrimSpace(settings.Model) == "" {
+		return ErrInvalidLLMSettings
+	}
+	return nil
 }
 
 func validateProxy(value string) error {

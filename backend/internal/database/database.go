@@ -109,6 +109,17 @@ CREATE TABLE IF NOT EXISTS network_settings (
 INSERT OR IGNORE INTO network_settings(id, http_proxy, https_proxy, updated_at)
 VALUES (1, '', '', unixepoch());
 
+CREATE TABLE IF NOT EXISTS llm_settings (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    base_url   TEXT NOT NULL DEFAULT '',
+    api_key    TEXT NOT NULL DEFAULT '',
+    model      TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO llm_settings(id, base_url, api_key, model, updated_at)
+VALUES (1, '', '', '', unixepoch());
+
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (2, unixepoch());
 
@@ -127,6 +138,7 @@ CREATE TABLE IF NOT EXISTS anime_metadata (
     detail_date      TEXT NOT NULL DEFAULT '',
     platform         TEXT NOT NULL DEFAULT '',
     summary          TEXT NOT NULL DEFAULT '',
+    summary_cn       TEXT NOT NULL DEFAULT '',
     eps              INTEGER NOT NULL DEFAULT 0,
     total_episodes   INTEGER NOT NULL DEFAULT 0,
     volumes          INTEGER NOT NULL DEFAULT 0,
@@ -172,6 +184,7 @@ CREATE TABLE IF NOT EXISTS anime_characters (
     character_id     INTEGER NOT NULL,
     name             TEXT NOT NULL,
     summary          TEXT NOT NULL DEFAULT '',
+    summary_cn       TEXT NOT NULL DEFAULT '',
     relation         TEXT NOT NULL DEFAULT '',
     type             INTEGER NOT NULL DEFAULT 0,
     image_large_url  TEXT NOT NULL DEFAULT '',
@@ -188,6 +201,7 @@ CREATE TABLE IF NOT EXISTS actors (
     actor_id         INTEGER PRIMARY KEY,
     name             TEXT NOT NULL,
     short_summary    TEXT NOT NULL DEFAULT '',
+    short_summary_cn TEXT NOT NULL DEFAULT '',
     career_json      TEXT NOT NULL DEFAULT '[]',
     type             INTEGER NOT NULL DEFAULT 0,
     locked           INTEGER NOT NULL DEFAULT 0,
@@ -226,6 +240,7 @@ CREATE TABLE IF NOT EXISTS anime_episodes (
     duration         TEXT NOT NULL DEFAULT '',
     duration_seconds INTEGER NOT NULL DEFAULT 0,
     description      TEXT NOT NULL DEFAULT '',
+    description_cn   TEXT NOT NULL DEFAULT '',
     comment_count    INTEGER NOT NULL DEFAULT 0,
     created_at       INTEGER NOT NULL,
     updated_at       INTEGER NOT NULL,
@@ -242,6 +257,19 @@ CREATE TABLE IF NOT EXISTS media_storage_settings (
 
 INSERT OR IGNORE INTO media_storage_settings(id, extra_roots_json, updated_at)
 VALUES (1, '[]', unixepoch());
+
+INSERT OR IGNORE INTO scheduled_tasks(
+    task_key, name, description, schedule, enabled, interval_minutes, created_at, updated_at
+) VALUES (
+    'translate-anime-metadata',
+    '翻译新番元数据',
+    '使用 OpenAI Chat 兼容的大模型将 Bangumi 抓取到的番剧简介、分集信息、角色和声优简介翻译为中文。',
+    'interval',
+    0,
+    1,
+    unixepoch(),
+    unixepoch()
+);
 
 CREATE TABLE IF NOT EXISTS system_logs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -716,6 +744,46 @@ CREATE INDEX IF NOT EXISTS idx_media_jobs_cover_status ON media_jobs(cover_statu
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (15, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 15 migration: %w", err)
+	}
+	for _, column := range []struct {
+		table      string
+		name       string
+		definition string
+	}{
+		{"anime_metadata", "summary_cn", "TEXT NOT NULL DEFAULT ''"},
+		{"anime_episodes", "description_cn", "TEXT NOT NULL DEFAULT ''"},
+		{"anime_characters", "summary_cn", "TEXT NOT NULL DEFAULT ''"},
+		{"actors", "short_summary_cn", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureColumn(ctx, db, column.table, column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS llm_settings (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    base_url   TEXT NOT NULL DEFAULT '',
+    api_key    TEXT NOT NULL DEFAULT '',
+    model      TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO llm_settings(id, base_url, api_key, model, updated_at)
+VALUES (1, '', '', '', unixepoch());
+INSERT OR IGNORE INTO scheduled_tasks(
+    task_key, name, description, schedule, enabled, interval_minutes, created_at, updated_at
+) VALUES (
+    'translate-anime-metadata',
+    '翻译新番元数据',
+    '使用 OpenAI Chat 兼容的大模型将 Bangumi 抓取到的番剧简介、分集信息、角色和声优简介翻译为中文。',
+    'interval',
+    0,
+    1,
+    unixepoch(),
+    unixepoch()
+);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (16, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 16 migration: %w", err)
 	}
 	return nil
 }

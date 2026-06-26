@@ -22,6 +22,7 @@ import (
 	"bangumipipeline.local/server/internal/media"
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
+	"bangumipipeline.local/server/internal/translation"
 )
 
 func TestAdministratorSetupAndLoginLifecycle(t *testing.T) {
@@ -42,8 +43,10 @@ func TestAdministratorSetupAndLoginLifecycle(t *testing.T) {
 	scheduler.Register(subscription.TaskKey, subscriptionService)
 	downloadService := download.NewService(db, systemService, logger, download.Config{DownloadDir: t.TempDir()})
 	mediaService := media.NewService(db, logger, media.Config{MediaDir: t.TempDir(), FFmpegPath: "ffmpeg", FFprobePath: "ffprobe"})
+	translationService := translation.NewService(db, systemService, logger)
 	scheduler.Register(download.TaskKey, downloadService)
 	scheduler.Register(media.TaskKey, mediaService)
+	scheduler.Register(translation.TaskKey, translationService)
 	if err := scheduler.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +56,7 @@ func TestAdministratorSetupAndLoginLifecycle(t *testing.T) {
 	})
 	handler := httpapi.NewAdminHandler(
 		auth.NewService(db, time.Hour), systemService, scheduler,
-		applog.NewService(db), bangumi.NewCatalog(db), metadataSyncer, subscriptionService, downloadService, mediaService, logger, false, t.TempDir(),
+		applog.NewService(db), bangumi.NewCatalog(db), metadataSyncer, subscriptionService, downloadService, mediaService, translationService, logger, false, t.TempDir(),
 	)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)

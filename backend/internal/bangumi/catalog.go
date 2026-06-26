@@ -288,7 +288,7 @@ func (c *Catalog) Detail(ctx context.Context, bangumiID int64) (AnimeDetail, err
 	var infoboxJSON, ratingJSON, collectionJSON, metaTagsJSON string
 	err := c.db.QueryRowContext(ctx, `
 SELECT bangumi_id, url, name, name_cn, air_date, air_weekday, detail_date,
-       platform, summary, eps, total_episodes, volumes, series, locked, nsfw,
+       platform, COALESCE(NULLIF(summary_cn, ''), summary), eps, total_episodes, volumes, series, locked, nsfw,
        image_local_path != '', image_status, detail_status, characters_status, episodes_status,
        media_storage_root, infobox_json, rating_json, collection_json, meta_tags_json, created_at
 FROM anime_metadata WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(
@@ -388,7 +388,12 @@ SELECT alias FROM anime_aliases WHERE bangumi_id = ? ORDER BY sort_order, alias`
 func (c *Catalog) characters(ctx context.Context, bangumiID int64) ([]AnimeCharacter, error) {
 	rows, err := c.db.QueryContext(ctx, `
 SELECT character_id, name, summary, relation, image_local_path != '', image_status
-FROM anime_characters WHERE bangumi_id = ? ORDER BY id LIMIT 10`, bangumiID)
+FROM (
+    SELECT character_id, name, COALESCE(NULLIF(summary_cn, ''), summary) AS summary,
+           relation, image_local_path, image_status, id
+    FROM anime_characters
+    WHERE bangumi_id = ?
+) ORDER BY id LIMIT 10`, bangumiID)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +413,7 @@ FROM anime_characters WHERE bangumi_id = ? ORDER BY id LIMIT 10`, bangumiID)
 	}
 	for index := range characters {
 		actorRows, err := c.db.QueryContext(ctx, `
-SELECT a.actor_id, a.name, a.short_summary, a.career_json,
+SELECT a.actor_id, a.name, COALESCE(NULLIF(a.short_summary_cn, ''), a.short_summary), a.career_json,
        a.image_local_path != '', a.image_status
 FROM character_actors ca
 JOIN actors a ON a.actor_id = ca.actor_id
@@ -437,7 +442,7 @@ ORDER BY ca.sort_order, a.actor_id`, bangumiID, characters[index].CharacterID)
 func (c *Catalog) episodes(ctx context.Context, bangumiID int64) ([]AnimeEpisode, error) {
 	rows, err := c.db.QueryContext(ctx, `
 SELECT episode_id, ep_number, sort_number, type, disc, airdate, name, name_cn,
-       duration, duration_seconds, description, comment_count
+       duration, duration_seconds, COALESCE(NULLIF(description_cn, ''), description), comment_count
 FROM anime_episodes
 WHERE bangumi_id = ?
 ORDER BY sort_number,

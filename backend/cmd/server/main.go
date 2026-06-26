@@ -20,6 +20,7 @@ import (
 	"bangumipipeline.local/server/internal/media"
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
+	"bangumipipeline.local/server/internal/translation"
 )
 
 func main() {
@@ -61,11 +62,13 @@ func run(logger *slog.Logger) error {
 		MediaDir: cfg.MediaDir, FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
 		DownloadCleaner: downloadService,
 	})
+	translationService := translation.NewService(db, systemService, logger)
 	scheduler := system.NewScheduler(systemService, logger, cfg.SchedulerPoll)
 	scheduler.Register("bangumi-season-metadata", metadataSyncer)
 	scheduler.Register(subscription.TaskKey, subscriptionService)
 	scheduler.Register(download.TaskKey, downloadService)
 	scheduler.Register(media.TaskKey, mediaService)
+	scheduler.Register(translation.TaskKey, translationService)
 	if err := scheduler.Start(ctx); err != nil {
 		return err
 	}
@@ -74,7 +77,7 @@ func run(logger *slog.Logger) error {
 		Addr: cfg.AdminAddr,
 		Handler: httpapi.NewAdminHandler(
 			authService, systemService, scheduler, logService, bangumi.NewCatalog(db, mediaService.DefaultMediaDir()),
-			metadataSyncer, subscriptionService, downloadService, mediaService, logger, cfg.CookieSecure, cfg.AdminWebDir,
+			metadataSyncer, subscriptionService, downloadService, mediaService, translationService, logger, cfg.CookieSecure, cfg.AdminWebDir,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

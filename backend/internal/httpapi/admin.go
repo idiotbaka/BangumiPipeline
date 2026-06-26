@@ -21,6 +21,7 @@ import (
 	"bangumipipeline.local/server/internal/media"
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
+	"bangumipipeline.local/server/internal/translation"
 )
 
 const adminSessionCookie = "ab_admin_session"
@@ -37,14 +38,15 @@ type AdminAPI struct {
 	subscription *subscription.Service
 	download     *download.Service
 	media        *media.Service
+	translation  *translation.Service
 	logger       *slog.Logger
 	cookieSecure bool
 }
 
-func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, downloadService *download.Service, mediaService *media.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
+func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, downloadService *download.Service, mediaService *media.Service, translationService *translation.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
 	api := &AdminAPI{
 		auth: authService, system: systemService, scheduler: scheduler, logs: logs,
-		catalog: catalog, syncer: syncer, subscription: subscriptionService, download: downloadService, media: mediaService, logger: logger, cookieSecure: cookieSecure,
+		catalog: catalog, syncer: syncer, subscription: subscriptionService, download: downloadService, media: mediaService, translation: translationService, logger: logger, cookieSecure: cookieSecure,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
@@ -64,6 +66,9 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/settings/download", api.getDownloadSettings)
 	mux.HandleFunc("PUT /api/settings/download", api.updateDownloadSettings)
 	mux.HandleFunc("POST /api/settings/download/test", api.testDownloadSettings)
+	mux.HandleFunc("GET /api/settings/llm", api.getLLMSettings)
+	mux.HandleFunc("PUT /api/settings/llm", api.updateLLMSettings)
+	mux.HandleFunc("POST /api/settings/llm/test", api.testLLMSettings)
 	mux.HandleFunc("GET /api/settings/media-storage", api.getMediaStorageSettings)
 	mux.HandleFunc("PUT /api/settings/media-storage", api.updateMediaStorageSettings)
 	mux.HandleFunc("GET /api/system-logs", api.listSystemLogs)
@@ -971,6 +976,56 @@ func (a *AdminAPI) updateNetworkSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) getLLMSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	settings, err := a.system.GetLLMSettings(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) updateLLMSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	var input system.LLMSettings
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	settings, err := a.system.UpdateLLMSettings(r.Context(), input)
+	if err != nil {
+		if errors.Is(err, system.ErrInvalidLLMSettings) {
+			writeError(w, http.StatusBadRequest, "invalid_llm_settings", "LLM 设置需要填写有效的 Base URL 和模型名称")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) testLLMSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	var input system.LLMSettings
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := a.translation.TestConnection(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "llm_connection_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result})
 }
 
 func (a *AdminAPI) getSubscriptionSettings(w http.ResponseWriter, r *http.Request) {

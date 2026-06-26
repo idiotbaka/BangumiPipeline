@@ -45,6 +45,17 @@ export interface MediaStorageSettings {
   updatedAt: number
 }
 
+export interface LLMSettings {
+  baseUrl: string
+  apiKey: string
+  model: string
+  updatedAt: number
+}
+
+export interface LLMConnectionTestResult {
+  response: string
+}
+
 export interface StorageMoveResult {
   bangumiId: number
   storageRoot: string
@@ -433,6 +444,17 @@ export const api = {
     request<{ settings: MediaStorageSettings }>('/api/settings/media-storage', {
       method: 'PUT',
       body: JSON.stringify({ extraRoots }),
+    }),
+  llmSettings: () => request<{ settings: LLMSettings }>('/api/settings/llm'),
+  updateLLMSettings: (settings: Omit<LLMSettings, 'updatedAt'>) =>
+    request<{ settings: LLMSettings }>('/api/settings/llm', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+  testLLMSettings: (settings: Omit<LLMSettings, 'updatedAt'>) =>
+    request<{ result: LLMConnectionTestResult }>('/api/settings/llm/test', {
+      method: 'POST',
+      body: JSON.stringify(settings),
     }),
   testDownloadSettings: (settings: Omit<DownloadSettings, 'updatedAt'>) =>
     request<{ result: DownloadConnectionTestResult }>('/api/settings/download/test', {

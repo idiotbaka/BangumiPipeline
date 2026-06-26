@@ -6,20 +6,25 @@ import { Connection, Delete, Download, FolderOpened, Link, Plus } from '@element
 import { api } from '../api'
 
 const formRef = ref<FormInstance>()
+const llmFormRef = ref<FormInstance>()
 const subscriptionFormRef = ref<FormInstance>()
 const downloadFormRef = ref<FormInstance>()
 const loading = ref(true)
 const saving = ref(false)
+const savingLLM = ref(false)
 const savingSubscription = ref(false)
 const savingDownload = ref(false)
 const savingStorage = ref(false)
 const testingDownload = ref(false)
+const testingLLM = ref(false)
 const updatedAt = ref(0)
+const llmUpdatedAt = ref(0)
 const subscriptionUpdatedAt = ref(0)
 const downloadUpdatedAt = ref(0)
 const storageUpdatedAt = ref(0)
 const defaultMediaRoot = ref('')
 const form = reactive({ httpProxy: '', httpsProxy: '' })
+const llmForm = reactive({ baseUrl: '', apiKey: '', model: '' })
 const subscriptionForm = reactive({ rssUrl: '' })
 const downloadForm = reactive({
   host: '127.0.0.1',
@@ -79,6 +84,10 @@ const subscriptionRules: FormRules<typeof subscriptionForm> = {
   rssUrl: [{ validator: validateHTTPURL, trigger: 'blur' }],
 }
 
+const llmRules: FormRules<typeof llmForm> = {
+  baseUrl: [{ validator: validateHTTPURL, trigger: 'blur' }],
+}
+
 const downloadRules: FormRules<typeof downloadForm> = {
   host: [{ validator: validateHost, trigger: 'blur' }],
   port: [{ type: 'number', min: 1, max: 65535, message: '端口号必须在 1 到 65535 之间', trigger: 'change' }],
@@ -88,8 +97,9 @@ const downloadRules: FormRules<typeof downloadForm> = {
 async function loadSettings() {
   loading.value = true
   try {
-    const [network, subscription, download, storage] = await Promise.all([
+    const [network, llm, subscription, download, storage] = await Promise.all([
       api.networkSettings(),
+      api.llmSettings(),
       api.subscriptionSettings(),
       api.downloadSettings(),
       api.mediaStorageSettings(),
@@ -97,6 +107,10 @@ async function loadSettings() {
     form.httpProxy = network.settings.httpProxy
     form.httpsProxy = network.settings.httpsProxy
     updatedAt.value = network.settings.updatedAt
+    llmForm.baseUrl = llm.settings.baseUrl
+    llmForm.apiKey = llm.settings.apiKey
+    llmForm.model = llm.settings.model
+    llmUpdatedAt.value = llm.settings.updatedAt
     subscriptionForm.rssUrl = subscription.settings.rssUrl
     subscriptionUpdatedAt.value = subscription.settings.updatedAt
     downloadForm.host = download.settings.host
@@ -155,6 +169,44 @@ async function save() {
     ElMessage.error(error instanceof Error ? error.message : '保存设置失败')
   } finally {
     saving.value = false
+  }
+}
+
+function llmPayload() {
+  return {
+    baseUrl: llmForm.baseUrl.trim(),
+    apiKey: llmForm.apiKey.trim(),
+    model: llmForm.model.trim(),
+  }
+}
+
+async function saveLLM() {
+  if (!(await llmFormRef.value?.validate().catch(() => false))) return
+  savingLLM.value = true
+  try {
+    const { settings } = await api.updateLLMSettings(llmPayload())
+    llmForm.baseUrl = settings.baseUrl
+    llmForm.apiKey = settings.apiKey
+    llmForm.model = settings.model
+    llmUpdatedAt.value = settings.updatedAt
+    ElMessage.success('LLM 设置已保存')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存 LLM 设置失败')
+  } finally {
+    savingLLM.value = false
+  }
+}
+
+async function testLLM() {
+  if (!(await llmFormRef.value?.validate().catch(() => false))) return
+  testingLLM.value = true
+  try {
+    await api.testLLMSettings(llmPayload())
+    ElMessage.success('LLM 连接正常：OK')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '测试 LLM 连接失败')
+  } finally {
+    testingLLM.value = false
   }
 }
 
@@ -254,6 +306,39 @@ onMounted(loadSettings)
       <div class="settings-actions">
         <span>最后更新：{{ formatTime(updatedAt) }}</span>
         <el-button type="primary" size="large" native-type="submit" :loading="saving">保存设置</el-button>
+      </div>
+    </el-form>
+  </el-card>
+
+  <el-card class="content-card settings-card" shadow="never" v-loading="loading">
+    <template #header>
+      <div class="settings-title">
+        <div class="task-icon"><el-icon><Connection /></el-icon></div>
+        <div>
+          <h2>LLM 翻译设置</h2>
+          <p>用于翻译番剧简介、分集信息、角色和声优简介。</p>
+        </div>
+      </div>
+    </template>
+
+    <el-form ref="llmFormRef" :model="llmForm" :rules="llmRules" label-position="top" @submit.prevent="saveLLM">
+      <el-form-item label="Base URL" prop="baseUrl">
+        <el-input v-model.trim="llmForm.baseUrl" size="large" placeholder="https://api.openai.com/v1" clearable />
+        <div class="form-help">填写 OpenAI Chat 兼容接口的 v1 根地址，系统会调用 /chat/completions。</div>
+      </el-form-item>
+      <el-form-item label="API KEY">
+        <el-input v-model.trim="llmForm.apiKey" size="large" type="password" show-password placeholder="sk-..." clearable />
+      </el-form-item>
+      <el-form-item label="模型名称">
+        <el-input v-model.trim="llmForm.model" size="large" placeholder="gpt-4o-mini" clearable />
+        <div class="form-help">计划任务需要 Base URL 和模型名称有效；API KEY 可按服务要求填写。</div>
+      </el-form-item>
+      <div class="settings-actions">
+        <span>最后更新：{{ formatTime(llmUpdatedAt) }}</span>
+        <div class="settings-button-row">
+          <el-button size="large" :loading="testingLLM" @click="testLLM">测试连接</el-button>
+          <el-button type="primary" size="large" native-type="submit" :loading="savingLLM">保存 LLM 设置</el-button>
+        </div>
       </div>
     </el-form>
   </el-card>
