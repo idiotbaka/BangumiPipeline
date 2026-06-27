@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"bangumipipeline.local/server/internal/bangumi"
 	"bangumipipeline.local/server/internal/viewer"
 )
 
@@ -14,12 +15,13 @@ const viewerSessionCookie = "bp_viewer_session"
 
 type ViewerAPI struct {
 	auth         *viewer.Service
+	catalog      *bangumi.Catalog
 	logger       *slog.Logger
 	cookieSecure bool
 }
 
-func NewViewerHandler(authService *viewer.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
-	api := &ViewerAPI{auth: authService, logger: logger, cookieSecure: cookieSecure}
+func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
+	api := &ViewerAPI{auth: authService, catalog: catalog, logger: logger, cookieSecure: cookieSecure}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
 	mux.HandleFunc("GET /api/site-settings", api.siteSettings)
@@ -27,6 +29,8 @@ func NewViewerHandler(authService *viewer.Service, logger *slog.Logger, cookieSe
 	mux.HandleFunc("POST /api/auth/login", api.login)
 	mux.HandleFunc("GET /api/auth/me", api.me)
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
+	mux.HandleFunc("GET /api/home", api.home)
+	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
 	mux.HandleFunc("GET /favicon.png", api.favicon)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API endpoint not found")
@@ -106,6 +110,29 @@ func (a *ViewerAPI) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
 }
 
+func (a *ViewerAPI) home(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	home, err := a.catalog.ViewerHome(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"home": home})
+}
+
+func (a *ViewerAPI) animeCover(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	a.serveCatalogImage(w, r, func() (string, error) { return a.catalog.AnimeImagePath(r.Context(), id) })
+}
+
 func (a *ViewerAPI) logout(w http.ResponseWriter, r *http.Request) {
 	if err := a.auth.Logout(r.Context(), readViewerSessionToken(r)); err != nil {
 		a.internalError(w, err)
@@ -143,6 +170,32 @@ func (a *ViewerAPI) favicon(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Last-Modified", time.Unix(updatedAt, 0).UTC().Format(http.TimeFormat))
 	}
 	_, _ = w.Write(data)
+}
+
+func (a *ViewerAPI) requireViewer(w http.ResponseWriter, r *http.Request) bool {
+	if _, err := a.auth.Authenticate(r.Context(), readViewerSessionToken(r)); err != nil {
+		if errors.Is(err, viewer.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return false
+		}
+		a.internalError(w, err)
+		return false
+	}
+	return true
+}
+
+func (a *ViewerAPI) serveCatalogImage(w http.ResponseWriter, r *http.Request, resolve func() (string, error)) {
+	path, err := resolve()
+	if err != nil {
+		if errors.Is(err, bangumi.ErrAnimeNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	http.ServeFile(w, r, path)
 }
 
 func (a *ViewerAPI) setSessionCookie(w http.ResponseWriter, session viewer.Session) {

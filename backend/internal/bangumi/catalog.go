@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -81,6 +84,40 @@ type AnimeSearchItem struct {
 	BangumiID int64  `json:"bangumiId"`
 	Name      string `json:"name"`
 	NameCN    string `json:"nameCN"`
+}
+
+type ViewerHome struct {
+	HotRecommendations []ViewerAnimeCard `json:"hotRecommendations"`
+	RecentUpdates      []ViewerAnimeCard `json:"recentUpdates"`
+}
+
+type ViewerAnimeCard struct {
+	BangumiID          int64    `json:"bangumiId"`
+	Name               string   `json:"name"`
+	NameCN             string   `json:"nameCN"`
+	Title              string   `json:"title"`
+	AirDate            string   `json:"airDate"`
+	HasCover           bool     `json:"hasCover"`
+	ImageStatus        string   `json:"imageStatus"`
+	RatingScore        *float64 `json:"ratingScore"`
+	LatestEpisode      string   `json:"latestEpisode"`
+	LatestEpisodeLabel string   `json:"latestEpisodeLabel"`
+	UpdatedAt          *int64   `json:"updatedAt"`
+}
+
+type viewerAnimeAggregate struct {
+	card            ViewerAnimeCard
+	progressEpisode viewerEpisodeRef
+	recentEpisode   viewerEpisodeRef
+	hasProgress     bool
+	hasRecent       bool
+}
+
+type viewerEpisodeRef struct {
+	season        int
+	episodeType   string
+	episodeNumber string
+	updatedAt     int64
 }
 
 type AnimeTag struct {
@@ -323,6 +360,131 @@ LIMIT ?`, where), args...)
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (c *Catalog) ViewerHome(ctx context.Context) (ViewerHome, error) {
+	const hotLimit = 32
+	const recentLimit = 12
+
+	aggregates, err := c.viewerAnimeAggregates(ctx)
+	if err != nil {
+		return ViewerHome{}, err
+	}
+
+	now := time.Now().UTC()
+	cutoff := now.AddDate(0, -6, 0)
+	hot := make([]ViewerAnimeCard, 0, len(aggregates))
+	recent := make([]ViewerAnimeCard, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		if aggregate.hasProgress && airDateWithinRange(aggregate.card.AirDate, cutoff, now) {
+			card := aggregate.card
+			card.LatestEpisode = aggregate.progressEpisode.episodeNumber
+			card.LatestEpisodeLabel = viewerEpisodeLabel(aggregate.progressEpisode)
+			if aggregate.hasRecent {
+				card.UpdatedAt = ptrInt64(aggregate.recentEpisode.updatedAt)
+			}
+			hot = append(hot, card)
+		}
+		if aggregate.hasRecent {
+			card := aggregate.card
+			card.LatestEpisode = aggregate.recentEpisode.episodeNumber
+			card.LatestEpisodeLabel = viewerEpisodeLabel(aggregate.recentEpisode)
+			card.UpdatedAt = ptrInt64(aggregate.recentEpisode.updatedAt)
+			recent = append(recent, card)
+		}
+	}
+
+	sort.SliceStable(hot, func(i, j int) bool {
+		left := hot[i]
+		right := hot[j]
+		switch {
+		case left.RatingScore != nil && right.RatingScore != nil && *left.RatingScore != *right.RatingScore:
+			return *left.RatingScore > *right.RatingScore
+		case left.RatingScore != nil && right.RatingScore == nil:
+			return true
+		case left.RatingScore == nil && right.RatingScore != nil:
+			return false
+		case nullableInt64Value(left.UpdatedAt) != nullableInt64Value(right.UpdatedAt):
+			return nullableInt64Value(left.UpdatedAt) > nullableInt64Value(right.UpdatedAt)
+		case left.AirDate != right.AirDate:
+			return left.AirDate > right.AirDate
+		default:
+			return left.BangumiID > right.BangumiID
+		}
+	})
+	if len(hot) > hotLimit {
+		hot = hot[:hotLimit]
+	}
+
+	sort.SliceStable(recent, func(i, j int) bool {
+		left := recent[i]
+		right := recent[j]
+		if nullableInt64Value(left.UpdatedAt) != nullableInt64Value(right.UpdatedAt) {
+			return nullableInt64Value(left.UpdatedAt) > nullableInt64Value(right.UpdatedAt)
+		}
+		return left.BangumiID > right.BangumiID
+	})
+	if len(recent) > recentLimit {
+		recent = recent[:recentLimit]
+	}
+
+	return ViewerHome{HotRecommendations: hot, RecentUpdates: recent}, nil
+}
+
+func (c *Catalog) viewerAnimeAggregates(ctx context.Context) ([]viewerAnimeAggregate, error) {
+	rows, err := c.db.QueryContext(ctx, `
+SELECT am.bangumi_id, am.name, am.name_cn, am.air_date,
+       am.image_local_path != '', am.image_status, am.rating_json,
+       mj.season_number,
+       COALESCE(NULLIF(mj.episode_type, ''), 'episode') AS episode_type,
+       mj.episode_number,
+       COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0) AS media_updated_at
+FROM media_jobs mj
+JOIN anime_metadata am ON am.bangumi_id = mj.bangumi_id
+WHERE am.deleted_at IS NULL
+  AND mj.status = 'completed'
+  AND mj.output_path != ''
+ORDER BY am.bangumi_id, media_updated_at DESC, mj.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	indexByID := make(map[int64]int)
+	aggregates := make([]viewerAnimeAggregate, 0)
+	for rows.Next() {
+		var card ViewerAnimeCard
+		var ratingJSON string
+		var episode viewerEpisodeRef
+		if err := rows.Scan(
+			&card.BangumiID, &card.Name, &card.NameCN, &card.AirDate,
+			&card.HasCover, &card.ImageStatus, &ratingJSON,
+			&episode.season, &episode.episodeType, &episode.episodeNumber, &episode.updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		index, ok := indexByID[card.BangumiID]
+		if !ok {
+			card.Title = displayAnimeTitle(card.NameCN, card.Name)
+			card.RatingScore = ratingScore(ratingJSON)
+			aggregates = append(aggregates, viewerAnimeAggregate{card: card})
+			index = len(aggregates) - 1
+			indexByID[card.BangumiID] = index
+		}
+		aggregate := &aggregates[index]
+		if !aggregate.hasProgress || viewerEpisodeProgressLess(aggregate.progressEpisode, episode) {
+			aggregate.progressEpisode = episode
+			aggregate.hasProgress = true
+		}
+		if !aggregate.hasRecent || aggregate.recentEpisode.updatedAt < episode.updatedAt {
+			aggregate.recentEpisode = episode
+			aggregate.hasRecent = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return aggregates, nil
 }
 
 func (c *Catalog) Detail(ctx context.Context, bangumiID int64) (AnimeDetail, error) {
@@ -571,4 +733,108 @@ func safePathSegment(value string) string {
 		value = string(runes[:120])
 	}
 	return value
+}
+
+func displayAnimeTitle(nameCN, name string) string {
+	if strings.TrimSpace(nameCN) != "" {
+		return nameCN
+	}
+	return name
+}
+
+func ratingScore(raw string) *float64 {
+	var payload struct {
+		Score float64 `json:"score"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil || payload.Score <= 0 {
+		return nil
+	}
+	return &payload.Score
+}
+
+func airDateWithinRange(value string, start, end time.Time) bool {
+	date, err := time.Parse("2006-01-02", strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	end = time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 0, time.UTC)
+	return !date.Before(start) && !date.After(end)
+}
+
+func viewerEpisodeLabel(episode viewerEpisodeRef) string {
+	number := strings.TrimSpace(episode.episodeNumber)
+	if number == "" {
+		number = "?"
+	}
+	episodeType := strings.ToLower(strings.TrimSpace(episode.episodeType))
+	if episodeType == "" || episodeType == "episode" {
+		label := fmt.Sprintf("第 %s 话", number)
+		if episode.season > 1 {
+			return fmt.Sprintf("S%02d %s", episode.season, label)
+		}
+		return label
+	}
+	typeLabel := strings.ToUpper(episodeType)
+	switch episodeType {
+	case "ova":
+		typeLabel = "OVA"
+	case "oad":
+		typeLabel = "OAD"
+	case "sp":
+		typeLabel = "SP"
+	}
+	label := fmt.Sprintf("%s %s", typeLabel, number)
+	if episode.season > 1 {
+		return fmt.Sprintf("S%02d %s", episode.season, label)
+	}
+	return label
+}
+
+func viewerEpisodeProgressLess(left, right viewerEpisodeRef) bool {
+	if left.season != right.season {
+		return left.season < right.season
+	}
+	if leftRank, rightRank := viewerEpisodeTypeRank(left.episodeType), viewerEpisodeTypeRank(right.episodeType); leftRank != rightRank {
+		return leftRank < rightRank
+	}
+	leftNumber, leftOK := viewerEpisodeNumber(left.episodeNumber)
+	rightNumber, rightOK := viewerEpisodeNumber(right.episodeNumber)
+	if leftOK && rightOK && leftNumber != rightNumber {
+		return leftNumber < rightNumber
+	}
+	if leftOK != rightOK {
+		return !leftOK
+	}
+	if left.episodeNumber != right.episodeNumber {
+		return left.episodeNumber < right.episodeNumber
+	}
+	return left.updatedAt < right.updatedAt
+}
+
+func viewerEpisodeTypeRank(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "episode":
+		return 3
+	case "ova", "oad", "sp":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func viewerEpisodeNumber(value string) (float64, bool) {
+	number, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	return number, err == nil
+}
+
+func nullableInt64Value(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func ptrInt64(value int64) *int64 {
+	return &value
 }

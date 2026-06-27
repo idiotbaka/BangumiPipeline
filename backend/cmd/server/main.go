@@ -67,6 +67,7 @@ func run(logger *slog.Logger) error {
 		MediaDir: cfg.MediaDir, FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
 		DownloadCleaner: downloadService, MetadataRefresher: metadataSyncer,
 	})
+	catalog := bangumi.NewCatalog(db, mediaService.DefaultMediaDir())
 	translationService := translation.NewService(db, systemService, logger)
 	scheduler := system.NewScheduler(systemService, logger, cfg.SchedulerPoll)
 	scheduler.Register("bangumi-season-metadata", metadataSyncer)
@@ -81,14 +82,14 @@ func run(logger *slog.Logger) error {
 	adminServer := &http.Server{
 		Addr: cfg.AdminAddr,
 		Handler: httpapi.NewAdminHandler(
-			authService, systemService, scheduler, logService, bangumi.NewCatalog(db, mediaService.DefaultMediaDir()),
+			authService, systemService, scheduler, logService, catalog,
 			metadataSyncer, subscriptionService, downloadService, mediaService, translationService, viewerAuthService, logger, cfg.CookieSecure, cfg.AdminWebDir,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	viewerServer := &http.Server{
 		Addr:              cfg.ViewerAddr,
-		Handler:           httpapi.NewViewerHandler(viewerAuthService, logger, cfg.CookieSecure, cfg.ViewerWebDir),
+		Handler:           httpapi.NewViewerHandler(viewerAuthService, catalog, logger, cfg.CookieSecure, cfg.ViewerWebDir),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

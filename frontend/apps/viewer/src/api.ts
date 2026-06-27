@@ -13,6 +13,25 @@ export interface SiteSettings {
   updatedAt: number
 }
 
+export interface ViewerAnimeCard {
+  bangumiId: number
+  name: string
+  nameCN: string
+  title: string
+  airDate: string
+  hasCover: boolean
+  imageStatus: string
+  ratingScore: number | null
+  latestEpisode: string
+  latestEpisodeLabel: string
+  updatedAt: number | null
+}
+
+export interface ViewerHome {
+  hotRecommendations: ViewerAnimeCard[]
+  recentUpdates: ViewerAnimeCard[]
+}
+
 interface ErrorPayload {
   error?: {
     code?: string
@@ -64,4 +83,5 @@ export const api = {
     }),
   me: () => request<{ user: ViewerUser }>('/api/auth/me'),
   logout: () => request<void>('/api/auth/logout', { method: 'POST', body: '{}' }),
+  home: () => request<{ home: ViewerHome }>('/api/home'),
 }
