@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"log/slog"
 	"net/http"
@@ -65,8 +67,7 @@ func TestSyncStoresDetailCharactersImagesAndSkipsCompletedStages(t *testing.T) {
 			writeEpisodes(w, 101, 12, true)
 		case "/cover.jpg", "/character.jpg", "/actor.jpg":
 			imageRequests.Add(1)
-			w.Header().Set("Content-Type", "image/jpeg")
-			_, _ = w.Write([]byte("fake-jpeg-data"))
+			writeJPEG(w)
 		default:
 			http.NotFound(w, r)
 		}
@@ -186,8 +187,7 @@ func TestActorsAreDeduplicatedAcrossSubjects(t *testing.T) {
 			writeEpisodes(w, 0, 0, false)
 		case "/shared-actor.jpg":
 			actorImageRequests.Add(1)
-			w.Header().Set("Content-Type", "image/jpeg")
-			_, _ = w.Write([]byte("actor-image"))
+			writeJPEG(w)
 		default:
 			http.NotFound(w, r)
 		}
@@ -278,8 +278,7 @@ func TestTransientCharacterImageFailureRetriesOnNextRun(t *testing.T) {
 				http.Error(w, "temporary", http.StatusBadGateway)
 				return
 			}
-			w.Header().Set("Content-Type", "image/jpeg")
-			_, _ = w.Write([]byte("recovered-image"))
+			writeJPEG(w)
 		default:
 			http.NotFound(w, r)
 		}
@@ -325,8 +324,7 @@ func TestTransientAnimeCoverFailureIsPersistedAndRetried(t *testing.T) {
 				http.Error(w, "temporary", http.StatusServiceUnavailable)
 				return
 			}
-			w.Header().Set("Content-Type", "image/jpeg")
-			_, _ = w.Write([]byte("recovered-cover"))
+			writeJPEG(w)
 		default:
 			http.NotFound(w, r)
 		}
@@ -487,6 +485,12 @@ func newTestSyncer(db *sql.DB, settings *system.Service, logger *slog.Logger, ba
 func writeJSON(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, body)
+}
+
+func writeJPEG(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "image/jpeg")
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	_ = jpeg.Encode(w, img, &jpeg.Options{Quality: 90})
 }
 
 func writeEpisodes(w http.ResponseWriter, subjectID int64, regular int, includeSpecial bool) {

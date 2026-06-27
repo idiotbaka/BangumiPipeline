@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/jpeg"
 	"io"
 	"log/slog"
 	"os"
@@ -21,7 +19,7 @@ import (
 	"time"
 	"unicode"
 
-	_ "image/png"
+	"bangumipipeline.local/server/internal/imageutil"
 )
 
 const (
@@ -956,25 +954,7 @@ func (s *Service) videoDurationMS(ctx context.Context, path string) (int64, erro
 }
 
 func encodeJPEGCover(sourcePNG, destinationJPG string) error {
-	input, err := os.Open(sourcePNG)
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-	img, _, err := image.Decode(input)
-	if err != nil {
-		return fmt.Errorf("解析封面图失败: %w", err)
-	}
-	output, err := os.OpenFile(destinationJPG, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	encodeErr := jpeg.Encode(output, img, &jpeg.Options{Quality: 80})
-	closeErr := output.Close()
-	if encodeErr != nil {
-		return fmt.Errorf("写入 JPG 封面图失败: %w", encodeErr)
-	}
-	return closeErr
+	return imageutil.EncodeJPEG(sourcePNG, destinationJPG, 80)
 }
 
 func (s *Service) markCoverCompleted(ctx context.Context, jobID int64, coverPath string) error {

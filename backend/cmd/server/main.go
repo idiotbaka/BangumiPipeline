@@ -54,7 +54,7 @@ func run(logger *slog.Logger) error {
 	systemService := system.NewService(db)
 	metadataSyncer := bangumi.NewSyncer(db, systemService, logger, bangumi.SyncerConfig{
 		APIBaseURL: cfg.BangumiAPIURL, UserAgent: cfg.BangumiUserAgent, CoverDir: cfg.CoverDir,
-		APIInterval: 2 * time.Second, RequestTimeout: 20 * time.Second,
+		FFmpegPath: cfg.FFmpegPath, APIInterval: 2 * time.Second, RequestTimeout: 20 * time.Second,
 	})
 	subscriptionService := subscription.NewService(db, systemService, logger)
 	downloadService := download.NewService(db, systemService, logger, download.Config{DownloadDir: cfg.DownloadDir})

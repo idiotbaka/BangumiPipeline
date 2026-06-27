@@ -25,6 +25,7 @@ type SyncerConfig struct {
 	APIBaseURL     string
 	UserAgent      string
 	CoverDir       string
+	FFmpegPath     string
 	APIInterval    time.Duration
 	RequestTimeout time.Duration
 }
@@ -44,6 +45,9 @@ func NewSyncer(db *sql.DB, settings SettingsProvider, logger *slog.Logger, confi
 	}
 	if config.RequestTimeout <= 0 {
 		config.RequestTimeout = 20 * time.Second
+	}
+	if strings.TrimSpace(config.FFmpegPath) == "" {
+		config.FFmpegPath = "ffmpeg"
 	}
 	return &Syncer{
 		db: db, settings: settings, logger: logger, config: config,

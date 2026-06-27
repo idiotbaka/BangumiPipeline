@@ -11,23 +11,29 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"bangumipipeline.local/server/internal/imageutil"
 	"bangumipipeline.local/server/internal/system"
 )
 
 const (
-	jsonResponseLimit  = 25 << 20
-	imageResponseLimit = 20 << 20
+	jsonResponseLimit   = 25 << 20
+	imageResponseLimit  = 20 << 20
+	imageMaxWidth       = 680
+	imageJPEGQuality    = 80
+	imageOutputFileType = ".jpg"
 )
 
 type apiClient struct {
 	httpClient *http.Client
 	baseURL    string
 	userAgent  string
+	ffmpegPath string
 	logger     *slog.Logger
 	limiter    *apiLimiter
 }
@@ -62,7 +68,8 @@ func newAPIClient(settings system.NetworkSettings, config SyncerConfig, logger *
 	return &apiClient{
 		httpClient: &http.Client{Transport: transport, Timeout: config.RequestTimeout},
 		baseURL:    strings.TrimRight(config.APIBaseURL, "/"), userAgent: config.UserAgent,
-		limiter: limiter, logger: logger,
+		ffmpegPath: strings.TrimSpace(config.FFmpegPath),
+		limiter:    limiter, logger: logger,
 	}, nil
 }
 
@@ -142,11 +149,16 @@ func (c *apiClient) downloadImage(ctx context.Context, sourceURL, destinationDir
 		c.logImageFailure(sourceURL, baseName, err)
 		return imageDownload{Status: imageStatusFailed}, err
 	}
-	extension := imageExtension(sourceURL, "")
-	destination := filepath.Join(destinationDir, baseName+extension)
+	destination := filepath.Join(destinationDir, baseName+imageOutputFileType)
 	if info, err := os.Stat(destination); err == nil && info.Size() > 0 {
 		c.logger.Info("图片下载成功", "source", "bangumi", "url", sourceURL, "path", destination, "cached", true)
 		return imageDownload{Path: destination, Status: imageStatusDownloaded}, nil
+	}
+	if legacyDestination := filepath.Join(destinationDir, baseName+imageExtension(sourceURL, "")); legacyDestination != destination {
+		if info, err := os.Stat(legacyDestination); err == nil && info.Size() > 0 {
+			c.logger.Info("图片下载成功", "source", "bangumi", "url", sourceURL, "path", legacyDestination, "cached", true)
+			return imageDownload{Path: legacyDestination, Status: imageStatusDownloaded}, nil
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
@@ -177,10 +189,6 @@ func (c *apiClient) downloadImage(ctx context.Context, sourceURL, destinationDir
 		c.logImageFailure(sourceURL, baseName, err)
 		return imageDownload{Status: imageStatusFailed}, err
 	}
-	if extension == ".jpg" {
-		extension = imageExtension(sourceURL, mediaType)
-		destination = filepath.Join(destinationDir, baseName+extension)
-	}
 
 	temporary, err := os.CreateTemp(destinationDir, ".image-*.tmp")
 	if err != nil {
@@ -209,12 +217,97 @@ func (c *apiClient) downloadImage(ctx context.Context, sourceURL, destinationDir
 		c.logImageFailure(sourceURL, baseName, err)
 		return imageDownload{Status: imageStatusFailed}, err
 	}
-	if err := os.Rename(temporaryName, destination); err != nil {
+	compressed, err := os.CreateTemp(destinationDir, ".image-*.jpg")
+	if err != nil {
 		c.logImageFailure(sourceURL, baseName, err)
 		return imageDownload{Status: imageStatusFailed}, err
 	}
-	c.logger.Info("图片下载成功", "source", "bangumi", "url", sourceURL, "path", destination, "bytes", written)
+	compressedName := compressed.Name()
+	if err := compressed.Close(); err != nil {
+		_ = os.Remove(compressedName)
+		c.logImageFailure(sourceURL, baseName, err)
+		return imageDownload{Status: imageStatusFailed}, err
+	}
+	defer os.Remove(compressedName)
+
+	scaled, err := c.compressImage(ctx, temporaryName, compressedName)
+	if err != nil {
+		c.logImageFailure(sourceURL, baseName, err)
+		return imageDownload{Status: imageStatusFailed}, err
+	}
+	if err := os.Rename(compressedName, destination); err != nil {
+		c.logImageFailure(sourceURL, baseName, err)
+		return imageDownload{Status: imageStatusFailed}, err
+	}
+	finalSize := written
+	if info, err := os.Stat(destination); err == nil {
+		finalSize = info.Size()
+	}
+	c.logger.Info("图片下载成功", "source", "bangumi", "url", sourceURL, "path", destination,
+		"original_bytes", written, "bytes", finalSize, "scaled", scaled)
 	return imageDownload{Path: destination, Status: imageStatusDownloaded}, nil
+}
+
+func (c *apiClient) compressImage(ctx context.Context, sourcePath, destinationPath string) (bool, error) {
+	encodeSource := sourcePath
+	scaledPath, err := c.scaleImage(ctx, sourcePath)
+	scaled := false
+	if err == nil {
+		encodeSource = scaledPath
+		scaled = true
+		defer os.Remove(scaledPath)
+	} else {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		message := "图片缩放失败，已跳过缩放"
+		if isFFmpegUnavailable(err) {
+			message = "图片缩放不可用，已跳过缩放"
+		}
+		c.logger.Warn(message, "source", "bangumi", "error", err)
+	}
+	if err := imageutil.EncodeJPEG(encodeSource, destinationPath, imageJPEGQuality); err != nil {
+		return scaled, err
+	}
+	return scaled, nil
+}
+
+func (c *apiClient) scaleImage(ctx context.Context, sourcePath string) (string, error) {
+	if strings.TrimSpace(c.ffmpegPath) == "" {
+		return "", exec.ErrNotFound
+	}
+	scaledPath := sourcePath + ".scaled.png"
+	_ = os.Remove(scaledPath)
+	scaleFilter := fmt.Sprintf("scale='if(gt(iw,%d),%d,iw)':-2", imageMaxWidth, imageMaxWidth)
+	command := exec.CommandContext(ctx, c.ffmpegPath,
+		"-hide_banner", "-nostats", "-loglevel", "warning",
+		"-y", "-i", sourcePath,
+		"-frames:v", "1", "-an", "-sn", "-vf", scaleFilter, scaledPath,
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		_ = os.Remove(scaledPath)
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		if len(message) > 2000 {
+			message = message[len(message)-2000:]
+		}
+		if isFFmpegUnavailable(err) {
+			return "", fmt.Errorf("ffmpeg 不可用: %w", err)
+		}
+		return "", fmt.Errorf("ffmpeg 缩放图片失败: %s", message)
+	}
+	return scaledPath, nil
+}
+
+func isFFmpegUnavailable(err error) bool {
+	if errors.Is(err, exec.ErrNotFound) {
+		return true
+	}
+	var execErr *exec.Error
+	return errors.As(err, &execErr) && errors.Is(execErr.Err, exec.ErrNotFound)
 }
 
 func (c *apiClient) logImageFailure(sourceURL, baseName string, err error) {
