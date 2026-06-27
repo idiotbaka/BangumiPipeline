@@ -12,10 +12,14 @@ const mode = ref<'login' | 'register'>('login')
 const username = ref('')
 const password = ref('')
 const confirmPassword = ref('')
+const inviteCode = ref('')
 const message = ref('')
 const siteName = ref(defaultSiteName)
+const registrationEnabled = ref(true)
+const inviteRequired = ref(false)
 const formTitle = computed(() => (mode.value === 'login' ? '欢迎回来' : '创建账号'))
 const submitLabel = computed(() => (mode.value === 'login' ? '登录' : '注册并进入'))
+const submitDisabled = computed(() => loading.value || (mode.value === 'register' && !registrationEnabled.value))
 
 onMounted(async () => {
   try {
@@ -38,6 +42,8 @@ onMounted(async () => {
 
 function applySiteSettings(settings: SiteSettings) {
   siteName.value = settings.siteName || defaultSiteName
+  registrationEnabled.value = settings.registrationEnabled
+  inviteRequired.value = settings.inviteRequired
   document.title = siteName.value
   const existing = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
   if (!settings.hasFavicon) {
@@ -55,8 +61,9 @@ function applySiteSettings(settings: SiteSettings) {
 
 function switchMode(nextMode: 'login' | 'register') {
   mode.value = nextMode
-  message.value = ''
+  message.value = nextMode === 'register' && !registrationEnabled.value ? '当前暂未开放注册' : ''
   confirmPassword.value = ''
+  inviteCode.value = ''
 }
 
 async function submit() {
@@ -68,15 +75,24 @@ async function submit() {
     message.value = '两次输入的密码不一致'
     return
   }
+  if (mode.value === 'register' && !registrationEnabled.value) {
+    message.value = '当前暂未开放注册'
+    return
+  }
+  if (mode.value === 'register' && inviteRequired.value && inviteCode.value.trim() === '') {
+    message.value = '请填写邀请码'
+    return
+  }
   loading.value = true
   try {
     const result =
       mode.value === 'login'
         ? await api.login(username.value, password.value)
-        : await api.register(username.value, password.value)
+        : await api.register(username.value, password.value, inviteCode.value)
     user.value = result.user
     password.value = ''
     confirmPassword.value = ''
+    inviteCode.value = ''
   } catch (error) {
     message.value = error instanceof Error ? error.message : '请求失败'
   } finally {
@@ -157,8 +173,20 @@ async function logout() {
           />
         </label>
 
+        <label v-if="mode === 'register' && inviteRequired" class="field">
+          <span>邀请码</span>
+          <input
+            v-model.trim="inviteCode"
+            autocomplete="off"
+            maxlength="32"
+            placeholder="请输入邀请码"
+            required
+            type="text"
+          />
+        </label>
+
         <p v-if="message" class="form-message">{{ message }}</p>
-        <button class="submit-button" :disabled="loading" type="submit">
+        <button class="submit-button" :disabled="submitDisabled" type="submit">
           <span>{{ loading ? '处理中' : submitLabel }}</span>
         </button>
       </form>

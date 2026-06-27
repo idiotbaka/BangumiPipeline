@@ -846,6 +846,8 @@ VALUES (19, unixepoch());`); err != nil {
 CREATE TABLE IF NOT EXISTS viewer_site_settings (
     id                 INTEGER PRIMARY KEY CHECK (id = 1),
     site_name          TEXT NOT NULL DEFAULT 'BangumiPipeline Viewer',
+    registration_enabled INTEGER NOT NULL DEFAULT 1 CHECK (registration_enabled IN (0, 1)),
+    invite_required    INTEGER NOT NULL DEFAULT 0 CHECK (invite_required IN (0, 1)),
     favicon_png        BLOB,
     favicon_updated_at INTEGER,
     updated_at         INTEGER NOT NULL
@@ -857,6 +859,28 @@ VALUES (1, 'BangumiPipeline Viewer', unixepoch());
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (20, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 20 migration: %w", err)
+	}
+	if err := ensureColumn(ctx, db, "viewer_site_settings", "registration_enabled", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
+	if err := ensureColumn(ctx, db, "viewer_site_settings", "invite_required", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_invitation_codes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    code            TEXT NOT NULL UNIQUE,
+    used_by_user_id INTEGER REFERENCES viewer_users(id) ON DELETE SET NULL,
+    used_at         INTEGER,
+    created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_invitation_codes_used ON viewer_invitation_codes(used_at, id DESC);
+CREATE INDEX IF NOT EXISTS idx_viewer_invitation_codes_user ON viewer_invitation_codes(used_by_user_id);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (21, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 21 migration: %w", err)
 	}
 	return nil
 }

@@ -78,6 +78,8 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/viewer/users", api.listViewerUsers)
 	mux.HandleFunc("PATCH /api/viewer/users/{userID}", api.updateViewerUser)
 	mux.HandleFunc("POST /api/viewer/users/{userID}/password", api.resetViewerUserPassword)
+	mux.HandleFunc("GET /api/viewer/invites", api.listViewerInvites)
+	mux.HandleFunc("POST /api/viewer/invites", api.generateViewerInvite)
 	mux.HandleFunc("GET /api/viewer/site-settings", api.getViewerSiteSettings)
 	mux.HandleFunc("PUT /api/viewer/site-settings", api.updateViewerSiteSettings)
 	mux.HandleFunc("GET /api/viewer/site-settings/favicon", api.viewerFavicon)
@@ -326,6 +328,32 @@ func (a *AdminAPI) resetViewerUserPassword(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
 }
 
+func (a *AdminAPI) listViewerInvites(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
+	result, err := a.viewer.ListInvitationCodes(r.Context(), page, pageSize)
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *AdminAPI) generateViewerInvite(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	code, err := a.viewer.GenerateInvitationCode(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"invite": code})
+}
+
 func (a *AdminAPI) getViewerSiteSettings(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdministrator(w, r) {
 		return
@@ -343,13 +371,19 @@ func (a *AdminAPI) updateViewerSiteSettings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var input struct {
-		SiteName string `json:"siteName"`
+		SiteName            string `json:"siteName"`
+		RegistrationEnabled bool   `json:"registrationEnabled"`
+		InviteRequired      bool   `json:"inviteRequired"`
 	}
 	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	settings, err := a.viewer.UpdateSiteName(r.Context(), input.SiteName)
+	settings, err := a.viewer.UpdateSiteSettings(r.Context(), viewer.SiteSettingsUpdate{
+		SiteName:            input.SiteName,
+		RegistrationEnabled: input.RegistrationEnabled,
+		InviteRequired:      input.InviteRequired,
+	})
 	if err != nil {
 		if errors.Is(err, viewer.ErrInvalidSiteName) {
 			writeError(w, http.StatusBadRequest, "invalid_site_name", "网站名称需要 1 到 80 个可显示字符")

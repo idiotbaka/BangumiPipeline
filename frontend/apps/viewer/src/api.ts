@@ -6,6 +6,8 @@ export interface ViewerUser {
 
 export interface SiteSettings {
   siteName: string
+  registrationEnabled: boolean
+  inviteRequired: boolean
   hasFavicon: boolean
   faviconUpdatedAt: number | null
   updatedAt: number
@@ -50,10 +52,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   siteSettings: () => request<{ settings: SiteSettings }>('/api/site-settings'),
-  register: (username: string, password: string) =>
+  register: (username: string, password: string, inviteCode = '') =>
     request<{ user: ViewerUser }>('/api/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, inviteCode }),
     }),
   login: (username: string, password: string) =>
     request<{ user: ViewerUser }>('/api/auth/login', {

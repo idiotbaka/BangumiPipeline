@@ -73,6 +73,10 @@ async function logout() {
             <el-icon><User /></el-icon>
             <span>用户管理</span>
           </el-menu-item>
+          <el-menu-item index="/viewer-invites">
+            <el-icon><Tickets /></el-icon>
+            <span>邀请码管理</span>
+          </el-menu-item>
           <el-menu-item index="/viewer-site-settings">
             <el-icon><Setting /></el-icon>
             <span>网站设置</span>

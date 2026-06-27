@@ -68,9 +68,28 @@ export interface ViewerUserPage {
 
 export interface ViewerSiteSettings {
   siteName: string
+  registrationEnabled: boolean
+  inviteRequired: boolean
   hasFavicon: boolean
   faviconUpdatedAt: number | null
   updatedAt: number
+}
+
+export interface ViewerInvite {
+  id: number
+  code: string
+  used: boolean
+  usedByUserId: number | null
+  usedByUsername: string
+  usedAt: number | null
+  createdAt: number
+}
+
+export interface ViewerInvitePage {
+  items: ViewerInvite[]
+  total: number
+  page: number
+  pageSize: number
 }
 
 export interface LLMSettings {
@@ -523,11 +542,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
+  viewerInvites: (page: number, pageSize: number) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    return request<ViewerInvitePage>(`/api/viewer/invites?${params}`)
+  },
+  generateViewerInvite: () =>
+    request<{ invite: ViewerInvite }>('/api/viewer/invites', {
+      method: 'POST',
+      body: '{}',
+    }),
   viewerSiteSettings: () => request<{ settings: ViewerSiteSettings }>('/api/viewer/site-settings'),
-  updateViewerSiteSettings: (siteName: string) =>
+  updateViewerSiteSettings: (settings: Pick<ViewerSiteSettings, 'siteName' | 'registrationEnabled' | 'inviteRequired'>) =>
     request<{ settings: ViewerSiteSettings }>('/api/viewer/site-settings', {
       method: 'PUT',
-      body: JSON.stringify({ siteName }),
+      body: JSON.stringify(settings),
     }),
   uploadViewerFavicon: (file: File) => {
     const form = new FormData()

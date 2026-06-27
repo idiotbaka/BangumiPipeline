@@ -14,6 +14,7 @@ import DownloadManagementPage from './pages/DownloadManagementPage.vue'
 import TranscodeManagementPage from './pages/TranscodeManagementPage.vue'
 import ViewerUserManagementPage from './pages/ViewerUserManagementPage.vue'
 import ViewerSiteSettingsPage from './pages/ViewerSiteSettingsPage.vue'
+import ViewerInviteManagementPage from './pages/ViewerInviteManagementPage.vue'
 import AdminLayout from './components/AdminLayout.vue'
 
 const router = createRouter({
@@ -37,6 +38,7 @@ const router = createRouter({
         { path: 'system-logs', name: 'system-logs', component: SystemLogsPage },
         { path: 'settings', name: 'settings', component: SettingsPage },
         { path: 'viewer-users', name: 'viewer-users', component: ViewerUserManagementPage },
+        { path: 'viewer-invites', name: 'viewer-invites', component: ViewerInviteManagementPage },
         { path: 'viewer-site-settings', name: 'viewer-site-settings', component: ViewerSiteSettingsPage },
       ],
     },

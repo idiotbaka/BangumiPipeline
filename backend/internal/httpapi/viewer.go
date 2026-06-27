@@ -36,14 +36,26 @@ func NewViewerHandler(authService *viewer.Service, logger *slog.Logger, cookieSe
 }
 
 func (a *ViewerAPI) register(w http.ResponseWriter, r *http.Request) {
-	var input credentials
+	var input struct {
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		InviteCode string `json:"inviteCode"`
+	}
 	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	user, session, err := a.auth.Register(r.Context(), input.Username, input.Password)
+	user, session, err := a.auth.Register(r.Context(), input.Username, input.Password, input.InviteCode)
 	if err != nil {
 		switch {
+		case errors.Is(err, viewer.ErrRegistrationClosed):
+			writeError(w, http.StatusForbidden, "registration_closed", "当前暂未开放注册")
+		case errors.Is(err, viewer.ErrInviteRequired):
+			writeError(w, http.StatusBadRequest, "invite_required", "请填写邀请码")
+		case errors.Is(err, viewer.ErrInvalidInviteCode):
+			writeError(w, http.StatusBadRequest, "invalid_invite_code", "邀请码无效")
+		case errors.Is(err, viewer.ErrInviteUsed):
+			writeError(w, http.StatusConflict, "invite_used", "邀请码已被使用")
 		case errors.Is(err, viewer.ErrUsernameTaken):
 			writeError(w, http.StatusConflict, "username_taken", "用户名已被使用")
 		case errors.Is(err, viewer.ErrInvalidUsername):

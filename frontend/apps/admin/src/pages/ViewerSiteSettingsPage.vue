@@ -6,8 +6,11 @@ import { api, type ViewerSiteSettings } from '../api'
 
 const settings = ref<ViewerSiteSettings | null>(null)
 const siteName = ref('')
+const registrationEnabled = ref(true)
+const inviteRequired = ref(false)
 const loading = ref(false)
 const saving = ref(false)
+const savingRegistration = ref(false)
 const uploading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const faviconURL = computed(() => {
@@ -23,7 +26,7 @@ async function loadSettings() {
   try {
     const result = await api.viewerSiteSettings()
     settings.value = result.settings
-    siteName.value = result.settings.siteName
+    syncForm(result.settings)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载网站设置失败')
   } finally {
@@ -35,15 +38,44 @@ async function saveSiteName() {
   if (saving.value) return
   saving.value = true
   try {
-    const result = await api.updateViewerSiteSettings(siteName.value)
+    const result = await api.updateViewerSiteSettings({
+      siteName: siteName.value,
+      registrationEnabled: registrationEnabled.value,
+      inviteRequired: inviteRequired.value,
+    })
     settings.value = result.settings
-    siteName.value = result.settings.siteName
+    syncForm(result.settings)
     ElMessage.success('网站名称已保存')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '保存网站名称失败')
   } finally {
     saving.value = false
   }
+}
+
+async function saveRegistrationSettings() {
+  if (savingRegistration.value) return
+  savingRegistration.value = true
+  try {
+    const result = await api.updateViewerSiteSettings({
+      siteName: siteName.value,
+      registrationEnabled: registrationEnabled.value,
+      inviteRequired: inviteRequired.value,
+    })
+    settings.value = result.settings
+    syncForm(result.settings)
+    ElMessage.success('注册设置已保存')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存注册设置失败')
+  } finally {
+    savingRegistration.value = false
+  }
+}
+
+function syncForm(nextSettings: ViewerSiteSettings) {
+  siteName.value = nextSettings.siteName
+  registrationEnabled.value = nextSettings.registrationEnabled
+  inviteRequired.value = nextSettings.inviteRequired
 }
 
 function chooseFavicon() {
@@ -119,6 +151,38 @@ function formatDate(value: number | null | undefined) {
             <el-button type="primary" :loading="saving" @click="saveSiteName">保存名称</el-button>
           </div>
         </el-form>
+      </el-card>
+
+      <el-card class="settings-card" shadow="never">
+        <template #header>
+          <div class="settings-title">
+            <el-icon class="module-icon"><UploadFilled /></el-icon>
+            <div>
+              <h2>注册设置</h2>
+              <p>控制观看端是否开放新用户注册，以及是否需要邀请码。</p>
+            </div>
+          </div>
+        </template>
+        <div class="registration-settings-form">
+          <div class="settings-switch-row">
+            <div>
+              <strong>开放注册</strong>
+              <p>关闭后，观看端注册接口会拒绝创建新账号。</p>
+            </div>
+            <el-switch v-model="registrationEnabled" />
+          </div>
+          <div class="settings-switch-row">
+            <div>
+              <strong>需要邀请码才能注册</strong>
+              <p>开启后，注册表单会要求填写未使用的邀请码。</p>
+            </div>
+            <el-switch v-model="inviteRequired" />
+          </div>
+          <div class="settings-actions">
+            <span>最后更新：{{ formatDate(settings?.updatedAt) }}</span>
+            <el-button type="primary" :loading="savingRegistration" @click="saveRegistrationSettings">保存注册设置</el-button>
+          </div>
+        </div>
       </el-card>
 
       <el-card class="settings-card" shadow="never">
