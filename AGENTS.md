@@ -453,6 +453,27 @@ RSS 流程：
 - 管理端系统设置、系统概览、番剧存储管理可以展示服务器路径。
 - 番剧卡片按钮区保持固定宽度和可读文本，避免话数 tag 或按钮遮挡。
 
+## 观看端前端
+
+观看端使用 Vue 3、TypeScript，当前不适配移动端，页面最小宽度按 1200px 设计。
+
+关键文件：
+
+- `frontend/apps/viewer/src/App.vue`：观看端入口、登录/注册门禁、站点设置应用和登录后首页壳。
+- `frontend/apps/viewer/src/api.ts`：观看端 HTTP 调用和 API 类型。
+- `frontend/apps/viewer/src/assets/`：观看端本地图片、字体、样式依赖等静态资源。
+- `backend/internal/httpapi/viewer.go`：观看端公开 API、用户认证接口和 SPA 托管。
+- `backend/internal/viewer/service.go`：观看端用户、Session、站点设置、邀请码注册逻辑。
+
+前端约定：
+
+- 默认访问必须登录；未登录展示左侧登录/注册表单、右侧 `chara.png` 视觉区。
+- 视觉基调保持白底、粉色主题、清透几何 UI 和轻量动效；第三方 CSS、JS、字体等资源必须本地化。
+- 网站名称、favicon、注册开关和邀请码要求来自 `GET /api/site-settings`，不要在观看端硬编码站点标题。
+- 注册接口必须尊重后端注册开关和邀请码策略；邀请码只在后端事务中校验并消费。
+- 观看端认证与管理端认证相互独立，使用 viewer 用户和 viewer session。
+- 观看端和普通媒体接口不要向浏览器暴露服务器本地绝对路径，后续播放能力应通过受控 ID 或流式接口提供。
+
 ## HTTP API
 
 Admin API 都在 `backend/internal/httpapi/admin.go`。
@@ -501,6 +522,16 @@ Admin API 都在 `backend/internal/httpapi/admin.go`。
 - `POST /api/media/jobs/{jobID}/retry`
 - `GET /api/system-logs`
 - `GET /api/system-logs/stream`
+
+Viewer API 在 `backend/internal/httpapi/viewer.go`。
+
+关键接口：
+
+- `GET /api/site-settings`
+- `GET /api/auth/me`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
 
 ## 必须保持的行为
 
