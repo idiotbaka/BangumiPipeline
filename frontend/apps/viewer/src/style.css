@@ -156,6 +156,10 @@ button:disabled {
   line-height: 1.2;
 }
 
+.brand-row > div:last-child {
+  min-width: 0;
+}
+
 .brand-row p {
   color: var(--ink-600);
   font-size: 13px;
@@ -163,8 +167,16 @@ button:disabled {
 }
 
 .brand-row strong {
+  overflow: hidden;
+  max-width: 340px;
   margin-top: 3px;
   font-size: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar .brand-row strong {
+  max-width: 620px;
 }
 
 .mode-switch {

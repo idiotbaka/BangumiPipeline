@@ -50,6 +50,29 @@ export interface BangumiCustomSearchSettings {
   updatedAt: number
 }
 
+export interface ViewerUser {
+  id: number
+  username: string
+  disabled: boolean
+  disabledAt: number | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ViewerUserPage {
+  items: ViewerUser[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface ViewerSiteSettings {
+  siteName: string
+  hasFavicon: boolean
+  faviconUpdatedAt: number | null
+  updatedAt: number
+}
+
 export interface LLMSettings {
   baseUrl: string
   apiKey: string
@@ -405,13 +428,17 @@ export class APIError extends Error {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers =
+    options?.body instanceof FormData
+      ? options.headers
+      : {
+          'Content-Type': 'application/json',
+          ...options?.headers,
+        }
   const response = await fetch(path, {
     credentials: 'same-origin',
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    headers,
   })
 
   if (!response.ok) {
@@ -481,6 +508,35 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ tags }),
     }),
+  viewerUsers: (page: number, pageSize: number, query = '') => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    if (query.trim()) params.set('q', query.trim())
+    return request<ViewerUserPage>(`/api/viewer/users?${params}`)
+  },
+  updateViewerUser: (userId: number, update: { disabled: boolean }) =>
+    request<{ user: ViewerUser }>(`/api/viewer/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(update),
+    }),
+  resetViewerUserPassword: (userId: number, password: string) =>
+    request<{ user: ViewerUser }>(`/api/viewer/users/${userId}/password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+  viewerSiteSettings: () => request<{ settings: ViewerSiteSettings }>('/api/viewer/site-settings'),
+  updateViewerSiteSettings: (siteName: string) =>
+    request<{ settings: ViewerSiteSettings }>('/api/viewer/site-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ siteName }),
+    }),
+  uploadViewerFavicon: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<{ settings: ViewerSiteSettings }>('/api/viewer/site-settings/favicon', {
+      method: 'PUT',
+      body: form,
+    })
+  },
   llmSettings: () => request<{ settings: LLMSettings }>('/api/settings/llm'),
   updateLLMSettings: (settings: Omit<LLMSettings, 'updatedAt'>) =>
     request<{ settings: LLMSettings }>('/api/settings/llm', {

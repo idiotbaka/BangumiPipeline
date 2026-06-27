@@ -4,6 +4,13 @@ export interface ViewerUser {
   createdAt: number
 }
 
+export interface SiteSettings {
+  siteName: string
+  hasFavicon: boolean
+  faviconUpdatedAt: number | null
+  updatedAt: number
+}
+
 interface ErrorPayload {
   error?: {
     code?: string
@@ -42,6 +49,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  siteSettings: () => request<{ settings: SiteSettings }>('/api/site-settings'),
   register: (username: string, password: string) =>
     request<{ user: ViewerUser }>('/api/auth/register', {
       method: 'POST',

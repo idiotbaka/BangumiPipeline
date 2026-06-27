@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import { APIError, api, type ViewerUser } from './api'
+import { APIError, api, type SiteSettings, type ViewerUser } from './api'
 import charaImage from './assets/chara.png'
 
+const defaultSiteName = 'BangumiPipeline Viewer'
 const user = ref<ViewerUser | null>(null)
 const ready = ref(false)
 const loading = ref(false)
@@ -12,10 +13,17 @@ const username = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const message = ref('')
+const siteName = ref(defaultSiteName)
 const formTitle = computed(() => (mode.value === 'login' ? '欢迎回来' : '创建账号'))
 const submitLabel = computed(() => (mode.value === 'login' ? '登录' : '注册并进入'))
 
 onMounted(async () => {
+  try {
+    const result = await api.siteSettings()
+    applySiteSettings(result.settings)
+  } catch {
+    document.title = siteName.value
+  }
   try {
     const result = await api.me()
     user.value = result.user
@@ -27,6 +35,23 @@ onMounted(async () => {
     ready.value = true
   }
 })
+
+function applySiteSettings(settings: SiteSettings) {
+  siteName.value = settings.siteName || defaultSiteName
+  document.title = siteName.value
+  const existing = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+  if (!settings.hasFavicon) {
+    existing?.remove()
+    return
+  }
+  const link = existing ?? document.createElement('link')
+  link.rel = 'icon'
+  link.type = 'image/png'
+  link.href = `/favicon.png?v=${settings.faviconUpdatedAt ?? settings.updatedAt}`
+  if (!existing) {
+    document.head.appendChild(link)
+  }
+}
 
 function switchMode(nextMode: 'login' | 'register') {
   mode.value = nextMode
@@ -87,8 +112,8 @@ async function logout() {
       <div class="brand-row">
         <div class="brand-mark">BP</div>
         <div>
-          <p>BangumiPipeline</p>
-          <strong>Viewer</strong>
+          <p>Viewer Portal</p>
+          <strong>{{ siteName }}</strong>
         </div>
       </div>
 
@@ -161,8 +186,8 @@ async function logout() {
       <div class="brand-row compact">
         <div class="brand-mark">BP</div>
         <div>
-          <p>BangumiPipeline</p>
-          <strong>Viewer</strong>
+          <p>Viewer Portal</p>
+          <strong>{{ siteName }}</strong>
         </div>
       </div>
       <div class="user-chip">

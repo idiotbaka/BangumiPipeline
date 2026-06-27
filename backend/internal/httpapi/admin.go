@@ -22,6 +22,7 @@ import (
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
 	"bangumipipeline.local/server/internal/translation"
+	"bangumipipeline.local/server/internal/viewer"
 )
 
 const adminSessionCookie = "ab_admin_session"
@@ -39,14 +40,15 @@ type AdminAPI struct {
 	download     *download.Service
 	media        *media.Service
 	translation  *translation.Service
+	viewer       *viewer.Service
 	logger       *slog.Logger
 	cookieSecure bool
 }
 
-func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, downloadService *download.Service, mediaService *media.Service, translationService *translation.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
+func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, downloadService *download.Service, mediaService *media.Service, translationService *translation.Service, viewerService *viewer.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
 	api := &AdminAPI{
 		auth: authService, system: systemService, scheduler: scheduler, logs: logs,
-		catalog: catalog, syncer: syncer, subscription: subscriptionService, download: downloadService, media: mediaService, translation: translationService, logger: logger, cookieSecure: cookieSecure,
+		catalog: catalog, syncer: syncer, subscription: subscriptionService, download: downloadService, media: mediaService, translation: translationService, viewer: viewerService, logger: logger, cookieSecure: cookieSecure,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
@@ -73,6 +75,13 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("PUT /api/settings/media-storage", api.updateMediaStorageSettings)
 	mux.HandleFunc("GET /api/settings/bangumi-custom-search", api.getBangumiCustomSearchSettings)
 	mux.HandleFunc("PUT /api/settings/bangumi-custom-search", api.updateBangumiCustomSearchSettings)
+	mux.HandleFunc("GET /api/viewer/users", api.listViewerUsers)
+	mux.HandleFunc("PATCH /api/viewer/users/{userID}", api.updateViewerUser)
+	mux.HandleFunc("POST /api/viewer/users/{userID}/password", api.resetViewerUserPassword)
+	mux.HandleFunc("GET /api/viewer/site-settings", api.getViewerSiteSettings)
+	mux.HandleFunc("PUT /api/viewer/site-settings", api.updateViewerSiteSettings)
+	mux.HandleFunc("GET /api/viewer/site-settings/favicon", api.viewerFavicon)
+	mux.HandleFunc("PUT /api/viewer/site-settings/favicon", api.uploadViewerFavicon)
 	mux.HandleFunc("GET /api/system-logs", api.listSystemLogs)
 	mux.HandleFunc("GET /api/system-logs/stream", api.streamSystemLogs)
 	mux.HandleFunc("GET /api/anime", api.listAnime)
@@ -245,6 +254,158 @@ func (a *AdminAPI) updateBangumiCustomSearchSettings(w http.ResponseWriter, r *h
 	if err != nil {
 		if errors.Is(err, bangumi.ErrInvalidSearchTags) {
 			writeError(w, http.StatusBadRequest, "invalid_bangumi_search_tags", "自定义抓取标签最多 50 个，单个标签不超过 80 个字符")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) listViewerUsers(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
+	result, err := a.viewer.ListUsers(r.Context(), page, pageSize, r.URL.Query().Get("q"))
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *AdminAPI) updateViewerUser(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("userID"))
+	if !ok {
+		return
+	}
+	var input struct {
+		Disabled *bool `json:"disabled"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if input.Disabled == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "需要提供 disabled")
+		return
+	}
+	user, err := a.viewer.SetUserDisabled(r.Context(), id, *input.Disabled)
+	if err != nil {
+		a.viewerUserError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
+func (a *AdminAPI) resetViewerUserPassword(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("userID"))
+	if !ok {
+		return
+	}
+	var input struct {
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	user, err := a.viewer.ResetUserPassword(r.Context(), id, input.Password)
+	if err != nil {
+		a.viewerUserError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
+func (a *AdminAPI) getViewerSiteSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	settings, err := a.viewer.SiteSettings(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) updateViewerSiteSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	var input struct {
+		SiteName string `json:"siteName"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	settings, err := a.viewer.UpdateSiteName(r.Context(), input.SiteName)
+	if err != nil {
+		if errors.Is(err, viewer.ErrInvalidSiteName) {
+			writeError(w, http.StatusBadRequest, "invalid_site_name", "网站名称需要 1 到 80 个可显示字符")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) viewerFavicon(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	data, updatedAt, ok, err := a.viewer.Favicon(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	if updatedAt > 0 {
+		w.Header().Set("Last-Modified", time.Unix(updatedAt, 0).UTC().Format(http.TimeFormat))
+	}
+	_, _ = w.Write(data)
+}
+
+func (a *AdminAPI) uploadViewerFavicon(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "请上传 PNG favicon 文件")
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing_file", "请上传 PNG favicon 文件")
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	settings, err := a.viewer.UpdateFavicon(r.Context(), data)
+	if err != nil {
+		if errors.Is(err, viewer.ErrInvalidFavicon) {
+			writeError(w, http.StatusBadRequest, "invalid_favicon", "favicon 必须是 1MiB 以内的 PNG 文件")
 			return
 		}
 		a.internalError(w, err)
@@ -761,6 +922,17 @@ func (a *AdminAPI) subscriptionBindingError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "subscription_item_not_found", "订阅条目不存在")
 	case errors.Is(err, subscription.ErrInvalidBinding):
 		writeError(w, http.StatusBadRequest, "invalid_subscription_binding", "绑定信息不完整或番剧不存在")
+	default:
+		a.internalError(w, err)
+	}
+}
+
+func (a *AdminAPI) viewerUserError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, viewer.ErrUserNotFound):
+		writeError(w, http.StatusNotFound, "viewer_user_not_found", "观看端用户不存在")
+	case errors.Is(err, viewer.ErrInvalidPassword):
+		writeError(w, http.StatusBadRequest, "invalid_password", "密码需要 10 到 128 个字符")
 	default:
 		a.internalError(w, err)
 	}

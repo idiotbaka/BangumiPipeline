@@ -82,7 +82,7 @@ func run(logger *slog.Logger) error {
 		Addr: cfg.AdminAddr,
 		Handler: httpapi.NewAdminHandler(
 			authService, systemService, scheduler, logService, bangumi.NewCatalog(db, mediaService.DefaultMediaDir()),
-			metadataSyncer, subscriptionService, downloadService, mediaService, translationService, logger, cfg.CookieSecure, cfg.AdminWebDir,
+			metadataSyncer, subscriptionService, downloadService, mediaService, translationService, viewerAuthService, logger, cfg.CookieSecure, cfg.AdminWebDir,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

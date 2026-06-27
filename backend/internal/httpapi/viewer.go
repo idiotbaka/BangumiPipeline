@@ -22,10 +22,12 @@ func NewViewerHandler(authService *viewer.Service, logger *slog.Logger, cookieSe
 	api := &ViewerAPI{auth: authService, logger: logger, cookieSecure: cookieSecure}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
+	mux.HandleFunc("GET /api/site-settings", api.siteSettings)
 	mux.HandleFunc("POST /api/auth/register", api.register)
 	mux.HandleFunc("POST /api/auth/login", api.login)
 	mux.HandleFunc("GET /api/auth/me", api.me)
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
+	mux.HandleFunc("GET /favicon.png", api.favicon)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API endpoint not found")
 	})
@@ -65,11 +67,14 @@ func (a *ViewerAPI) login(w http.ResponseWriter, r *http.Request) {
 	}
 	user, session, err := a.auth.Login(r.Context(), input.Username, input.Password)
 	if err != nil {
-		if errors.Is(err, viewer.ErrInvalidCredentials) {
+		switch {
+		case errors.Is(err, viewer.ErrInvalidCredentials):
 			writeError(w, http.StatusUnauthorized, "invalid_credentials", "用户名或密码错误")
-			return
+		case errors.Is(err, viewer.ErrUserDisabled):
+			writeError(w, http.StatusForbidden, "user_disabled", "账号已被禁用")
+		default:
+			a.internalError(w, err)
 		}
-		a.internalError(w, err)
 		return
 	}
 	a.setSessionCookie(w, session)
@@ -99,6 +104,33 @@ func (a *ViewerAPI) logout(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true, Secure: a.cookieSecure, SameSite: http.SameSiteStrictMode,
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *ViewerAPI) siteSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := a.auth.SiteSettings(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *ViewerAPI) favicon(w http.ResponseWriter, r *http.Request) {
+	data, updatedAt, ok, err := a.auth.Favicon(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if updatedAt > 0 {
+		w.Header().Set("Last-Modified", time.Unix(updatedAt, 0).UTC().Format(http.TimeFormat))
+	}
+	_, _ = w.Write(data)
 }
 
 func (a *ViewerAPI) setSessionCookie(w http.ResponseWriter, session viewer.Session) {

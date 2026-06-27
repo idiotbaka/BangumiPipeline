@@ -820,6 +820,7 @@ CREATE TABLE IF NOT EXISTS viewer_users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT NOT NULL COLLATE NOCASE UNIQUE,
     password_hash TEXT NOT NULL,
+    disabled_at   INTEGER,
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
 );
@@ -837,6 +838,25 @@ CREATE INDEX IF NOT EXISTS idx_viewer_sessions_expires_at ON viewer_sessions(exp
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (19, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 19 migration: %w", err)
+	}
+	if err := ensureColumn(ctx, db, "viewer_users", "disabled_at", "INTEGER"); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_site_settings (
+    id                 INTEGER PRIMARY KEY CHECK (id = 1),
+    site_name          TEXT NOT NULL DEFAULT 'BangumiPipeline Viewer',
+    favicon_png        BLOB,
+    favicon_updated_at INTEGER,
+    updated_at         INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO viewer_site_settings(id, site_name, updated_at)
+VALUES (1, 'BangumiPipeline Viewer', unixepoch());
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (20, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 20 migration: %w", err)
 	}
 	return nil
 }
