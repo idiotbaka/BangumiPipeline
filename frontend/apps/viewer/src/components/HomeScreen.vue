@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { api, type ViewerAnimeCard, type ViewerHome, type ViewerUser } from '../api'
 import ParticleField from './ParticleField.vue'
@@ -16,17 +16,26 @@ const emit = defineEmits<{ (e: 'logout'): void }>()
 const hotPageSize = 8
 const maxHotPages = 4
 const hotSkeletonCount = 8
-const recentSkeletonCount = 4
+const recentSkeletonCount = 24 // 最近更新：8 列 × 3 排
+const maxRecentCount = 24 // 最近更新最多显示 24 个（3 排）
+const heroSlideCount = 5 // Hero 轮播取热播前 5 部
+const heroIntervalMs = 5500
 
 const searchQuery = ref('')
 const homeLoading = ref(false)
 const homeError = ref('')
 const hotPage = ref(0)
+const heroIndex = ref(0)
 const failedCovers = ref<Set<number>>(new Set())
 const home = ref<ViewerHome>({
   hotRecommendations: [],
   recentUpdates: [],
 })
+
+let heroTimer: ReturnType<typeof setInterval> | null = null
+
+const heroSlides = computed(() => home.value.hotRecommendations.slice(0, heroSlideCount))
+const currentHero = computed(() => heroSlides.value[heroIndex.value] ?? null)
 
 const hotPages = computed(() => {
   const items = home.value.hotRecommendations.slice(0, hotPageSize * maxHotPages)
@@ -39,6 +48,7 @@ const hotPages = computed(() => {
 
 const currentHotItems = computed(() => hotPages.value[hotPage.value] ?? [])
 const canTurnHot = computed(() => hotPages.value.length > 1)
+const recentItems = computed(() => home.value.recentUpdates.slice(0, maxRecentCount))
 const pageIndicator = computed(() => {
   const total = Math.max(hotPages.value.length, 1)
   return `${Math.min(hotPage.value + 1, total)} / ${total}`
@@ -47,6 +57,54 @@ const pageIndicator = computed(() => {
 onMounted(() => {
   void loadHome()
 })
+
+onUnmounted(() => {
+  stopHeroAutoplay()
+})
+
+// 列表变化时重置索引并重启轮播
+watch(heroSlides, (slides) => {
+  heroIndex.value = 0
+  if (slides.length > 1) {
+    startHeroAutoplay()
+  } else {
+    stopHeroAutoplay()
+  }
+})
+
+function startHeroAutoplay() {
+  stopHeroAutoplay()
+  if (heroSlides.value.length <= 1) {
+    return
+  }
+  heroTimer = setInterval(() => {
+    heroIndex.value = (heroIndex.value + 1) % heroSlides.value.length
+  }, heroIntervalMs)
+}
+
+function stopHeroAutoplay() {
+  if (heroTimer !== null) {
+    clearInterval(heroTimer)
+    heroTimer = null
+  }
+}
+
+function selectHero(index: number) {
+  if (!heroSlides.value.length) {
+    return
+  }
+  heroIndex.value = (index + heroSlides.value.length) % heroSlides.value.length
+  startHeroAutoplay() // 手动交互后重新计时
+}
+
+function turnHero(direction: number) {
+  if (!heroSlides.value.length) {
+    return
+  }
+  const total = heroSlides.value.length
+  heroIndex.value = (heroIndex.value + direction + total) % total
+  startHeroAutoplay()
+}
 
 async function loadHome() {
   if (homeLoading.value) {
@@ -111,13 +169,26 @@ function formatUpdatedAt(value: number | null) {
 function formatAirDate(value: string) {
   return value ? value.split('-').join('.') : 'ON AIR'
 }
+
+// Hero 番剧标题：优先展示标题，回退中文名与原名
+function heroTitle(item: ViewerAnimeCard) {
+  return item.title || item.nameCN || item.name || '未命名番剧'
+}
+
+// Hero 占位简介：API 暂无 summary 字段，未来由管理后台自定义轮播图后接入真实简介
+const PLACEHOLDER_SUMMARY =
+  '这是剧情简介的占位内容——未来可在管理后台为每部番剧配置自定义轮播图与简介。当前轮播仅用于展示首页视觉版式与交互效果。'
+
+// 卡片交错入场延迟
+function stagger(index: number, base = 0.04, step = 0.05) {
+  return `${base + index * step}s`
+}
 </script>
 
 <template>
   <main class="home-shell">
     <header class="topbar">
       <div class="brand-row">
-        <div class="brand-mark">BP</div>
         <div class="brand-text">
           <p>VIEWER PORTAL</p>
           <strong>{{ siteName }}</strong>
@@ -139,43 +210,108 @@ function formatAirDate(value: string) {
         <span class="user-avatar" aria-hidden="true">{{ user.username.slice(0, 1).toUpperCase() }}</span>
         <span class="user-name">{{ user.username }}</span>
         <button class="logout-button" :disabled="loading" type="button" @click="emit('logout')">
-          退出
+          <span class="logout-label">退出</span>
+          <i class="logout-sweep" aria-hidden="true" />
         </button>
       </div>
     </header>
 
     <section class="home-stage" aria-label="首页">
-      <ParticleField :count="14" palette="pink" :max-size="28" />
+      <ParticleField :count="16" palette="pink" :max-size="30" />
       <div class="stage-grid" aria-hidden="true" />
-      <div class="stage-shape shape-ribbon" aria-hidden="true" />
-      <div class="stage-shape shape-tile" aria-hidden="true" />
+      <div class="stage-halo halo-a" aria-hidden="true" />
+      <div class="stage-halo halo-b" aria-hidden="true" />
 
       <div class="content-wrap">
-        <section class="hero-carousel" aria-label="轮播图">
-          <div class="hero-copy">
-            <span class="hero-kicker">BANNER 01</span>
-            <h1>{{ siteName }}</h1>
-            <p>今日放送、近期完结与收藏中的动画将在这里汇合。</p>
+        <!-- ===== Hero 占位轮播 ===== -->
+        <section class="hero-carousel" aria-label="精选轮播">
+          <!-- 背景光晕 + 飘动几何板（容器内不填充图片） -->
+          <div class="hero-bg" aria-hidden="true">
+            <div class="hero-glow glow-pink" />
+            <div class="hero-glow glow-cyan" />
+            <div class="hero-glow glow-yellow" />
+            <div class="hero-plate plate-a" />
+            <div class="hero-plate plate-b" />
+            <div class="hero-plate plate-c" />
           </div>
-          <div class="hero-art" aria-hidden="true">
-            <span class="art-panel panel-a" />
-            <span class="art-panel panel-b" />
-            <span class="art-panel panel-c" />
-            <span class="art-line line-a" />
-            <span class="art-line line-b" />
+          <ParticleField :count="14" palette="cool" :max-size="40" />
+
+          <!-- 玻璃信息卡 -->
+          <div v-if="currentHero" :key="currentHero.bangumiId" class="hero-content">
+            <span class="hero-index-tag">
+              <i>{{ String(heroIndex + 1).padStart(2, '0') }}</i>
+              <span>/ {{ String(heroSlides.length).padStart(2, '0') }}</span>
+            </span>
+            <p class="hero-kicker">FEATURED</p>
+            <h1 class="hero-title">{{ heroTitle(currentHero) }}</h1>
+            <div class="hero-meta">
+              <span class="meta-pill">
+                <i class="meta-dot" aria-hidden="true" />
+                {{ formatAirDate(currentHero.airDate) }}
+              </span>
+              <span class="meta-pill">
+                <i class="meta-star" aria-hidden="true">★</i>
+                {{ ratingText(currentHero.ratingScore) }}
+              </span>
+              <span class="meta-pill">{{ updateText(currentHero) }}</span>
+            </div>
+            <p class="hero-summary">{{ PLACEHOLDER_SUMMARY }}</p>
           </div>
-          <div class="hero-dots" aria-hidden="true">
-            <span class="dot active" />
-            <span class="dot" />
-            <span class="dot" />
+
+          <!-- 空态：暂无热播数据 -->
+          <div v-else class="hero-content hero-empty">
+            <span class="hero-index-tag">
+              <i>00</i>
+              <span>/ 00</span>
+            </span>
+            <p class="hero-kicker">FEATURED</p>
+            <h1 class="hero-title">{{ siteName }}</h1>
+            <p class="hero-summary">暂无精选内容，配置订阅后这里会展示热门番剧的轮播推荐。</p>
+          </div>
+
+          <!-- 切换箭头 -->
+          <button
+            v-if="heroSlides.length > 1"
+            class="hero-arrow arrow-prev"
+            type="button"
+            aria-label="上一个"
+            @click="turnHero(-1)"
+          >
+            ‹
+          </button>
+          <button
+            v-if="heroSlides.length > 1"
+            class="hero-arrow arrow-next"
+            type="button"
+            aria-label="下一个"
+            @click="turnHero(1)"
+          >
+            ›
+          </button>
+
+          <!-- 指示器 -->
+          <div v-if="heroSlides.length > 1" class="hero-dots" role="tablist" aria-label="切换轮播">
+            <button
+              v-for="(slide, index) in heroSlides"
+              :key="slide.bangumiId"
+              class="hero-dot"
+              :class="{ active: index === heroIndex }"
+              type="button"
+              role="tab"
+              :aria-selected="index === heroIndex"
+              :aria-label="`第 ${index + 1} 张`"
+              @click="selectHero(index)"
+            />
           </div>
         </section>
 
+        <!-- ===== 热播推荐 ===== -->
         <section class="anime-section">
           <div class="section-head">
-            <div>
+            <div class="section-title">
               <p class="section-kicker">HOT ON AIR</p>
               <h2>热播推荐</h2>
+              <i class="section-bar" aria-hidden="true" />
             </div>
             <div class="section-controls">
               <span class="page-count">{{ pageIndicator }}</span>
@@ -189,8 +325,8 @@ function formatAirDate(value: string) {
           </div>
 
           <div v-if="homeLoading" class="poster-grid">
-            <article v-for="n in hotSkeletonCount" :key="n" class="poster-card skeleton-card">
-              <div class="poster-frame skeleton-block" />
+            <article v-for="n in hotSkeletonCount" :key="n" class="poster-card">
+              <div class="skeleton-poster skeleton-block" />
               <div class="skeleton-title skeleton-block" />
             </article>
           </div>
@@ -203,11 +339,13 @@ function formatAirDate(value: string) {
           </div>
           <div v-else class="poster-grid">
             <article
-              v-for="item in currentHotItems"
+              v-for="(item, index) in currentHotItems"
               :key="item.bangumiId"
               class="poster-card"
+              :style="{ '--stagger': stagger(index) }"
             >
               <div class="poster-frame">
+                <span class="score-tag">{{ ratingText(item.ratingScore) }}</span>
                 <img
                   v-if="hasCover(item)"
                   :src="coverURL(item)"
@@ -218,38 +356,42 @@ function formatAirDate(value: string) {
                 <div v-else class="cover-fallback">
                   <span>{{ item.title.slice(0, 2) }}</span>
                 </div>
-                <span class="rating-badge">{{ ratingText(item.ratingScore) }}</span>
                 <span class="episode-shadow">{{ updateText(item) }}</span>
               </div>
-              <h3>{{ item.title }}</h3>
-              <p>{{ formatAirDate(item.airDate) }}</p>
+              <h3 class="poster-title">{{ item.title }}</h3>
+              <p class="poster-sub">{{ formatAirDate(item.airDate) }}</p>
             </article>
           </div>
         </section>
 
+        <!-- ===== 最近更新（统一大竖版卡 + NEW + 时间角标） ===== -->
         <section class="anime-section recent-section">
           <div class="section-head">
-            <div>
+            <div class="section-title">
               <p class="section-kicker">RECENT DROPS</p>
               <h2>最近更新</h2>
+              <i class="section-bar" aria-hidden="true" />
             </div>
           </div>
 
           <div v-if="homeLoading" class="recent-grid">
-            <article v-for="n in recentSkeletonCount" :key="n" class="update-card skeleton-update">
-              <div class="update-cover skeleton-block" />
-              <div class="update-body">
-                <div class="skeleton-line skeleton-block" />
-                <div class="skeleton-line short skeleton-block" />
-              </div>
+            <article v-for="n in recentSkeletonCount" :key="n" class="poster-card">
+              <div class="skeleton-poster skeleton-block" />
+              <div class="skeleton-title skeleton-block" />
             </article>
           </div>
-          <div v-else-if="!homeError && home.recentUpdates.length === 0" class="state-panel compact">
+          <div v-else-if="!homeError && recentItems.length === 0" class="state-panel compact">
             <strong>暂无最近更新</strong>
           </div>
           <div v-else-if="!homeError" class="recent-grid">
-            <article v-for="item in home.recentUpdates" :key="item.bangumiId" class="update-card">
-              <div class="update-cover">
+            <article
+              v-for="(item, index) in recentItems"
+              :key="item.bangumiId"
+              class="poster-card recent-card"
+              :style="{ '--stagger': stagger(index) }"
+            >
+              <div class="poster-frame">
+                <span class="new-tag">NEW</span>
                 <img
                   v-if="hasCover(item)"
                   :src="coverURL(item)"
@@ -257,15 +399,13 @@ function formatAirDate(value: string) {
                   loading="lazy"
                   @error="markCoverFailed(item)"
                 />
-                <div v-else class="cover-fallback small">
+                <div v-else class="cover-fallback">
                   <span>{{ item.title.slice(0, 2) }}</span>
                 </div>
+                <span class="time-pill">{{ formatUpdatedAt(item.updatedAt) }}</span>
               </div>
-              <div class="update-body">
-                <span class="update-chip">{{ updateText(item) }}</span>
-                <h3>{{ item.title }}</h3>
-                <time :datetime="String(item.updatedAt ?? '')">{{ formatUpdatedAt(item.updatedAt) }}</time>
-              </div>
+              <h3 class="poster-title">{{ item.title }}</h3>
+              <p class="poster-sub">{{ updateText(item) }}</p>
             </article>
           </div>
         </section>
@@ -280,11 +420,12 @@ function formatAirDate(value: string) {
   min-width: 1200px;
   min-height: 100vh;
   background:
-    linear-gradient(135deg, rgba(255, 244, 248, 0.88), rgba(255, 255, 255, 0.96) 42%, rgba(236, 253, 255, 0.72)),
-    repeating-linear-gradient(90deg, var(--line-soft) 0 1px, transparent 1px 46px),
+    linear-gradient(135deg, rgba(255, 244, 248, 0.9), rgba(255, 255, 255, 0.96) 42%, rgba(236, 253, 255, 0.78)),
+    repeating-linear-gradient(90deg, rgba(255, 95, 158, 0.08) 0 1px, transparent 1px 52px),
     #ffffff;
 }
 
+/* ============ 顶部导航 ============ */
 .topbar {
   position: sticky;
   top: 0;
@@ -296,7 +437,7 @@ function formatAirDate(value: string) {
   gap: 16px;
   padding: 0 32px;
   background: var(--glass-strong);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-soft);
   backdrop-filter: blur(18px);
   animation: bp-rise 0.5s var(--ease-out) both;
 }
@@ -308,28 +449,11 @@ function formatAirDate(value: string) {
   min-width: 0;
 }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 46px;
-  height: 46px;
-  flex: 0 0 auto;
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 900;
-  letter-spacing: 0.5px;
-  background: linear-gradient(135deg, var(--pink-500), var(--pink-600) 58%, var(--blue-500));
-  box-shadow: 0 12px 28px rgba(255, 95, 158, 0.28);
-  clip-path: polygon(var(--bevel-md));
-}
-
 .brand-text {
   min-width: 0;
 }
 
-.brand-text p,
-.section-kicker,
-.hero-kicker {
+.brand-text p {
   color: var(--ink-400);
   font-size: 11px;
   font-weight: 900;
@@ -347,35 +471,52 @@ function formatAirDate(value: string) {
   white-space: nowrap;
 }
 
+/* 主导航：清透浅粉激活态（替代原纯粉渐变） */
 .main-nav {
   display: grid;
   grid-template-columns: repeat(3, auto);
-  gap: 8px;
+  gap: 4px;
   padding: 5px;
-  background: rgba(255, 255, 255, 0.74);
+  background: rgba(255, 255, 255, 0.7);
   border: 1px solid var(--line-soft);
   clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
 }
 
 .nav-item {
+  position: relative;
   height: 38px;
-  padding: 0 14px;
+  padding: 0 16px;
   color: var(--ink-600);
   font-size: 14px;
-  font-weight: 900;
-  border: 1px solid transparent;
+  font-weight: 800;
+  background: transparent;
   clip-path: polygon(var(--bevel-sm));
-  transition: transform 180ms var(--ease-soft), color 180ms var(--ease-soft), background 180ms var(--ease-soft);
+  transition: color 180ms var(--ease-soft), background 180ms var(--ease-soft);
 }
 
-.nav-item:hover,
+.nav-item:hover {
+  color: var(--pink-600);
+  background: rgba(255, 244, 248, 0.7);
+}
+
 .nav-item.active {
-  color: #ffffff;
-  background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
-  box-shadow: 0 10px 20px rgba(255, 95, 158, 0.2);
-  transform: translateY(-1px);
+  color: var(--pink-600);
 }
 
+/* 激活态底部指示条：横向、无倾斜、纯粉色 */
+.nav-item.active::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 22px;
+  height: 3px;
+  background: var(--pink-500);
+  border-radius: 2px;
+  transform: translateX(-50%);
+}
+
+/* 搜索框 */
 .search-box {
   position: relative;
   display: flex;
@@ -385,7 +526,7 @@ function formatAirDate(value: string) {
   padding: 0 14px 0 42px;
   background: #ffffff;
   border: 1px solid var(--line);
-  box-shadow: 0 12px 28px rgba(85, 119, 217, 0.08);
+  box-shadow: 0 10px 24px rgba(255, 95, 158, 0.08);
   clip-path: polygon(var(--bevel-chip));
 }
 
@@ -394,7 +535,7 @@ function formatAirDate(value: string) {
   left: 16px;
   width: 14px;
   height: 14px;
-  border: 2px solid var(--blue-400);
+  border: 2px solid var(--pink-300);
   border-radius: 50%;
 }
 
@@ -405,7 +546,7 @@ function formatAirDate(value: string) {
   bottom: -4px;
   width: 8px;
   height: 2px;
-  background: var(--blue-400);
+  background: var(--pink-300);
   transform: rotate(45deg);
 }
 
@@ -420,15 +561,16 @@ function formatAirDate(value: string) {
   color: var(--ink-300);
 }
 
+/* 用户区 */
 .user-chip {
   display: flex;
   align-items: center;
   gap: 12px;
   height: 44px;
-  padding: 4px 4px 4px 6px;
+  padding: 4px 6px;
   background: #ffffff;
-  border: 1px solid var(--line);
-  box-shadow: 0 14px 30px rgba(255, 95, 158, 0.1);
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 10px 24px rgba(255, 95, 158, 0.08);
   clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
 }
 
@@ -454,25 +596,45 @@ function formatAirDate(value: string) {
   white-space: nowrap;
 }
 
+/* 退出按钮：玻璃描边风（替代原纯粉渐变），hover 才转实粉 */
 .logout-button {
+  position: relative;
   height: 32px;
   padding: 0 16px;
-  color: #ffffff;
+  overflow: hidden;
+  color: var(--pink-600);
   font-size: 13px;
   font-weight: 900;
   letter-spacing: 1px;
-  background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
-  box-shadow: 0 8px 18px rgba(255, 95, 158, 0.28);
+  background: var(--glass-strong);
+  border: 1px solid var(--pink-200);
   clip-path: polygon(var(--bevel-sm));
-  transition: transform 180ms var(--ease-soft), box-shadow 180ms var(--ease-soft), filter 180ms var(--ease-soft);
+  transition: color 180ms var(--ease-soft), background 180ms var(--ease-soft);
+}
+
+.logout-label {
+  position: relative;
+  z-index: 2;
+}
+
+.logout-sweep {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(110deg, transparent 0 30%, rgba(255, 255, 255, 0.6) 42%, transparent 56%);
+  transform: translateX(-130%);
 }
 
 .logout-button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 12px 22px rgba(255, 95, 158, 0.34);
-  filter: saturate(1.08);
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
 }
 
+.logout-button:hover:not(:disabled) .logout-sweep {
+  animation: bp-sweep 0.9s var(--ease-soft);
+}
+
+/* ============ 舞台 ============ */
 .home-stage {
   position: relative;
   min-height: calc(100vh - 86px);
@@ -484,39 +646,37 @@ function formatAirDate(value: string) {
   inset: 0;
   z-index: 0;
   background:
-    linear-gradient(transparent 95%, rgba(85, 119, 217, 0.12) 95%),
-    linear-gradient(90deg, transparent 95%, rgba(255, 95, 158, 0.1) 95%);
+    linear-gradient(transparent 95%, rgba(85, 119, 217, 0.07) 95%),
+    linear-gradient(90deg, transparent 95%, rgba(255, 95, 158, 0.06) 95%);
   background-size: 72px 72px;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.85), transparent 86%);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent 86%);
   pointer-events: none;
 }
 
-.stage-shape {
+.stage-halo {
   position: absolute;
-  z-index: 1;
+  z-index: 0;
+  border-radius: 50%;
+  filter: blur(80px);
   pointer-events: none;
-  animation: bp-sway 7s ease-in-out infinite alternate;
+  animation: bp-halo 8s ease-in-out infinite;
 }
 
-.shape-ribbon {
-  left: 4%;
-  top: 180px;
-  width: 170px;
-  height: 58px;
-  background: rgba(255, 229, 122, 0.34);
-  border: 1px solid rgba(255, 214, 74, 0.42);
-  clip-path: polygon(0 0, 100% 0, calc(100% - 34px) 100%, 0 100%);
+.halo-a {
+  width: 520px;
+  height: 520px;
+  left: -8%;
+  top: 80px;
+  background: radial-gradient(circle, rgba(255, 159, 189, 0.42), transparent 70%);
 }
 
-.shape-tile {
-  right: 5%;
+.halo-b {
+  width: 560px;
+  height: 560px;
+  right: -6%;
   top: 360px;
-  width: 150px;
-  height: 150px;
-  background: rgba(73, 214, 233, 0.18);
-  border: 1px solid rgba(73, 214, 233, 0.36);
-  clip-path: polygon(18px 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%, 0 18px);
-  animation-delay: 1.4s;
+  background: radial-gradient(circle, rgba(73, 214, 233, 0.32), transparent 70%);
+  animation-delay: 3.5s;
 }
 
 .content-wrap {
@@ -527,152 +687,272 @@ function formatAirDate(value: string) {
   padding: 34px 0 64px;
 }
 
+/* ============ Hero 占位轮播 ============ */
 .hero-carousel {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 0.92fr) minmax(420px, 1fr);
-  min-height: 318px;
+  align-items: center;
+  min-height: 340px;
   overflow: hidden;
-  background:
-    linear-gradient(120deg, rgba(255, 255, 255, 0.92), rgba(255, 244, 248, 0.84) 42%, rgba(236, 253, 255, 0.9)),
-    linear-gradient(90deg, rgba(255, 95, 158, 0.12), rgba(85, 119, 217, 0.1));
-  border: 1px solid var(--line);
-  box-shadow: 0 26px 60px rgba(85, 119, 217, 0.13);
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.92), rgba(255, 244, 248, 0.84) 42%, rgba(236, 253, 255, 0.9));
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 26px 60px rgba(255, 95, 158, 0.12);
   clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 30px, 100% 100%, 30px 100%, 0 calc(100% - 30px));
   animation: bp-rise 0.58s var(--ease-out) 0.04s both;
 }
 
-.hero-carousel::before {
-  content: '';
+.hero-bg {
   position: absolute;
-  inset: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.82);
-  clip-path: polygon(0 0, calc(100% - 22px) 0, 100% 22px, 100% 100%, 22px 100%, 0 calc(100% - 22px));
+  inset: 0;
+  z-index: 0;
   pointer-events: none;
 }
 
-.hero-copy {
+.hero-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(56px);
+  animation: bp-halo 7s ease-in-out infinite;
+}
+
+.glow-pink {
+  width: 360px;
+  height: 360px;
+  left: 8%;
+  top: -60px;
+  background: radial-gradient(circle, rgba(255, 127, 166, 0.5), transparent 70%);
+}
+
+.glow-cyan {
+  width: 320px;
+  height: 320px;
+  right: 10%;
+  top: 20px;
+  background: radial-gradient(circle, rgba(73, 214, 233, 0.4), transparent 70%);
+  animation-delay: 2.4s;
+}
+
+.glow-yellow {
+  width: 280px;
+  height: 280px;
+  right: 32%;
+  bottom: -80px;
+  background: radial-gradient(circle, rgba(255, 229, 122, 0.42), transparent 70%);
+  animation-delay: 4.2s;
+}
+
+.hero-plate {
+  position: absolute;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  box-shadow: 0 18px 46px rgba(85, 119, 217, 0.1);
+  animation: bp-sway 6s ease-in-out infinite alternate;
+}
+
+.plate-a {
+  right: 70px;
+  top: 40px;
+  width: 240px;
+  height: 150px;
+  background: linear-gradient(135deg, rgba(255, 127, 166, 0.3), rgba(255, 255, 255, 0.5));
+  clip-path: polygon(0 0, 100% 0, 84% 100%, 0 100%);
+}
+
+.plate-b {
+  right: 200px;
+  bottom: 50px;
+  width: 180px;
+  height: 110px;
+  background: linear-gradient(135deg, rgba(73, 214, 233, 0.28), rgba(255, 255, 255, 0.5));
+  clip-path: polygon(14% 0, 100% 0, 100% 80%, 86% 100%, 0 100%, 0 16%);
+  animation-delay: 1.2s;
+}
+
+.plate-c {
+  right: 40px;
+  bottom: 120px;
+  width: 90px;
+  height: 90px;
+  background: linear-gradient(135deg, rgba(255, 229, 122, 0.4), rgba(255, 255, 255, 0.5));
+  clip-path: polygon(var(--bevel-diamond));
+  animation-delay: 2s;
+}
+
+.hero-content {
   position: relative;
-  z-index: 2;
-  align-self: center;
-  padding: 48px 0 48px 56px;
+  z-index: 3;
+  max-width: 620px;
+  padding: 48px 48px 48px 56px;
+  animation: bp-hero-in 0.55s var(--ease-out) both;
+}
+
+.hero-index-tag {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding: 6px 12px;
+  color: var(--ink-900);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  background: var(--yellow-300);
+  box-shadow: 0 8px 18px rgba(255, 229, 122, 0.4);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 12px) 100%, 0 100%);
+  transform: rotate(-3deg);
+}
+
+.hero-index-tag i {
+  font-size: 15px;
+  font-style: normal;
+}
+
+.hero-index-tag span {
+  color: var(--ink-600);
 }
 
 .hero-kicker {
-  display: inline-flex;
-  padding: 7px 14px;
   color: var(--pink-600);
-  background: rgba(255, 255, 255, 0.74);
-  border: 1px solid var(--pink-100);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 2px;
+}
+
+.hero-title {
+  margin-top: 12px;
+  max-width: 560px;
+  min-height: 100px; /* 固定两行高度，避免轮播切换时卡片跳动 */
+  color: var(--ink-900);
+  font-size: 42px;
+  font-weight: 900;
+  line-height: 1.19;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  color: var(--ink-700);
+  font-size: 13px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 6px 16px rgba(255, 95, 158, 0.08);
+  backdrop-filter: blur(8px);
   clip-path: polygon(var(--bevel-tag));
 }
 
-.hero-copy h1 {
-  max-width: 640px;
-  margin-top: 22px;
-  color: var(--ink-900);
-  font-size: 44px;
-  font-weight: 900;
-  letter-spacing: 0;
-  line-height: 1.1;
+.meta-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pink-500);
 }
 
-.hero-copy p {
-  max-width: 520px;
-  margin-top: 16px;
+.meta-star {
+  color: var(--yellow-400);
+  font-size: 14px;
+  font-style: normal;
+}
+
+.hero-summary {
+  margin-top: 18px;
+  max-width: 540px;
   color: var(--ink-600);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.75;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.8;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 
-.hero-art {
-  position: relative;
-  min-height: 318px;
-}
-
-.art-panel {
-  position: absolute;
+.hero-empty .hero-summary {
   display: block;
-  border: 1px solid rgba(255, 255, 255, 0.78);
-  box-shadow: 0 18px 46px rgba(85, 119, 217, 0.12);
-  animation: bp-float 4.6s ease-in-out infinite alternate;
+  -webkit-line-clamp: unset;
 }
 
-.panel-a {
-  right: 108px;
-  top: 38px;
-  width: 270px;
-  height: 188px;
-  background: linear-gradient(135deg, rgba(255, 127, 166, 0.34), rgba(255, 255, 255, 0.88));
-  clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 24px 100%, 0 calc(100% - 24px));
-}
-
-.panel-b {
-  right: 34px;
-  bottom: 46px;
-  width: 250px;
-  height: 140px;
-  background: linear-gradient(135deg, rgba(73, 214, 233, 0.32), rgba(255, 255, 255, 0.9));
-  clip-path: polygon(26px 0, 100% 0, 100% calc(100% - 26px), calc(100% - 26px) 100%, 0 100%, 0 26px);
-  animation-delay: 0.6s;
-}
-
-.panel-c {
-  right: 360px;
-  bottom: 54px;
-  width: 120px;
-  height: 120px;
-  background: linear-gradient(135deg, rgba(255, 229, 122, 0.42), rgba(255, 255, 255, 0.86));
-  clip-path: polygon(var(--bevel-diamond));
-  animation-delay: 1s;
-}
-
-.art-line {
+/* 切换箭头 */
+.hero-arrow {
   position: absolute;
-  right: 74px;
-  display: block;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--pink-300), var(--cyan-400), transparent);
+  top: 50%;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: var(--pink-600);
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 10px 22px rgba(255, 95, 158, 0.12);
+  backdrop-filter: blur(8px);
+  clip-path: polygon(var(--bevel-sm));
+  transform: translateY(-50%);
+  padding-top: 2px; /* 字符 ‹› 视觉补偿，抵消 baseline 偏下 */
+  transition: background 170ms var(--ease-soft), color 170ms var(--ease-soft), transform 170ms var(--ease-soft);
 }
 
-.line-a {
-  top: 86px;
-  width: 420px;
+.arrow-prev {
+  left: 14px;
 }
 
-.line-b {
-  top: 238px;
-  width: 320px;
+.arrow-next {
+  right: 14px;
 }
 
+.hero-arrow:hover {
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
+  transform: translateY(-50%) scale(1.06);
+}
+
+/* 指示器 */
 .hero-dots {
   position: absolute;
   left: 56px;
-  bottom: 34px;
+  bottom: 30px;
+  z-index: 5;
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 
-.dot {
-  width: 28px;
+.hero-dot {
+  width: 26px;
   height: 4px;
-  background: rgba(139, 149, 173, 0.25);
+  background: rgba(139, 149, 173, 0.3);
   clip-path: polygon(var(--bevel-sm));
+  transition: width 320ms var(--ease-bounce), background 320ms var(--ease-soft);
 }
 
-.dot.active {
+.hero-dot.active {
   width: 48px;
   background: linear-gradient(90deg, var(--pink-500), var(--cyan-400));
 }
 
+/* ============ 区块标题 ============ */
 .anime-section {
-  margin-top: 38px;
+  margin-top: 42px;
   animation: bp-rise 0.58s var(--ease-out) 0.12s both;
 }
 
 .recent-section {
-  margin-top: 44px;
+  margin-top: 48px;
 }
 
 .section-head {
@@ -680,15 +960,33 @@ function formatAirDate(value: string) {
   align-items: end;
   justify-content: space-between;
   gap: 20px;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 
-.section-head h2 {
+.section-title {
+  position: relative;
+}
+
+.section-kicker {
+  color: var(--pink-500);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 2px;
+}
+
+.section-title h2 {
   margin-top: 4px;
   color: var(--ink-900);
   font-size: 28px;
   font-weight: 900;
-  letter-spacing: 0;
+}
+
+.section-bar {
+  display: block;
+  margin-top: 10px;
+  width: 56px;
+  height: 4px;
+  background: linear-gradient(90deg, var(--pink-500), var(--cyan-400));
 }
 
 .section-controls {
@@ -715,15 +1013,16 @@ function formatAirDate(value: string) {
   font-weight: 900;
   line-height: 1;
   background: #ffffff;
-  border: 1px solid var(--line);
-  box-shadow: 0 10px 22px rgba(255, 95, 158, 0.12);
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 8px 20px rgba(255, 95, 158, 0.1);
   clip-path: polygon(var(--bevel-sm));
+  padding-top: 2px; /* 字符 ‹› 视觉补偿，抵消 baseline 偏下 */
   transition: transform 170ms var(--ease-soft), background 170ms var(--ease-soft), color 170ms var(--ease-soft);
 }
 
 .arrow-button:hover:not(:disabled) {
   color: #ffffff;
-  background: linear-gradient(135deg, var(--pink-500), var(--blue-500));
+  background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
   transform: translateY(-2px);
 }
 
@@ -733,7 +1032,14 @@ function formatAirDate(value: string) {
   filter: grayscale(0.3);
 }
 
+/* ============ 海报网格 ============ */
 .poster-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.recent-grid {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 18px;
@@ -741,16 +1047,17 @@ function formatAirDate(value: string) {
 
 .poster-card {
   min-width: 0;
-  animation: bp-rise 0.4s var(--ease-out) both;
+  animation: bp-rise 0.42s var(--ease-out) both;
+  animation-delay: var(--stagger, 0s);
 }
 
 .poster-frame {
   position: relative;
   aspect-ratio: 2 / 3;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 244, 248, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.82);
-  box-shadow: 0 18px 36px rgba(85, 119, 217, 0.12);
+  box-shadow: 0 14px 30px rgba(85, 119, 217, 0.1);
   clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
   transition: transform 220ms var(--ease-soft), box-shadow 220ms var(--ease-soft), filter 220ms var(--ease-soft);
 }
@@ -767,7 +1074,7 @@ function formatAirDate(value: string) {
 
 .poster-card:hover .poster-frame {
   transform: translateY(-6px);
-  box-shadow: 0 28px 54px rgba(255, 95, 158, 0.18);
+  box-shadow: 0 26px 50px rgba(255, 95, 158, 0.2);
   filter: saturate(1.08);
 }
 
@@ -775,34 +1082,41 @@ function formatAirDate(value: string) {
   transform: translateX(120%);
 }
 
-.poster-frame img,
-.update-cover img {
+.poster-frame img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.rating-badge {
+/* 热播海报左上角评分贴片（仿 NEW 样式，粉色背景） */
+.score-tag {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  min-width: 44px;
-  padding: 4px 8px;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  min-width: 48px;
+  height: 24px;
+  padding: 0 10px;
   color: #ffffff;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 900;
-  text-align: center;
-  background: linear-gradient(135deg, var(--yellow-400), var(--pink-500));
-  box-shadow: 0 8px 18px rgba(238, 63, 134, 0.25);
-  clip-path: polygon(var(--bevel-sm));
+  letter-spacing: 1px;
+  background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
+  box-shadow: 0 8px 18px rgba(238, 63, 134, 0.4);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  transform: rotate(-3deg);
+  animation: bp-tag-in 0.5s var(--ease-bounce) 0.3s both;
 }
 
+/* 热播海报底部「更新至」信息条 */
 .episode-shadow {
   position: absolute;
   right: 0;
   bottom: 0;
   left: 0;
-  min-height: 48px;
+  min-height: 46px;
   display: flex;
   align-items: end;
   padding: 18px 10px 9px;
@@ -814,7 +1128,7 @@ function formatAirDate(value: string) {
   text-shadow: 0 1px 6px rgba(32, 40, 62, 0.6);
 }
 
-.poster-card h3 {
+.poster-title {
   min-height: 42px;
   margin-top: 11px;
   overflow: hidden;
@@ -827,13 +1141,14 @@ function formatAirDate(value: string) {
   -webkit-line-clamp: 2;
 }
 
-.poster-card p {
+.poster-sub {
   margin-top: 4px;
   color: var(--ink-400);
   font-size: 12px;
   font-weight: 800;
 }
 
+/* 封面兜底 */
 .cover-fallback {
   display: grid;
   place-items: center;
@@ -849,82 +1164,48 @@ function formatAirDate(value: string) {
     repeating-linear-gradient(135deg, rgba(255, 95, 158, 0.12) 0 2px, transparent 2px 12px);
 }
 
-.cover-fallback.small {
-  font-size: 18px;
-}
-
-.recent-grid {
+/* ============ 最近更新专属：NEW 贴片 + 时间玻璃药丸 ============ */
+.new-tag {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.update-card {
-  display: grid;
-  grid-template-columns: 102px minmax(0, 1fr);
-  min-height: 146px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid var(--line-soft);
-  box-shadow: 0 18px 38px rgba(85, 119, 217, 0.1);
-  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
-  transition: transform 220ms var(--ease-soft), box-shadow 220ms var(--ease-soft), border-color 220ms var(--ease-soft);
-}
-
-.update-card:hover {
-  border-color: var(--line);
-  box-shadow: 0 26px 50px rgba(255, 95, 158, 0.16);
-  transform: translateY(-4px);
-}
-
-.update-cover {
-  position: relative;
-  min-height: 146px;
-  overflow: hidden;
-  background: var(--glass-pink);
-}
-
-.update-body {
-  min-width: 0;
-  padding: 18px 18px 16px;
-}
-
-.update-chip {
-  display: inline-flex;
-  max-width: 100%;
-  padding: 5px 10px;
-  overflow: hidden;
-  color: var(--pink-600);
-  font-size: 12px;
-  font-weight: 900;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: var(--pink-50);
-  border: 1px solid var(--pink-100);
-  clip-path: polygon(var(--bevel-tag));
-}
-
-.update-body h3 {
-  min-height: 44px;
-  margin-top: 12px;
-  overflow: hidden;
+  place-items: center;
+  min-width: 48px;
+  height: 24px;
+  padding: 0 10px;
   color: var(--ink-900);
-  font-size: 15px;
-  font-weight: 900;
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.update-body time {
-  display: block;
-  margin-top: 12px;
-  color: var(--ink-400);
   font-size: 12px;
   font-weight: 900;
+  letter-spacing: 1px;
+  background: var(--yellow-300);
+  box-shadow: 0 8px 18px rgba(255, 229, 122, 0.45);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  transform: rotate(-3deg);
+  animation: bp-tag-in 0.5s var(--ease-bounce) 0.3s both;
 }
 
+.time-pill {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+  background: rgba(32, 40, 62, 0.62);
+  box-shadow: 0 6px 16px rgba(32, 40, 62, 0.28);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  clip-path: polygon(var(--bevel-sm));
+  transform: translateX(-50%);
+}
+
+/* ============ 状态面板（错误 / 空） ============ */
 .state-panel {
   display: grid;
   place-items: center;
@@ -937,7 +1218,7 @@ function formatAirDate(value: string) {
 }
 
 .state-panel.compact {
-  min-height: 146px;
+  min-height: 180px;
 }
 
 .state-panel strong {
@@ -952,22 +1233,28 @@ function formatAirDate(value: string) {
   color: #ffffff;
   font-size: 13px;
   font-weight: 900;
-  background: linear-gradient(135deg, var(--pink-500), var(--blue-500));
+  background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
   clip-path: polygon(var(--bevel-sm));
 }
 
+/* ============ 骨架屏 ============ */
 .skeleton-block {
   position: relative;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.68);
+  background: rgba(255, 244, 248, 0.7);
 }
 
 .skeleton-block::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.74) 45%, transparent 70%);
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.7) 45%, transparent 70%);
   animation: bp-skeleton 1.2s ease-in-out infinite;
+}
+
+.skeleton-poster {
+  aspect-ratio: 2 / 3;
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
 }
 
 .skeleton-title {
@@ -975,17 +1262,6 @@ function formatAirDate(value: string) {
   height: 18px;
   margin-top: 14px;
   clip-path: polygon(var(--bevel-sm));
-}
-
-.skeleton-line {
-  width: 84%;
-  height: 18px;
-  margin-top: 16px;
-  clip-path: polygon(var(--bevel-sm));
-}
-
-.skeleton-line.short {
-  width: 52%;
 }
 
 @keyframes bp-skeleton {

@@ -84,7 +84,6 @@ void APIError
     <!-- ===== 左侧：表单区 ===== -->
     <section class="form-zone" aria-label="账号登录和注册">
       <header class="brand-row">
-        <div class="brand-mark">BP</div>
         <div class="brand-text">
           <p>VIEWER PORTAL</p>
           <strong>{{ siteName }}</strong>
@@ -272,20 +271,6 @@ void APIError
   align-items: center;
   gap: 14px;
   animation: bp-slide-left 0.5s var(--ease-out) both;
-}
-
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 50px;
-  height: 50px;
-  color: #ffffff;
-  font-weight: 900;
-  font-size: 15px;
-  letter-spacing: 0.5px;
-  background: linear-gradient(135deg, var(--pink-500), var(--pink-600) 60%, var(--blue-500));
-  box-shadow: 0 14px 30px rgba(255, 95, 158, 0.32);
-  clip-path: polygon(var(--bevel-md));
 }
 
 .brand-text p {
