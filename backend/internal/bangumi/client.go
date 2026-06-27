@@ -1,6 +1,7 @@
 package bangumi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -107,6 +108,44 @@ func (c *apiClient) getJSON(ctx context.Context, path string, target any) error 
 		return err
 	}
 	c.logger.Info("API 抓取成功", "source", "bangumi", "endpoint", path)
+	return nil
+}
+
+func (c *apiClient) postJSON(ctx context.Context, path string, payload, target any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	c.logger.Info("API 抓取中", "source", "bangumi", "endpoint", path, "method", http.MethodPost)
+	if err := c.waitForAPISlot(ctx); err != nil {
+		c.logger.Error("API 抓取失败", "source", "bangumi", "endpoint", path, "error", err)
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		c.logger.Error("API 抓取失败", "source", "bangumi", "endpoint", path, "error", err)
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
+	response, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Error("API 抓取失败", "source", "bangumi", "endpoint", path, "error", err)
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
+		err := fmt.Errorf("HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		c.logger.Error("API 抓取失败", "source", "bangumi", "endpoint", path, "error", err)
+		return err
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, jsonResponseLimit)).Decode(target); err != nil {
+		c.logger.Error("API 抓取失败", "source", "bangumi", "endpoint", path, "error", err)
+		return err
+	}
+	c.logger.Info("API 抓取成功", "source", "bangumi", "endpoint", path, "method", http.MethodPost)
 	return nil
 }
 

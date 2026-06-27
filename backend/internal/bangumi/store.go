@@ -12,12 +12,86 @@ import (
 
 const stageStatusCompleted = "completed"
 
+const (
+	maxCustomSearchTags      = 50
+	maxCustomSearchTagLength = 80
+)
+
 func isProcessed(ctx context.Context, db *sql.DB, bangumiID int64) (bool, error) {
 	var exists bool
 	err := db.QueryRowContext(ctx,
 		"SELECT EXISTS(SELECT 1 FROM anime_metadata WHERE bangumi_id = ?)", bangumiID,
 	).Scan(&exists)
 	return exists, err
+}
+
+func customSearchSettings(ctx context.Context, db *sql.DB) (CustomSearchSettings, error) {
+	var rawTags string
+	var updatedAt int64
+	err := db.QueryRowContext(ctx, `
+SELECT tags_json, updated_at
+FROM bangumi_custom_search_settings
+WHERE id = 1`).Scan(&rawTags, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CustomSearchSettings{Tags: []string{}}, nil
+	}
+	if err != nil {
+		return CustomSearchSettings{}, err
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(rawTags), &tags); err != nil {
+		tags = []string{}
+	}
+	tags, err = normalizeCustomSearchTags(tags)
+	if err != nil {
+		return CustomSearchSettings{}, err
+	}
+	return CustomSearchSettings{Tags: tags, UpdatedAt: updatedAt}, nil
+}
+
+func updateCustomSearchSettings(ctx context.Context, db *sql.DB, tags []string, now time.Time) (CustomSearchSettings, error) {
+	normalized, err := normalizeCustomSearchTags(tags)
+	if err != nil {
+		return CustomSearchSettings{}, err
+	}
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return CustomSearchSettings{}, err
+	}
+	timestamp := now.UTC().Unix()
+	_, err = db.ExecContext(ctx, `
+INSERT INTO bangumi_custom_search_settings(id, tags_json, updated_at)
+VALUES (1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    tags_json = excluded.tags_json,
+    updated_at = excluded.updated_at`, string(payload), timestamp)
+	if err != nil {
+		return CustomSearchSettings{}, err
+	}
+	return CustomSearchSettings{Tags: normalized, UpdatedAt: timestamp}, nil
+}
+
+func normalizeCustomSearchTags(tags []string) ([]string, error) {
+	result := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if len([]rune(tag)) > maxCustomSearchTagLength {
+			return nil, ErrInvalidSearchTags
+		}
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		result = append(result, tag)
+	}
+	if len(result) > maxCustomSearchTags {
+		return nil, ErrInvalidSearchTags
+	}
+	return result, nil
 }
 
 func activeSubjectExists(ctx context.Context, db *sql.DB, bangumiID int64) (bool, error) {

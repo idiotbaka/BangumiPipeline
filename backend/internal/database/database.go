@@ -249,6 +249,15 @@ CREATE TABLE IF NOT EXISTS anime_episodes (
 
 CREATE INDEX IF NOT EXISTS idx_anime_episodes_bangumi_sort ON anime_episodes(bangumi_id, type, sort_number, episode_id);
 
+CREATE TABLE IF NOT EXISTS bangumi_custom_search_settings (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    tags_json  TEXT NOT NULL DEFAULT '[]',
+    updated_at INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO bangumi_custom_search_settings(id, tags_json, updated_at)
+VALUES (1, '[]', unixepoch());
+
 CREATE TABLE IF NOT EXISTS media_storage_settings (
     id               INTEGER PRIMARY KEY CHECK (id = 1),
     extra_roots_json TEXT NOT NULL DEFAULT '[]',
@@ -784,6 +793,18 @@ INSERT OR IGNORE INTO scheduled_tasks(
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (16, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 16 migration: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS bangumi_custom_search_settings (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    tags_json  TEXT NOT NULL DEFAULT '[]',
+    updated_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO bangumi_custom_search_settings(id, tags_json, updated_at)
+VALUES (1, '[]', unixepoch());
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (17, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 17 migration: %w", err)
 	}
 	return nil
 }

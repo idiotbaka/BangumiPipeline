@@ -71,6 +71,8 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("POST /api/settings/llm/test", api.testLLMSettings)
 	mux.HandleFunc("GET /api/settings/media-storage", api.getMediaStorageSettings)
 	mux.HandleFunc("PUT /api/settings/media-storage", api.updateMediaStorageSettings)
+	mux.HandleFunc("GET /api/settings/bangumi-custom-search", api.getBangumiCustomSearchSettings)
+	mux.HandleFunc("PUT /api/settings/bangumi-custom-search", api.updateBangumiCustomSearchSettings)
 	mux.HandleFunc("GET /api/system-logs", api.listSystemLogs)
 	mux.HandleFunc("GET /api/system-logs/stream", api.streamSystemLogs)
 	mux.HandleFunc("GET /api/anime", api.listAnime)
@@ -214,6 +216,41 @@ func (a *AdminAPI) updateMediaStorageSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": a.mediaStorageSettingsResponse(settings)})
+}
+
+func (a *AdminAPI) getBangumiCustomSearchSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	settings, err := a.syncer.CustomSearchSettings(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) updateBangumiCustomSearchSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	var input struct {
+		Tags []string `json:"tags"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	settings, err := a.syncer.UpdateCustomSearchSettings(r.Context(), input.Tags)
+	if err != nil {
+		if errors.Is(err, bangumi.ErrInvalidSearchTags) {
+			writeError(w, http.StatusBadRequest, "invalid_bangumi_search_tags", "自定义抓取标签最多 50 个，单个标签不超过 80 个字符")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
 }
 
 func (a *AdminAPI) mediaStorageSettingsResponse(settings system.MediaStorageSettings) mediaStorageSettingsResponse {

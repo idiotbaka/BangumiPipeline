@@ -45,6 +45,11 @@ export interface MediaStorageSettings {
   updatedAt: number
 }
 
+export interface BangumiCustomSearchSettings {
+  tags: string[]
+  updatedAt: number
+}
+
 export interface LLMSettings {
   baseUrl: string
   apiKey: string
@@ -468,6 +473,13 @@ export const api = {
     request<{ settings: MediaStorageSettings }>('/api/settings/media-storage', {
       method: 'PUT',
       body: JSON.stringify({ extraRoots }),
+    }),
+  bangumiCustomSearchSettings: () =>
+    request<{ settings: BangumiCustomSearchSettings }>('/api/settings/bangumi-custom-search'),
+  updateBangumiCustomSearchSettings: (tags: string[]) =>
+    request<{ settings: BangumiCustomSearchSettings }>('/api/settings/bangumi-custom-search', {
+      method: 'PUT',
+      body: JSON.stringify({ tags }),
     }),
   llmSettings: () => request<{ settings: LLMSettings }>('/api/settings/llm'),
   updateLLMSettings: (settings: Omit<LLMSettings, 'updatedAt'>) =>

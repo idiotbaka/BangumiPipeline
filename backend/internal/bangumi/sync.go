@@ -15,7 +15,10 @@ import (
 	"bangumipipeline.local/server/internal/system"
 )
 
-const maxCharactersPerAnime = 10
+const (
+	maxCharactersPerAnime = 10
+	subjectSearchPageSize = 20
+)
 
 type SettingsProvider interface {
 	GetNetworkSettings(context.Context) (system.NetworkSettings, error)
@@ -75,6 +78,21 @@ func (s *Syncer) Execute(ctx context.Context) error {
 	}
 	inserted, skipped, discoveryFailures := s.discoverCalendarAnime(ctx, client, calendar)
 	failures = append(failures, discoveryFailures...)
+	customInserted, customSkipped, customFetched := 0, 0, 0
+	customSettings, err := s.CustomSearchSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("读取 Bangumi 自定义抓取设置: %w", err)
+	}
+	if len(customSettings.Tags) > 0 {
+		subjects, err := s.fetchCustomSearchSubjects(ctx, client, customSettings.Tags)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("自定义标签搜索失败: %v", err))
+		} else {
+			customFetched = len(subjects)
+			customInserted, customSkipped, discoveryFailures = s.discoverSearchAnime(ctx, client, subjects)
+			failures = append(failures, discoveryFailures...)
+		}
+	}
 	incomplete, err := listIncompleteSubjects(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("查询待补全番剧: %w", err)
@@ -106,6 +124,8 @@ func (s *Syncer) Execute(ctx context.Context) error {
 
 	s.logger.Info("Bangumi metadata synchronized",
 		"base_inserted", inserted, "base_skipped", skipped,
+		"custom_tags", len(customSettings.Tags), "custom_fetched", customFetched,
+		"custom_inserted", customInserted, "custom_skipped", customSkipped,
 		"details_completed", detailCompleted, "characters_completed", characterCompleted,
 		"episodes_completed", episodeCompleted,
 		"failed", len(failures),
@@ -118,6 +138,14 @@ func (s *Syncer) Execute(ctx context.Context) error {
 		return fmt.Errorf("同步存在 %d 个错误：%s", len(failures), strings.Join(shown, "；"))
 	}
 	return nil
+}
+
+func (s *Syncer) CustomSearchSettings(ctx context.Context) (CustomSearchSettings, error) {
+	return customSearchSettings(ctx, s.db)
+}
+
+func (s *Syncer) UpdateCustomSearchSettings(ctx context.Context, tags []string) (CustomSearchSettings, error) {
+	return updateCustomSearchSettings(ctx, s.db, tags, s.now())
 }
 
 func (s *Syncer) AddSubject(ctx context.Context, bangumiID int64) error {
@@ -228,6 +256,77 @@ func (s *Syncer) discoverCalendarAnime(ctx context.Context, client *apiClient, c
 			if downloadErr != nil {
 				failures = append(failures, fmt.Sprintf("Bangumi #%d 封面下载失败: %v", item.ID, downloadErr))
 			}
+		}
+	}
+	return inserted, skipped, failures
+}
+
+func (s *Syncer) fetchCustomSearchSubjects(ctx context.Context, client *apiClient, tags []string) ([]subjectDetail, error) {
+	subjects := make([]subjectDetail, 0)
+	seen := make(map[int64]struct{})
+	offset := 0
+	total := -1
+	for {
+		var response subjectSearchResponse
+		payload := subjectSearchRequest{
+			Filter: subjectSearchFilter{Type: []int{2}, Tag: tags},
+		}
+		path := fmt.Sprintf("/v0/search/subjects?limit=%d&offset=%d", subjectSearchPageSize, offset)
+		if err := client.postJSON(ctx, path, payload, &response); err != nil {
+			return nil, err
+		}
+		if response.Total >= 0 {
+			total = response.Total
+		}
+		for _, subject := range response.Data {
+			if subject.ID == 0 {
+				continue
+			}
+			if _, exists := seen[subject.ID]; exists {
+				continue
+			}
+			seen[subject.ID] = struct{}{}
+			subjects = append(subjects, subject)
+		}
+		if len(response.Data) == 0 {
+			break
+		}
+		nextOffset := offset + subjectSearchPageSize
+		if nextOffset <= offset {
+			break
+		}
+		offset = nextOffset
+		if total >= 0 && offset >= total {
+			break
+		}
+	}
+	return subjects, nil
+}
+
+func (s *Syncer) discoverSearchAnime(ctx context.Context, client *apiClient, subjects []subjectDetail) (int, int, []string) {
+	inserted, skipped := 0, 0
+	failures := make([]string, 0)
+	for _, subject := range subjects {
+		if subject.Type != 2 {
+			continue
+		}
+		processed, err := isProcessed(ctx, s.db, subject.ID)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("Bangumi #%d 基础数据查询失败: %v", subject.ID, err))
+			continue
+		}
+		if processed {
+			skipped++
+			continue
+		}
+		cover, downloadErr := client.downloadImage(ctx, subject.Images.Large, s.config.CoverDir, strconv.FormatInt(subject.ID, 10))
+		if err := upsertBaseMetadataFromDetail(ctx, s.db, subject.ID, subject, cover, downloadErr, s.now()); err != nil {
+			failures = append(failures, fmt.Sprintf("Bangumi #%d 自定义搜索基础数据入库失败: %v", subject.ID, err))
+			continue
+		}
+		inserted++
+		if downloadErr != nil {
+			failures = append(failures, fmt.Sprintf("Bangumi #%d 封面下载失败: %v", subject.ID, downloadErr))
 		}
 	}
 	return inserted, skipped, failures

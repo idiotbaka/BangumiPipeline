@@ -15,6 +15,7 @@ var (
 	ErrAnimeNotFound      = errors.New("anime not found")
 	ErrAnimeAlreadyExists = errors.New("anime already exists")
 	ErrInvalidSubjectType = errors.New("invalid subject type")
+	ErrInvalidSearchTags  = errors.New("invalid bangumi search tags")
 )
 
 type Catalog struct {

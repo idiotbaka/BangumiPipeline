@@ -160,6 +160,119 @@ SELECT ep_number, sort_number, type FROM anime_episodes WHERE bangumi_id = 101 A
 	}
 }
 
+func TestCustomSearchTagsDiscoverSubjects(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openDatabase(t, ctx)
+	settings := system.NewService(db)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	var searchRequests, detailRequests, episodeRequests atomic.Int32
+	seenOffsets := make(map[string]bool)
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/calendar":
+			writeJSON(w, `[]`)
+		case "/v0/search/subjects":
+			searchRequests.Add(1)
+			if r.Method != http.MethodPost {
+				t.Errorf("unexpected search method: %s", r.Method)
+			}
+			if got := r.URL.Query().Get("limit"); got != "20" {
+				t.Errorf("unexpected search limit: %q", got)
+			}
+			offset := r.URL.Query().Get("offset")
+			if offset != "0" && offset != "20" {
+				t.Errorf("unexpected search offset: %q", offset)
+			}
+			seenOffsets[offset] = true
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "2026年7月") || !strings.Contains(string(body), `"type":[2]`) {
+				t.Errorf("unexpected search body: %s", string(body))
+			}
+			if strings.Contains(string(body), "limit") || strings.Contains(string(body), "offset") {
+				t.Errorf("search pagination should use query params, got body: %s", string(body))
+			}
+			subjectID := int64(808)
+			subjectNameCN := "搜索动画"
+			if offset == "20" {
+				subjectID = 809
+				subjectNameCN = "搜索动画二"
+			}
+			writeJSON(w, fmt.Sprintf(`{"data":[{
+                    "date":"2026-07-05","platform":"TV","images":{"large":%q},
+                    "summary":"搜索简介","name":"検索アニメ","name_cn":%q,
+                    "tags":[{"name":"2026年7月","count":1,"total_cont":1}],
+                    "infobox":[],"rating":{},"collection":{},"id":%d,"eps":1,
+                    "total_episodes":1,"meta_tags":["TV"],"volumes":0,
+                    "series":false,"locked":false,"nsfw":false,"type":2
+                }],"total":21,"limit":20,"offset":%s}`, server.URL+"/custom-cover.jpg", subjectNameCN, subjectID, offset))
+		case "/v0/subjects/808", "/v0/subjects/809":
+			detailRequests.Add(1)
+			subjectID := strings.TrimPrefix(r.URL.Path, "/v0/subjects/")
+			subjectNameCN := "搜索动画"
+			if subjectID == "809" {
+				subjectNameCN = "搜索动画二"
+			}
+			writeJSON(w, fmt.Sprintf(`{
+                    "date":"2026-07-05","platform":"TV","summary":"详情简介","name":"検索アニメ","name_cn":%q,
+                    "tags":[{"name":"2026年7月","count":1,"total_cont":1}],
+                    "infobox":[],"rating":{},"collection":{},"id":%s,"eps":1,
+                    "total_episodes":1,"meta_tags":["TV"],"volumes":0,
+                    "series":false,"locked":false,"nsfw":false,"type":2
+                }`, subjectNameCN, subjectID))
+		case "/v0/subjects/808/characters", "/v0/subjects/809/characters":
+			writeJSON(w, `[]`)
+		case "/v0/episodes":
+			episodeRequests.Add(1)
+			if r.URL.Query().Get("subject_id") == "809" {
+				writeEpisodes(w, 809, 1, false)
+				return
+			}
+			writeEpisodes(w, 808, 1, false)
+		case "/custom-cover.jpg":
+			writeJPEG(w)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	syncer := newTestSyncer(db, settings, logger, server.URL, "test/custom-search", filepath.Join(t.TempDir(), "covers"))
+	customSettings, err := syncer.UpdateCustomSearchSettings(ctx, []string{"2026年7月", "2026年7月", " "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(customSettings.Tags) != 1 || customSettings.Tags[0] != "2026年7月" {
+		t.Fatalf("unexpected custom tags: %+v", customSettings.Tags)
+	}
+	if err := syncer.Execute(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if searchRequests.Load() != 2 || detailRequests.Load() != 2 || episodeRequests.Load() != 2 {
+		t.Fatalf("unexpected requests: search=%d detail=%d episodes=%d",
+			searchRequests.Load(), detailRequests.Load(), episodeRequests.Load())
+	}
+	if !seenOffsets["0"] || !seenOffsets["20"] {
+		t.Fatalf("expected both offset 0 and 20, got %+v", seenOffsets)
+	}
+
+	var name, summary, detailStatus, imagePath string
+	if err := db.QueryRowContext(ctx, `
+SELECT name_cn, summary, detail_status, image_local_path
+FROM anime_metadata
+WHERE bangumi_id = 808`).Scan(&name, &summary, &detailStatus, &imagePath); err != nil {
+		t.Fatal(err)
+	}
+	if name != "搜索动画" || summary != "详情简介" || detailStatus != "completed" {
+		t.Fatalf("unexpected custom search subject: name=%q summary=%q detail=%q", name, summary, detailStatus)
+	}
+	assertFileExists(t, imagePath)
+	assertCount(t, db, "SELECT COUNT(*) FROM anime_metadata WHERE bangumi_id IN (808, 809)", 2)
+	assertCount(t, db, "SELECT COUNT(*) FROM anime_episodes WHERE bangumi_id IN (808, 809)", 2)
+}
+
 func TestActorsAreDeduplicatedAcrossSubjects(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

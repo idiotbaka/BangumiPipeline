@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Calendar, VideoPlay } from '@element-plus/icons-vue'
+import { Calendar, Setting, VideoPlay } from '@element-plus/icons-vue'
 import { api, type ScheduledTask } from '../api'
+
+const bangumiMetadataTaskKey = 'bangumi-season-metadata'
 
 const tasks = ref<ScheduledTask[]>([])
 const loading = ref(true)
 const updatingKey = ref('')
 const runningKey = ref('')
 const intervalDrafts = reactive<Record<string, number>>({})
+const customSearchVisible = ref(false)
+const customSearchLoading = ref(false)
+const customSearchSaving = ref(false)
+const customSearchTags = ref<string[]>([])
 let pollingTimer: ReturnType<typeof setInterval> | undefined
 
 async function loadTasks(showLoading = true) {
@@ -71,6 +77,33 @@ async function runNow(task: ScheduledTask) {
   } finally {
     runningKey.value = ''
     window.setTimeout(() => loadTasks(false), 500)
+  }
+}
+
+async function openCustomSearchSettings() {
+  customSearchVisible.value = true
+  customSearchLoading.value = true
+  try {
+    const { settings } = await api.bangumiCustomSearchSettings()
+    customSearchTags.value = [...settings.tags]
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载自定义抓取设置失败')
+  } finally {
+    customSearchLoading.value = false
+  }
+}
+
+async function saveCustomSearchSettings() {
+  customSearchSaving.value = true
+  try {
+    const { settings } = await api.updateBangumiCustomSearchSettings(customSearchTags.value)
+    customSearchTags.value = [...settings.tags]
+    ElMessage.success('自定义抓取设置已保存')
+    customSearchVisible.value = false
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存自定义抓取设置失败')
+  } finally {
+    customSearchSaving.value = false
   }
 }
 
@@ -172,6 +205,12 @@ onBeforeUnmount(() => {
             />
           </div>
           <el-button
+            v-if="task.key === bangumiMetadataTaskKey"
+            :icon="Setting"
+            :disabled="customSearchLoading || customSearchSaving"
+            @click="openCustomSearchSettings"
+          >自定义抓取设置</el-button>
+          <el-button
             type="primary"
             :icon="VideoPlay"
             :loading="runningKey === task.key || task.lastStatus === 'running'"
@@ -182,4 +221,33 @@ onBeforeUnmount(() => {
       </div>
     </article>
   </el-card>
+
+  <el-dialog
+    v-model="customSearchVisible"
+    title="自定义抓取设置"
+    width="min(560px, calc(100vw - 32px))"
+    destroy-on-close
+    append-to-body
+  >
+    <el-form class="bangumi-custom-search-dialog" label-position="top" @submit.prevent>
+      <el-form-item label="抓取标签名称">
+        <el-select
+          v-model="customSearchTags"
+          multiple
+          filterable
+          allow-create
+          default-first-option
+          :reserve-keyword="false"
+          placeholder="输入后回车，例如 2026年7月"
+          :loading="customSearchLoading"
+        >
+          <el-option v-for="tag in customSearchTags" :key="tag" :label="tag" :value="tag" />
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="customSearchVisible = false">取消</el-button>
+      <el-button type="primary" :loading="customSearchSaving" :disabled="customSearchLoading" @click="saveCustomSearchSettings">保存</el-button>
+    </template>
+  </el-dialog>
 </template>

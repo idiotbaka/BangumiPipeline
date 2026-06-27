@@ -51,6 +51,27 @@ type subjectDetail struct {
 	Type          int             `json:"type"`
 }
 
+type subjectSearchRequest struct {
+	Filter subjectSearchFilter `json:"filter"`
+}
+
+type subjectSearchFilter struct {
+	Type []int    `json:"type"`
+	Tag  []string `json:"tag"`
+}
+
+type subjectSearchResponse struct {
+	Data   []subjectDetail `json:"data"`
+	Total  int             `json:"total"`
+	Limit  int             `json:"limit"`
+	Offset int             `json:"offset"`
+}
+
+type CustomSearchSettings struct {
+	Tags      []string `json:"tags"`
+	UpdatedAt int64    `json:"updatedAt"`
+}
+
 type subjectTag struct {
 	Name       string `json:"name"`
 	Count      int    `json:"count"`
