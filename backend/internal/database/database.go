@@ -815,6 +815,29 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (18, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 18 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS viewer_sessions (
+    token_hash BLOB PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES viewer_users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_sessions_user_id ON viewer_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_viewer_sessions_expires_at ON viewer_sessions(expires_at);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (19, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 19 migration: %w", err)
+	}
 	return nil
 }
 

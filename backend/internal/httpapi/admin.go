@@ -884,16 +884,6 @@ func writeSSE(w io.Writer, entry applog.Entry) error {
 	return err
 }
 
-func NewViewerHandler(logger *slog.Logger, webDir string) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/health", health)
-	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotFound, "not_found", "API endpoint not found")
-	})
-	mux.Handle("/", SPA(webDir))
-	return CommonMiddleware(logger, mux)
-}
-
 func health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

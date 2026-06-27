@@ -21,6 +21,7 @@ import (
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
 	"bangumipipeline.local/server/internal/translation"
+	"bangumipipeline.local/server/internal/viewer"
 )
 
 func main() {
@@ -49,6 +50,10 @@ func run(logger *slog.Logger) error {
 
 	authService := auth.NewService(db, cfg.SessionTTL)
 	if err := authService.DeleteExpiredSessions(ctx); err != nil {
+		return err
+	}
+	viewerAuthService := viewer.NewService(db, cfg.SessionTTL)
+	if err := viewerAuthService.DeleteExpiredSessions(ctx); err != nil {
 		return err
 	}
 	systemService := system.NewService(db)
@@ -83,7 +88,7 @@ func run(logger *slog.Logger) error {
 	}
 	viewerServer := &http.Server{
 		Addr:              cfg.ViewerAddr,
-		Handler:           httpapi.NewViewerHandler(logger, cfg.ViewerWebDir),
+		Handler:           httpapi.NewViewerHandler(viewerAuthService, logger, cfg.CookieSecure, cfg.ViewerWebDir),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
