@@ -216,6 +216,13 @@ export interface AnimeListItem {
   createdAt: number
 }
 
+export type AnimeListSort = 'created' | 'airDate'
+
+export interface AnimeListOptions {
+  sort?: AnimeListSort
+  query?: string
+}
+
 export interface AnimePage {
   items: AnimeListItem[]
   total: number
@@ -466,8 +473,12 @@ export const api = {
     levels.forEach((level) => query.append('level', level))
     return request<{ logs: SystemLog[] }>(`/api/system-logs?${query}`)
   },
-  animeList: (page: number, pageSize: number) =>
-    request<AnimePage>(`/api/anime?page=${page}&pageSize=${pageSize}`),
+  animeList: (page: number, pageSize: number, options: AnimeListOptions = {}) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    if (options.sort) params.set('sort', options.sort)
+    if (options.query?.trim()) params.set('q', options.query.trim())
+    return request<AnimePage>(`/api/anime?${params}`)
+  },
   createAnime: (bangumiId: number) =>
     request<{ anime: AnimeDetail }>('/api/anime', {
       method: 'POST',

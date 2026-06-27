@@ -104,3 +104,34 @@ INSERT INTO subscription_items(
 		}
 	}
 }
+
+func TestCatalogListSearchesTitlesAndAliasesAndSortsByAirDate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openDatabase(t, ctx)
+	_, err := db.ExecContext(ctx, `
+INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, air_date, created_at)
+VALUES
+    (1001, 'https://bgm.tv/subject/1001', 'Unmatched', '无关番剧', '2026-12-01', 300),
+    (1002, 'https://bgm.tv/subject/1002', 'Alias Match', '别名命中', '2026-08-01', 200),
+    (1003, 'https://bgm.tv/subject/1003', '目标标题', '标题命中', '2026-10-01', 100);
+INSERT INTO anime_aliases(bangumi_id, alias, sort_order)
+VALUES
+    (1002, '目标别名', 0),
+    (1002, '目标别名二', 1);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := bangumi.NewCatalog(db)
+	page, err := catalog.List(ctx, 1, 24, bangumi.ListOptions{Query: "目标", Sort: string(bangumi.AnimeListSortAirDate)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 2 || len(page.Items) != 2 {
+		t.Fatalf("expected two unique search results, got %+v", page)
+	}
+	if page.Items[0].BangumiID != 1003 || page.Items[1].BangumiID != 1002 {
+		t.Fatalf("anime were not sorted by air date desc: %+v", page.Items)
+	}
+}

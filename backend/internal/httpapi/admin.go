@@ -356,7 +356,10 @@ func (a *AdminAPI) listAnime(w http.ResponseWriter, r *http.Request) {
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
-	result, err := a.catalog.List(r.Context(), page, pageSize)
+	result, err := a.catalog.List(r.Context(), page, pageSize, bangumi.ListOptions{
+		Query: r.URL.Query().Get("q"),
+		Sort:  r.URL.Query().Get("sort"),
+	})
 	if err != nil {
 		a.internalError(w, err)
 		return

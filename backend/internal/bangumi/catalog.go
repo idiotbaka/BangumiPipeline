@@ -57,6 +57,18 @@ type AnimePage struct {
 	PageSize int             `json:"pageSize"`
 }
 
+type AnimeListSort string
+
+const (
+	AnimeListSortCreated AnimeListSort = "created"
+	AnimeListSortAirDate AnimeListSort = "airDate"
+)
+
+type ListOptions struct {
+	Query string
+	Sort  string
+}
+
 type AnimeMatchedEpisode struct {
 	SeasonNumber  int    `json:"seasonNumber"`
 	EpisodeType   string `json:"episodeType"`
@@ -143,25 +155,35 @@ type AnimeDetail struct {
 	CreatedAt      int64            `json:"createdAt"`
 }
 
-func (c *Catalog) List(ctx context.Context, page, pageSize int) (AnimePage, error) {
+func (c *Catalog) List(ctx context.Context, page, pageSize int, options ...ListOptions) (AnimePage, error) {
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 24
 	}
+	option := ListOptions{Sort: string(AnimeListSortCreated)}
+	if len(options) > 0 {
+		option = options[0]
+	}
+	where, args := animeListWhere(option.Query)
 	result := AnimePage{Items: make([]AnimeListItem, 0), Page: page, PageSize: pageSize}
-	if err := c.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM anime_metadata WHERE deleted_at IS NULL").Scan(&result.Total); err != nil {
+	if err := c.db.QueryRowContext(ctx, fmt.Sprintf(`
+SELECT COUNT(*)
+FROM anime_metadata am
+WHERE %s`, where), args...).Scan(&result.Total); err != nil {
 		return result, err
 	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, pageSize, (page-1)*pageSize)
 	rows, err := c.db.QueryContext(ctx, `
 SELECT bangumi_id, name, name_cn, air_date, air_weekday,
        CASE WHEN total_episodes > 0 THEN total_episodes ELSE eps END,
        platform, image_status, image_local_path != '', detail_status, media_storage_root, created_at
-FROM anime_metadata
-WHERE deleted_at IS NULL
-ORDER BY created_at DESC, id DESC
-LIMIT ? OFFSET ?`, pageSize, (page-1)*pageSize)
+FROM anime_metadata am
+WHERE `+where+`
+ORDER BY `+animeListOrderBy(option.Sort)+`
+LIMIT ? OFFSET ?`, queryArgs...)
 	if err != nil {
 		return result, err
 	}
@@ -191,6 +213,32 @@ LIMIT ? OFFSET ?`, pageSize, (page-1)*pageSize)
 		return result, err
 	}
 	return result, nil
+}
+
+func animeListWhere(query string) (string, []any) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "am.deleted_at IS NULL", nil
+	}
+	like := "%" + query + "%"
+	return `am.deleted_at IS NULL
+  AND (
+    am.name LIKE ?
+    OR am.name_cn LIKE ?
+    OR EXISTS (
+      SELECT 1 FROM anime_aliases aa
+      WHERE aa.bangumi_id = am.bangumi_id AND aa.alias LIKE ?
+    )
+  )`, []any{like, like, like}
+}
+
+func animeListOrderBy(sort string) string {
+	switch AnimeListSort(sort) {
+	case AnimeListSortAirDate:
+		return "CASE WHEN am.air_date = '' THEN 1 ELSE 0 END, am.air_date DESC, am.created_at DESC, am.id DESC"
+	default:
+		return "am.created_at DESC, am.id DESC"
+	}
 }
 
 func (c *Catalog) attachMatchedEpisodes(ctx context.Context, items []AnimeListItem) error {
@@ -253,19 +301,12 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int) ([]AnimeS
 	if limit < 1 || limit > 1000 {
 		limit = 500
 	}
-	args := []any{limit}
-	where := "am.deleted_at IS NULL"
-	if query != "" {
-		like := "%" + query + "%"
-		where += " AND (am.name LIKE ? OR am.name_cn LIKE ? OR aa.alias LIKE ?)"
-		args = []any{like, like, like, limit}
-	}
+	where, args := animeListWhere(query)
+	args = append(args, limit)
 	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(`
 SELECT am.bangumi_id, am.name, am.name_cn
 FROM anime_metadata am
-LEFT JOIN anime_aliases aa ON aa.bangumi_id = am.bangumi_id
 WHERE %s
-GROUP BY am.bangumi_id, am.name, am.name_cn
 ORDER BY am.created_at DESC, am.id DESC
 LIMIT ?`, where), args...)
 	if err != nil {

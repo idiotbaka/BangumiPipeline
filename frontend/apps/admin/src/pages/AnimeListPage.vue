@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Delete, FolderOpened, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api, type AnimeListItem, type MediaStorageSettings } from '../api'
+import { api, type AnimeListItem, type AnimeListSort, type MediaStorageSettings } from '../api'
 import AnimeDetailPanel from '../components/AnimeDetailPanel.vue'
 
 const items = ref<AnimeListItem[]>([])
@@ -10,6 +10,8 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = 24
 const loading = ref(false)
+const sortBy = ref<AnimeListSort>('created')
+const animeQuery = ref('')
 const deletingId = ref<number | null>(null)
 const refreshingId = ref<number | null>(null)
 const movingStorageId = ref<number | null>(null)
@@ -29,28 +31,46 @@ const addBangumiId = ref('')
 const detailVisible = ref(false)
 const selectedBangumiId = ref<number | null>(null)
 const selectedAnimeTitle = ref('')
+let filterTimer: number | undefined
+let loadRequest = 0
 
+const sortOptions: Array<{ label: string; value: AnimeListSort }> = [
+  { label: '添加时间', value: 'created' },
+  { label: '首播时间', value: 'airDate' },
+]
 const weekdays = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const storageTargets = computed(() => {
   if (!storageSettings.value) return []
   return [storageSettings.value.defaultRoot, ...storageSettings.value.extraRoots]
 })
 const storageMoveDisabled = computed(() => storageMoveTarget.value === null || storageMoveRoot.value === '' || storageMoveRoot.value === storageMoveTarget.value.storageRoot)
+const emptyDescription = computed(() => animeQuery.value.trim() === '' ? '尚未抓取到番剧数据' : '未找到匹配的番剧')
 
 async function load() {
+  const requestId = ++loadRequest
   loading.value = true
   try {
+    const storagePromise = storageSettings.value === null
+      ? api.mediaStorageSettings()
+      : Promise.resolve({ settings: storageSettings.value })
     const [result, storage] = await Promise.all([
-      api.animeList(page.value, pageSize),
-      api.mediaStorageSettings(),
+      api.animeList(page.value, pageSize, { sort: sortBy.value, query: animeQuery.value }),
+      storagePromise,
     ])
+    if (requestId !== loadRequest) {
+      return
+    }
     items.value = result.items
     total.value = result.total
     storageSettings.value = storage.settings
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '番剧列表加载失败')
+    if (requestId === loadRequest) {
+      ElMessage.error(error instanceof Error ? error.message : '番剧列表加载失败')
+    }
   } finally {
-    loading.value = false
+    if (requestId === loadRequest) {
+      loading.value = false
+    }
   }
 }
 
@@ -58,6 +78,32 @@ function changePage(value: number) {
   page.value = value
   void load()
   window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function clearFilterTimer() {
+  if (filterTimer !== undefined) {
+    window.clearTimeout(filterTimer)
+    filterTimer = undefined
+  }
+}
+
+function applyFilters() {
+  clearFilterTimer()
+  page.value = 1
+  void load()
+}
+
+function scheduleFilterLoad() {
+  clearFilterTimer()
+  filterTimer = window.setTimeout(() => {
+    page.value = 1
+    void load()
+  }, 250)
+}
+
+function stopFilterLoading() {
+  clearFilterTimer()
+  loadRequest++
 }
 
 function showDetail(anime: AnimeListItem) {
@@ -240,7 +286,9 @@ async function deleteAnime(anime: AnimeListItem) {
   }
 }
 
+watch([sortBy, animeQuery], scheduleFilterLoad)
 onMounted(load)
+onBeforeUnmount(stopFilterLoading)
 </script>
 
 <template>
@@ -249,13 +297,30 @@ onMounted(load)
       <div>
         <p class="eyebrow">ANIME CATALOG</p>
         <h1>番剧管理</h1>
-        <p>按抓取时间倒序展示数据库中的 Bangumi 动画元数据。</p>
+        <p>浏览、搜索和管理数据库中的 Bangumi 动画元数据。</p>
       </div>
       <div class="page-header-actions">
         <el-button type="primary" :icon="Plus" @click="openAddDialog">新增番剧</el-button>
         <el-tag size="large" effect="plain">共 {{ total }} 部</el-tag>
       </div>
     </header>
+
+    <div class="anime-toolbar">
+      <label class="anime-filter-control anime-sort-control">
+        <span>排序方式</span>
+        <el-select v-model="sortBy" size="large">
+          <el-option v-for="option in sortOptions" :key="option.value" :label="option.label" :value="option.value" />
+        </el-select>
+      </label>
+      <label class="anime-filter-control anime-search-control">
+        <span>番剧搜索</span>
+        <el-input v-model="animeQuery" size="large" placeholder="搜索番剧标题或别名" clearable @clear="applyFilters" @keyup.enter="applyFilters">
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+      </label>
+    </div>
 
     <div v-loading="loading" class="anime-grid">
       <article v-for="anime in items" :key="anime.bangumiId" class="anime-card">
@@ -414,7 +479,7 @@ onMounted(load)
         >确认</el-button>
       </template>
     </el-dialog>
-    <el-empty v-if="!loading && items.length === 0" description="尚未抓取到番剧数据" />
+    <el-empty v-if="!loading && items.length === 0" :description="emptyDescription" />
     <div v-if="total > pageSize" class="anime-pagination">
       <el-pagination background layout="prev, pager, next" :current-page="page" :page-size="pageSize" :total="total" @current-change="changePage" />
     </div>
