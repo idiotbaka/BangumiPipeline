@@ -47,6 +47,7 @@ var (
 	ErrStorageMoveInProgress = errors.New("media storage move is in progress")
 	ErrAnimeTranscoding      = errors.New("anime has transcoding media jobs")
 	ErrStorageTargetConflict = errors.New("media storage target already exists")
+	ErrInvalidEpisodeTarget  = errors.New("invalid episode target")
 )
 
 type Config struct {
@@ -176,6 +177,11 @@ type StorageMoveResult struct {
 	Moved       bool   `json:"moved"`
 }
 
+type EpisodeReplacementCleanup struct {
+	MediaJobsRemoved int64 `json:"mediaJobsRemoved"`
+	FilesDeleted     int   `json:"filesDeleted"`
+}
+
 type animeStorageInfo struct {
 	BangumiID    int64
 	Name         string
@@ -198,6 +204,13 @@ type coverCandidate struct {
 	OutputPath  string
 	CoverPath   string
 	CoverStatus string
+}
+
+type episodeReplacementJob struct {
+	ID         int64
+	Status     string
+	OutputPath string
+	CoverPath  string
 }
 
 func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
@@ -372,6 +385,132 @@ func (s *Service) CountJobsByStatuses(ctx context.Context, statuses ...string) (
 		result[status] = count
 	}
 	return result, nil
+}
+
+func (s *Service) PrepareEpisodeReplacement(ctx context.Context, bangumiID int64, seasonNumber int, episodeType, episodeNumber string) (EpisodeReplacementCleanup, error) {
+	episodeType = normalizeEpisodeType(episodeType)
+	episodeNumber = strings.TrimSpace(episodeNumber)
+	if bangumiID < 1 || seasonNumber < 1 || episodeNumber == "" {
+		return EpisodeReplacementCleanup{}, ErrInvalidEpisodeTarget
+	}
+
+	s.storageMu.Lock()
+	defer s.storageMu.Unlock()
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, status, output_path, cover_path
+FROM media_jobs
+WHERE bangumi_id = ?
+  AND season_number = ?
+  AND COALESCE(NULLIF(episode_type, ''), 'episode') = ?
+  AND episode_number = ?`, bangumiID, seasonNumber, episodeType, episodeNumber)
+	if err != nil {
+		return EpisodeReplacementCleanup{}, err
+	}
+	jobs := make([]episodeReplacementJob, 0)
+	for rows.Next() {
+		var job episodeReplacementJob
+		if err := rows.Scan(&job.ID, &job.Status, &job.OutputPath, &job.CoverPath); err != nil {
+			rows.Close()
+			return EpisodeReplacementCleanup{}, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Close(); err != nil {
+		return EpisodeReplacementCleanup{}, err
+	}
+	for _, job := range jobs {
+		if job.Status == StatusTranscoding {
+			return EpisodeReplacementCleanup{}, ErrAnimeTranscoding
+		}
+	}
+
+	paths := make(map[string]struct{})
+	for _, job := range jobs {
+		if path := strings.TrimSpace(job.OutputPath); path != "" {
+			paths[path] = struct{}{}
+			paths[coverPathForOutput(path)] = struct{}{}
+		}
+		if path := strings.TrimSpace(job.CoverPath); path != "" {
+			paths[path] = struct{}{}
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return EpisodeReplacementCleanup{}, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.ExecContext(ctx, `
+DELETE FROM media_jobs
+WHERE bangumi_id = ?
+  AND season_number = ?
+  AND COALESCE(NULLIF(episode_type, ''), 'episode') = ?
+  AND episode_number = ?
+  AND status != ?`, bangumiID, seasonNumber, episodeType, episodeNumber, StatusTranscoding)
+	if err != nil {
+		return EpisodeReplacementCleanup{}, err
+	}
+	removed, err := result.RowsAffected()
+	if err != nil {
+		return EpisodeReplacementCleanup{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM download_jobs
+WHERE subscription_item_id IN (
+    SELECT id
+    FROM subscription_items
+    WHERE binding_status = 'bound'
+      AND bound_bangumi_id = ?
+      AND bound_season_number = ?
+      AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+      AND bound_episode_number = ?
+)`, bangumiID, seasonNumber, episodeType, episodeNumber); err != nil {
+		return EpisodeReplacementCleanup{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE subscription_items
+SET binding_status = 'pending',
+    binding_note = '绑定已被手动单话替换覆盖',
+    bound_bangumi_id = NULL,
+    bound_anime_name = '',
+    bound_season_number = NULL,
+    bound_episode_type = '',
+    bound_episode_number = '',
+    bound_at = NULL,
+    ignored_at = NULL,
+    updated_at = ?
+WHERE binding_status = 'bound'
+  AND bound_bangumi_id = ?
+  AND bound_season_number = ?
+  AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+  AND bound_episode_number = ?`, s.now().UTC().Unix(), bangumiID, seasonNumber, episodeType, episodeNumber); err != nil {
+		return EpisodeReplacementCleanup{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return EpisodeReplacementCleanup{}, err
+	}
+
+	filesDeleted := 0
+	for path := range paths {
+		exists, err := fileExists(path)
+		if err != nil {
+			return EpisodeReplacementCleanup{}, err
+		}
+		if !exists {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return EpisodeReplacementCleanup{}, err
+		}
+		filesDeleted++
+	}
+	if removed > 0 || filesDeleted > 0 {
+		s.logger.Info("单话替换前旧媒体产物已清理", "source", "media",
+			"bangumi_id", bangumiID, "season_number", seasonNumber, "episode_type", episodeType,
+			"episode_number", episodeNumber, "media_jobs_removed", removed, "files_deleted", filesDeleted)
+	}
+	return EpisodeReplacementCleanup{MediaJobsRemoved: removed, FilesDeleted: filesDeleted}, nil
 }
 
 func (s *Service) MoveAnimeStorage(ctx context.Context, bangumiID int64, targetRoot string) (StorageMoveResult, error) {
@@ -1458,6 +1597,17 @@ func safePathSegment(value string) string {
 	runes := []rune(value)
 	if len(runes) > 120 {
 		value = string(runes[:120])
+	}
+	return value
+}
+
+func normalizeEpisodeType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "episode"
+	}
+	if value == "special" {
+		return "sp"
 	}
 	return value
 }

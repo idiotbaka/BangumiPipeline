@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Delete, FolderOpened, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
+import { Delete, FolderOpened, Link, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api, type AnimeListItem, type AnimeListSort, type MediaStorageSettings } from '../api'
 import AnimeDetailPanel from '../components/AnimeDetailPanel.vue'
@@ -16,6 +16,7 @@ const deletingId = ref<number | null>(null)
 const refreshingId = ref<number | null>(null)
 const movingStorageId = ref<number | null>(null)
 const syncingHistoryId = ref<number | null>(null)
+const syncingEpisodeId = ref<number | null>(null)
 const storageSettings = ref<MediaStorageSettings | null>(null)
 const storageMoveVisible = ref(false)
 const storageMoveTarget = ref<AnimeListItem | null>(null)
@@ -25,6 +26,26 @@ const historySyncTarget = ref<AnimeListItem | null>(null)
 const historySyncForm = reactive({ rssUrl: '', excludeTitle: '', includeTitle: '' })
 const historySyncRSSRequired = computed(() => historySyncTarget.value !== null && historySyncTarget.value.matchedEpisodes.length === 0)
 const historySyncConfirmDisabled = computed(() => historySyncTarget.value === null || (historySyncRSSRequired.value && historySyncForm.rssUrl.trim() === ''))
+const manualEpisodeVisible = ref(false)
+const manualEpisodeTarget = ref<AnimeListItem | null>(null)
+const manualEpisodeForm = reactive<{
+  magnetUrl: string
+  seasonNumber: number | undefined
+  episodeType: string
+  episodeNumber: string
+}>({
+  magnetUrl: '',
+  seasonNumber: 1,
+  episodeType: 'episode',
+  episodeNumber: '',
+})
+const manualEpisodeConfirmDisabled = computed(() =>
+  manualEpisodeTarget.value === null ||
+  manualEpisodeForm.magnetUrl.trim() === '' ||
+  !Number.isFinite(Number(manualEpisodeForm.seasonNumber)) ||
+  Number(manualEpisodeForm.seasonNumber) < 1 ||
+  manualEpisodeForm.episodeNumber.trim() === '',
+)
 const addVisible = ref(false)
 const adding = ref(false)
 const addBangumiId = ref('')
@@ -37,6 +58,12 @@ let loadRequest = 0
 const sortOptions: Array<{ label: string; value: AnimeListSort }> = [
   { label: '添加时间', value: 'created' },
   { label: '首播时间', value: 'airDate' },
+]
+const episodeTypeOptions = [
+  { label: '正片', value: 'episode' },
+  { label: 'SP', value: 'sp' },
+  { label: 'OVA', value: 'ova' },
+  { label: 'OAD', value: 'oad' },
 ]
 const weekdays = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const storageTargets = computed(() => {
@@ -267,6 +294,60 @@ async function syncHistory() {
   }
 }
 
+function clearManualEpisodeDialog() {
+  manualEpisodeTarget.value = null
+  manualEpisodeForm.magnetUrl = ''
+  manualEpisodeForm.seasonNumber = 1
+  manualEpisodeForm.episodeType = 'episode'
+  manualEpisodeForm.episodeNumber = ''
+}
+
+function openManualEpisodeDialog(anime: AnimeListItem) {
+  if (syncingEpisodeId.value !== null) {
+    return
+  }
+  clearManualEpisodeDialog()
+  manualEpisodeTarget.value = anime
+  manualEpisodeVisible.value = true
+}
+
+function resetManualEpisodeDialog() {
+  if (syncingEpisodeId.value === null) {
+    clearManualEpisodeDialog()
+  }
+}
+
+async function syncManualEpisode() {
+  if (syncingEpisodeId.value !== null || manualEpisodeTarget.value === null) {
+    return
+  }
+  if (manualEpisodeConfirmDisabled.value) {
+    ElMessage.warning('请填写磁力链接、季数和集数')
+    return
+  }
+  const anime = manualEpisodeTarget.value
+  syncingEpisodeId.value = anime.bangumiId
+  try {
+    const { cleanup } = await api.syncAnimeEpisode(anime.bangumiId, {
+      magnetUrl: manualEpisodeForm.magnetUrl,
+      seasonNumber: Number(manualEpisodeForm.seasonNumber),
+      episodeType: manualEpisodeForm.episodeType,
+      episodeNumber: manualEpisodeForm.episodeNumber,
+    })
+    const cleanupText = cleanup.filesDeleted > 0 ? `，已删除旧产物 ${cleanup.filesDeleted} 个文件` : ''
+    ElMessage.success(`单话已加入下载队列${cleanupText}`)
+    manualEpisodeVisible.value = false
+    await load()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '单话同步失败')
+  } finally {
+    syncingEpisodeId.value = null
+    if (!manualEpisodeVisible.value) {
+      clearManualEpisodeDialog()
+    }
+  }
+}
+
 async function deleteAnime(anime: AnimeListItem) {
   if (deletingId.value !== null) {
     return
@@ -367,6 +448,13 @@ onBeforeUnmount(stopFilterLoading)
               :loading="syncingHistoryId === anime.bangumiId"
               @click="openHistorySyncDialog(anime)"
             >同步历史话数</el-button>
+            <el-button
+              size="small"
+              :icon="Link"
+              plain
+              :loading="syncingEpisodeId === anime.bangumiId"
+              @click="openManualEpisodeDialog(anime)"
+            >同步/替换单话</el-button>
             <el-button
               size="small"
               :icon="FolderOpened"
@@ -476,6 +564,43 @@ onBeforeUnmount(stopFilterLoading)
           :disabled="historySyncConfirmDisabled"
           :loading="historySyncTarget !== null && syncingHistoryId === historySyncTarget.bangumiId"
           @click="syncHistory"
+        >确认</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="manualEpisodeVisible"
+      title="同步/替换单话"
+      width="min(560px, calc(100vw - 32px))"
+      destroy-on-close
+      append-to-body
+      @closed="resetManualEpisodeDialog"
+    >
+      <el-form class="manual-episode-source-dialog" label-position="top" @submit.prevent>
+        <el-form-item label="磁力链接" required>
+          <el-input v-model.trim="manualEpisodeForm.magnetUrl" type="textarea" :rows="3" placeholder="magnet:?xt=urn:btih:..." />
+        </el-form-item>
+        <div class="manual-episode-source-grid">
+          <el-form-item label="季数" required>
+            <el-input-number v-model="manualEpisodeForm.seasonNumber" :min="1" :step="1" step-strictly controls-position="right" />
+          </el-form-item>
+          <el-form-item label="集类型" required>
+            <el-select v-model="manualEpisodeForm.episodeType">
+              <el-option v-for="option in episodeTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="集数" required>
+            <el-input v-model.trim="manualEpisodeForm.episodeNumber" placeholder="03" clearable @keyup.enter="syncManualEpisode" />
+          </el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="manualEpisodeVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="manualEpisodeConfirmDisabled"
+          :loading="manualEpisodeTarget !== null && syncingEpisodeId === manualEpisodeTarget.bangumiId"
+          @click="syncManualEpisode"
         >确认</el-button>
       </template>
     </el-dialog>

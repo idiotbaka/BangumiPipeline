@@ -248,6 +248,23 @@ export interface HistorySyncInput {
   includeTitle?: string
 }
 
+export interface ManualEpisodeInput {
+  magnetUrl: string
+  seasonNumber: number
+  episodeType: string
+  episodeNumber: string
+}
+
+export interface ManualEpisodeResult {
+  item: SubscriptionItem
+  downloadJobId: number
+}
+
+export interface EpisodeReplacementCleanup {
+  mediaJobsRemoved: number
+  filesDeleted: number
+}
+
 export type SubscriptionMatchStatus = 'matched' | 'unmatched'
 export type SubscriptionBindingStatus = 'pending' | 'bound' | 'ignored'
 
@@ -493,6 +510,11 @@ export const api = {
     }),
   syncAnimeHistory: (bangumiId: number, input: HistorySyncInput = {}) =>
     request<{ result: HistorySyncResult }>(`/api/anime/${bangumiId}/sync-history`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  syncAnimeEpisode: (bangumiId: number, input: ManualEpisodeInput) =>
+    request<{ result: ManualEpisodeResult; cleanup: EpisodeReplacementCleanup }>(`/api/anime/${bangumiId}/sync-episode`, {
       method: 'POST',
       body: JSON.stringify(input),
     }),

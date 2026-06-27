@@ -47,6 +47,8 @@ var (
 	ErrHistoryRSSURLRequired = errors.New("history rss url required")
 	ErrInvalidHistorySearch  = errors.New("invalid history search")
 	ErrInvalidHistoryRSSURL  = errors.New("invalid history rss url")
+	ErrInvalidManualEpisode  = errors.New("invalid manual episode")
+	ErrInvalidManualMagnet   = errors.New("invalid manual episode magnet")
 )
 
 type SettingsProvider interface {
@@ -92,6 +94,18 @@ type HistorySyncOptions struct {
 	RSSURL       string
 	ExcludeTitle string
 	IncludeTitle string
+}
+
+type ManualEpisodeInput struct {
+	MagnetURL     string
+	SeasonNumber  int
+	EpisodeType   string
+	EpisodeNumber string
+}
+
+type ManualEpisodeResult struct {
+	Item          Item  `json:"item"`
+	DownloadJobID int64 `json:"downloadJobId"`
 }
 
 type BindingInput struct {
@@ -335,6 +349,201 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 		"skipped_existing", result.SkippedExisting, "skipped_ignored", result.SkippedIgnored,
 		"skipped_unmatched", result.SkippedUnmatched)
 	return result, nil
+}
+
+func NormalizeManualEpisodeInput(input ManualEpisodeInput) (ManualEpisodeInput, error) {
+	input.MagnetURL = strings.TrimSpace(input.MagnetURL)
+	input.EpisodeType = normalizeEpisodeType(input.EpisodeType)
+	input.EpisodeNumber = strings.TrimSpace(input.EpisodeNumber)
+	if input.SeasonNumber < 1 || input.EpisodeNumber == "" {
+		return ManualEpisodeInput{}, ErrInvalidManualEpisode
+	}
+	parsed, err := url.Parse(input.MagnetURL)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "magnet") {
+		return ManualEpisodeInput{}, ErrInvalidManualMagnet
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return ManualEpisodeInput{}, ErrInvalidManualMagnet
+	}
+	hasBTIH := false
+	for key, values := range query {
+		if !strings.EqualFold(key, "xt") {
+			continue
+		}
+		for _, value := range values {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "urn:btih:") {
+				hasBTIH = true
+				break
+			}
+		}
+	}
+	if !hasBTIH {
+		return ManualEpisodeInput{}, ErrInvalidManualMagnet
+	}
+	return input, nil
+}
+
+func (s *Service) SyncManualEpisode(ctx context.Context, bangumiID int64, input ManualEpisodeInput) (ManualEpisodeResult, error) {
+	if bangumiID < 1 {
+		return ManualEpisodeResult{}, ErrInvalidBinding
+	}
+	input, err := NormalizeManualEpisodeInput(input)
+	if err != nil {
+		return ManualEpisodeResult{}, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ManualEpisodeResult{}, err
+	}
+	defer tx.Rollback()
+
+	animeName, err := animeNameByID(ctx, tx, bangumiID)
+	if err != nil {
+		return ManualEpisodeResult{}, err
+	}
+	now := s.now().UTC().Unix()
+	itemKey := manualEpisodeItemKey(bangumiID, input)
+	title := manualEpisodeTitle(animeName, input)
+	rawJSON, _ := json.Marshal(map[string]any{
+		"source":        "manual_magnet",
+		"magnetUrl":     input.MagnetURL,
+		"bangumiId":     bangumiID,
+		"seasonNumber":  input.SeasonNumber,
+		"episodeType":   input.EpisodeType,
+		"episodeNumber": input.EpisodeNumber,
+	})
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO subscription_items(
+    item_key, guid, title, description, link, enclosure_url, torrent_url, content_length,
+    pub_date, published_at, match_status, bangumi_id, matched_name, parsed_name,
+    season_number, episode_type, episode_number, match_score, match_reason,
+    binding_status, bound_bangumi_id, bound_anime_name, bound_season_number,
+    bound_episode_type, bound_episode_number, binding_note, bound_at, ignored_at,
+    raw_json, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(item_key) DO UPDATE SET
+    guid = excluded.guid,
+    title = excluded.title,
+    description = excluded.description,
+    link = excluded.link,
+    enclosure_url = excluded.enclosure_url,
+    torrent_url = excluded.torrent_url,
+    content_length = excluded.content_length,
+    pub_date = excluded.pub_date,
+    published_at = excluded.published_at,
+    match_status = excluded.match_status,
+    bangumi_id = excluded.bangumi_id,
+    matched_name = excluded.matched_name,
+    parsed_name = excluded.parsed_name,
+    season_number = excluded.season_number,
+    episode_type = excluded.episode_type,
+    episode_number = excluded.episode_number,
+    match_score = excluded.match_score,
+    match_reason = excluded.match_reason,
+    binding_status = excluded.binding_status,
+    bound_bangumi_id = excluded.bound_bangumi_id,
+    bound_anime_name = excluded.bound_anime_name,
+    bound_season_number = excluded.bound_season_number,
+    bound_episode_type = excluded.bound_episode_type,
+    bound_episode_number = excluded.bound_episode_number,
+    binding_note = excluded.binding_note,
+    bound_at = excluded.bound_at,
+    ignored_at = NULL,
+    raw_json = excluded.raw_json,
+    updated_at = excluded.updated_at`,
+		itemKey, itemKey, title, "手动补源", input.MagnetURL, "", input.MagnetURL, 0,
+		"", now, matchStatusMatched, bangumiID, animeName, animeName,
+		input.SeasonNumber, input.EpisodeType, input.EpisodeNumber, 1.0, "手动磁力链接",
+		BindingStatusBound, bangumiID, animeName, input.SeasonNumber,
+		input.EpisodeType, input.EpisodeNumber, "手动同步/替换单话", now, nil,
+		string(rawJSON), now, now,
+	); err != nil {
+		return ManualEpisodeResult{}, err
+	}
+
+	var itemID int64
+	if err := tx.QueryRowContext(ctx, "SELECT id FROM subscription_items WHERE item_key = ?", itemKey).Scan(&itemID); err != nil {
+		return ManualEpisodeResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM download_jobs
+WHERE subscription_item_id IN (
+    SELECT id
+    FROM subscription_items
+    WHERE binding_status = ?
+      AND bound_bangumi_id = ?
+      AND bound_season_number = ?
+      AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+      AND bound_episode_number = ?
+      AND id != ?
+)`,
+		BindingStatusBound, bangumiID, input.SeasonNumber, input.EpisodeType, input.EpisodeNumber, itemID,
+	); err != nil {
+		return ManualEpisodeResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE subscription_items
+SET binding_status = ?, binding_note = ?,
+    bound_bangumi_id = NULL, bound_anime_name = '', bound_season_number = NULL,
+    bound_episode_type = '', bound_episode_number = '', bound_at = NULL,
+    ignored_at = NULL, updated_at = ?
+WHERE binding_status = ?
+  AND bound_bangumi_id = ?
+  AND bound_season_number = ?
+  AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+  AND bound_episode_number = ?
+  AND id != ?`,
+		BindingStatusPending, fmt.Sprintf("绑定已被手动补源条目 #%d 覆盖", itemID), now,
+		BindingStatusBound, bangumiID, input.SeasonNumber, input.EpisodeType, input.EpisodeNumber, itemID,
+	); err != nil {
+		return ManualEpisodeResult{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO download_jobs(
+    subscription_item_id, status, source_url, folder_name, save_path, qbit_hash, qbit_name,
+    progress, total_size, downloaded_size, download_speed, error_message,
+    created_at, updated_at
+) VALUES (?, 'pending', ?, '', '', '', '', 0, 0, 0, 0, '', ?, ?)
+ON CONFLICT(subscription_item_id) DO UPDATE SET
+    status = 'pending',
+    source_url = excluded.source_url,
+    folder_name = '',
+    save_path = '',
+    qbit_hash = '',
+    qbit_name = '',
+    progress = 0,
+    total_size = 0,
+    downloaded_size = 0,
+    download_speed = 0,
+    error_message = '',
+    started_at = NULL,
+    completed_at = NULL,
+    failed_at = NULL,
+    updated_at = excluded.updated_at`,
+		itemID, input.MagnetURL, now, now,
+	); err != nil {
+		return ManualEpisodeResult{}, err
+	}
+
+	var downloadJobID int64
+	if err := tx.QueryRowContext(ctx, "SELECT id FROM download_jobs WHERE subscription_item_id = ?", itemID).Scan(&downloadJobID); err != nil {
+		return ManualEpisodeResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ManualEpisodeResult{}, err
+	}
+	item, err := s.Item(ctx, itemID)
+	if err != nil {
+		return ManualEpisodeResult{}, err
+	}
+	s.logger.Info("手动单话磁力链接已绑定并加入下载队列", "source", "subscription",
+		"bangumi_id", bangumiID, "subscription_item_id", itemID, "download_job_id", downloadJobID,
+		"season_number", input.SeasonNumber, "episode_type", input.EpisodeType, "episode_number", input.EpisodeNumber)
+	return ManualEpisodeResult{Item: item, DownloadJobID: downloadJobID}, nil
 }
 
 func (s *Service) historySourceForSync(ctx context.Context, bangumiID int64, options HistorySyncOptions) (historySource, error) {
@@ -714,6 +923,23 @@ func normalizeEpisodeType(value string) string {
 		return "sp"
 	}
 	return value
+}
+
+func manualEpisodeItemKey(bangumiID int64, input ManualEpisodeInput) string {
+	sum := sha256.Sum256([]byte(input.MagnetURL))
+	return fmt.Sprintf("manual:%d:%d:%s:%s:%s", bangumiID, input.SeasonNumber,
+		input.EpisodeType, input.EpisodeNumber, hex.EncodeToString(sum[:8]))
+}
+
+func manualEpisodeTitle(animeName string, input ManualEpisodeInput) string {
+	episodeType := strings.ToUpper(strings.TrimSpace(input.EpisodeType))
+	if episodeType == "" || episodeType == "EPISODE" {
+		return fmt.Sprintf("%s S%02dE%s 手动补源", animeName, input.SeasonNumber, input.EpisodeNumber)
+	}
+	if episodeType == "SPECIAL" {
+		episodeType = "SP"
+	}
+	return fmt.Sprintf("%s S%02d %s%s 手动补源", animeName, input.SeasonNumber, episodeType, input.EpisodeNumber)
 }
 
 func animeNameByID(ctx context.Context, tx *sql.Tx, bangumiID int64) (string, error) {

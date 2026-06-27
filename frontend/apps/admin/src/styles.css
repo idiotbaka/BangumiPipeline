@@ -188,9 +188,9 @@ button, input { font: inherit; }
 .anime-search-control { flex: 1; max-width: 520px; }
 .anime-filter-control .el-select, .anime-filter-control .el-input { width: 100%; }
 .anime-grid { min-height: 120px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
-.anime-card { overflow: hidden; display: grid; grid-template-columns: 72px minmax(0, 1fr); height: 190px; min-width: 0; border: 1px solid #e1e6ee; border-radius: 8px; background: #fff; box-shadow: 0 4px 16px rgba(16, 24, 40, .05); transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
+.anime-card { overflow: hidden; display: grid; grid-template-columns: 72px minmax(0, 1fr); height: 206px; min-width: 0; border: 1px solid #e1e6ee; border-radius: 8px; background: #fff; box-shadow: 0 4px 16px rgba(16, 24, 40, .05); transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
 .anime-card:hover { transform: translateY(-1px); border-color: #cfd8e6; box-shadow: 0 10px 22px rgba(16, 24, 40, .08); }
-.anime-cover-wrap { position: relative; overflow: hidden; width: 72px; height: 190px; background: #e8ecf3; }
+.anime-cover-wrap { position: relative; overflow: hidden; width: 72px; height: 206px; background: #e8ecf3; }
 .anime-cover { width: 100%; height: 100%; display: block; object-fit: cover; }
 .anime-cover-placeholder { display: grid; width: 100%; height: 100%; place-items: center; color: #98a2b3; background: linear-gradient(145deg, #eef1f5, #dfe5ed); font-size: 10px; letter-spacing: .08em; }
 .anime-platform { position: absolute; right: 5px; bottom: 5px; overflow: hidden; max-width: 62px; padding: 2px 5px; border-radius: 5px; color: #fff; background: rgba(12, 19, 33, .78); backdrop-filter: blur(7px); font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
@@ -206,11 +206,15 @@ button, input { font: inherit; }
 .anime-storage-path { overflow: hidden; margin: 0; color: #98a2b3; font-size: 11px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .anime-episode-tags { overflow: hidden; display: flex; flex-wrap: wrap; align-items: center; max-height: 44px; gap: 4px; }
 .anime-episode-tags .el-tag { min-width: 28px; justify-content: center; padding: 0 7px; font-weight: 700; }
-.anime-actions { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
-.anime-actions .el-button { width: 118px; margin-left: 0 !important; justify-content: center; }
+.anime-actions { display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
+.anime-actions .el-button { width: 132px; margin-left: 0 !important; justify-content: center; }
 .anime-pagination { display: flex; justify-content: center; margin-top: 34px; }
 .manual-anime-dialog .el-form-item { margin-bottom: 0; }
 .history-sync-dialog .el-form-item:last-child { margin-bottom: 0; }
+.manual-episode-source-dialog { display: grid; gap: 14px; }
+.manual-episode-source-dialog .el-form-item { margin-bottom: 0; }
+.manual-episode-source-grid { display: grid; grid-template-columns: 120px 130px minmax(0, 1fr); gap: 12px; align-items: start; }
+.manual-episode-source-grid .el-input-number, .manual-episode-source-grid .el-select { width: 100%; }
 .anime-detail-dialog { max-height: 92vh; display: flex; flex-direction: column; margin-bottom: 4vh; }
 .anime-detail-dialog-body { flex: 1; min-height: 0; max-height: calc(92vh - 64px); overflow: auto; padding: 0 24px 24px !important; }
 .anime-detail-dialog .el-dialog__header { padding: 18px 24px 16px; }
@@ -308,6 +312,7 @@ button, input { font: inherit; }
   .anime-toolbar { align-items: stretch; flex-direction: column; }
   .anime-sort-control, .anime-search-control { width: 100%; max-width: none; }
   .anime-grid { grid-template-columns: 1fr; gap: 10px; }
+  .manual-episode-source-grid { grid-template-columns: 1fr; }
   .anime-detail-dialog-body { padding: 0 18px 20px !important; }
   .anime-detail-dialog .anime-hero { min-height: 300px; }
   .anime-detail-dialog .anime-hero-content { grid-template-columns: 125px minmax(0, 1fr); gap: 20px; min-height: 300px; padding: 22px; }
@@ -326,7 +331,7 @@ button, input { font: inherit; }
   .anime-card { grid-template-columns: 64px minmax(0, 1fr); }
   .anime-cover-wrap { width: 64px; }
   .anime-card-body { gap: 8px; padding: 9px 10px; }
-  .anime-actions .el-button { width: 118px; padding-right: 8px; padding-left: 8px; }
+  .anime-actions .el-button { width: 126px; padding-right: 8px; padding-left: 8px; }
   .anime-meta-row { gap: 4px 8px; }
   .anime-detail-dialog { max-height: 94vh; margin-top: 3vh !important; margin-bottom: 3vh; }
   .anime-detail-dialog-body { max-height: calc(94vh - 64px); padding: 0 12px 16px !important; }

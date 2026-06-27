@@ -158,6 +158,62 @@ WHERE item_key = 'ep01' AND binding_status = 'bound'`,
 	assertItemMissing(t, ctx, db, "credit")
 }
 
+func TestSyncManualEpisodeReplacesExistingBindingAndQueuesDownload(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	insertAnime(t, ctx, db, 1001, now)
+	insertBoundSource(t, ctx, db, 1001, "[字幕组][原作标题][03][繁体内嵌]", "03", now)
+
+	service := NewService(db, testSettingsProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.now = func() time.Time { return now }
+	magnet := "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=episode03"
+
+	result, err := service.SyncManualEpisode(ctx, 1001, ManualEpisodeInput{
+		MagnetURL: magnet, SeasonNumber: 1, EpisodeType: "", EpisodeNumber: "03",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DownloadJobID < 1 {
+		t.Fatalf("expected download job id, got %d", result.DownloadJobID)
+	}
+	if result.Item.BindingStatus != BindingStatusBound || result.Item.BoundEpisodeNumber != "03" {
+		t.Fatalf("unexpected manual item: %+v", result.Item)
+	}
+	if result.Item.Link != magnet || result.Item.TorrentURL != magnet {
+		t.Fatalf("manual item should use magnet as link and torrent url: %+v", result.Item)
+	}
+
+	var oldStatus string
+	var oldBangumiID sql.NullInt64
+	if err := db.QueryRowContext(ctx, `
+SELECT binding_status, bound_bangumi_id
+FROM subscription_items
+WHERE item_key = 'source'`).Scan(&oldStatus, &oldBangumiID); err != nil {
+		t.Fatal(err)
+	}
+	if oldStatus != BindingStatusPending || oldBangumiID.Valid {
+		t.Fatalf("old binding should be unbound, got status=%q bangumi_valid=%v", oldStatus, oldBangumiID.Valid)
+	}
+
+	var jobStatus, sourceURL string
+	if err := db.QueryRowContext(ctx, `
+SELECT status, source_url
+FROM download_jobs
+WHERE id = ?`, result.DownloadJobID).Scan(&jobStatus, &sourceURL); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "pending" || sourceURL != magnet {
+		t.Fatalf("unexpected download job: status=%q source=%q", jobStatus, sourceURL)
+	}
+}
+
 func insertAnime(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64, now time.Time) {
 	t.Helper()
 	_, err := db.ExecContext(ctx, `

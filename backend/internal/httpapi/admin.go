@@ -80,6 +80,7 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("DELETE /api/anime/{bangumiID}", api.deleteAnime)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/refresh", api.refreshAnime)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/sync-history", api.syncAnimeHistory)
+	mux.HandleFunc("POST /api/anime/{bangumiID}/sync-episode", api.syncAnimeEpisode)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/storage", api.moveAnimeStorage)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/characters/{characterID}/image", api.characterImage)
@@ -474,6 +475,47 @@ func (a *AdminAPI) syncAnimeHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"result": result})
 }
 
+func (a *AdminAPI) syncAnimeEpisode(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	var input struct {
+		MagnetURL     string `json:"magnetUrl"`
+		SeasonNumber  int    `json:"seasonNumber"`
+		EpisodeType   string `json:"episodeType"`
+		EpisodeNumber string `json:"episodeNumber"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	episodeInput, err := subscription.NormalizeManualEpisodeInput(subscription.ManualEpisodeInput{
+		MagnetURL: input.MagnetURL, SeasonNumber: input.SeasonNumber,
+		EpisodeType: input.EpisodeType, EpisodeNumber: input.EpisodeNumber,
+	})
+	if err != nil {
+		a.manualEpisodeSyncError(w, err)
+		return
+	}
+	cleanup, err := a.media.PrepareEpisodeReplacement(
+		r.Context(), id, episodeInput.SeasonNumber, episodeInput.EpisodeType, episodeInput.EpisodeNumber,
+	)
+	if err != nil {
+		a.manualEpisodeSyncError(w, err)
+		return
+	}
+	result, err := a.subscription.SyncManualEpisode(r.Context(), id, episodeInput)
+	if err != nil {
+		a.manualEpisodeSyncError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result, "cleanup": cleanup})
+}
+
 func (a *AdminAPI) moveAnimeStorage(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdministrator(w, r) {
 		return
@@ -660,6 +702,22 @@ func (a *AdminAPI) subscriptionHistorySyncError(w http.ResponseWriter, err error
 		a.internalError(w, err)
 	}
 }
+
+func (a *AdminAPI) manualEpisodeSyncError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, subscription.ErrInvalidManualEpisode), errors.Is(err, media.ErrInvalidEpisodeTarget):
+		writeError(w, http.StatusBadRequest, "invalid_episode_target", "季数和集数必须填写完整")
+	case errors.Is(err, subscription.ErrInvalidManualMagnet):
+		writeError(w, http.StatusBadRequest, "invalid_magnet_url", "磁力链接必须是包含 BTIH 的 magnet 地址")
+	case errors.Is(err, media.ErrAnimeTranscoding):
+		writeError(w, http.StatusConflict, "episode_transcoding", "该话正在转码中，暂不能同步或替换")
+	case errors.Is(err, subscription.ErrInvalidBinding):
+		writeError(w, http.StatusBadRequest, "invalid_subscription_binding", "绑定信息不完整或番剧不存在")
+	default:
+		a.internalError(w, err)
+	}
+}
+
 func (a *AdminAPI) subscriptionBindingError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, subscription.ErrItemNotFound):
