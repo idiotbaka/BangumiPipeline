@@ -73,6 +73,49 @@ func TestPrepareEpisodeReplacementRejectsTranscodingJob(t *testing.T) {
 	}
 }
 
+func TestRefreshAnimeMetadataOncePerDay(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Date(2026, 7, 1, 10, 30, 0, 0, time.Local)
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, created_at)
+VALUES (?, ?, ?, ?, ?)`, 1001, "https://bgm.tv/subject/1001", "Original Anime", "原作标题", now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	refresher := &metadataRefreshRecorder{}
+	service := NewService(db, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{
+		MediaDir:          t.TempDir(),
+		MetadataRefresher: refresher,
+	})
+	service.now = func() time.Time { return now }
+
+	service.refreshAnimeMetadataOncePerDay(ctx, 1001)
+	service.refreshAnimeMetadataOncePerDay(ctx, 1001)
+	if len(refresher.ids) != 1 || refresher.ids[0] != 1001 {
+		t.Fatalf("expected one refresh on first day, got %+v", refresher.ids)
+	}
+
+	service.now = func() time.Time { return now.Add(24 * time.Hour) }
+	service.refreshAnimeMetadataOncePerDay(ctx, 1001)
+	if len(refresher.ids) != 2 || refresher.ids[1] != 1001 {
+		t.Fatalf("expected another refresh on next day, got %+v", refresher.ids)
+	}
+}
+
+type metadataRefreshRecorder struct {
+	ids []int64
+}
+
+func (r *metadataRefreshRecorder) RefreshSubject(_ context.Context, bangumiID int64) error {
+	r.ids = append(r.ids, bangumiID)
+	return nil
+}
+
 func insertCompletedMediaJob(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64, seasonNumber int, episodeType, episodeNumber string, now time.Time) (string, string) {
 	t.Helper()
 	dir := t.TempDir()

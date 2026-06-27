@@ -273,6 +273,130 @@ WHERE bangumi_id = 808`).Scan(&name, &summary, &detailStatus, &imagePath); err !
 	assertCount(t, db, "SELECT COUNT(*) FROM anime_episodes WHERE bangumi_id IN (808, 809)", 2)
 }
 
+func TestRefreshSubjectClearsTranslationsOnlyWhenSourceChanges(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openDatabase(t, ctx)
+	settings := system.NewService(db)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	now := time.Unix(1_700_000_000, 0)
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO anime_metadata(
+    bangumi_id, url, name, name_cn, summary, summary_cn,
+    detail_status, characters_status, episodes_status, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		111, "https://bgm.tv/subject/111", "Old Anime", "旧动画", "旧剧情简介", "旧剧情译文",
+		"completed", "completed", "completed", now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO anime_episodes(
+    bangumi_id, episode_id, ep_number, sort_number, type, name, name_cn,
+    description, description_cn, created_at, updated_at
+) VALUES
+    (?, ?, 1, 1, 0, ?, ?, ?, ?, ?, ?),
+    (?, ?, 2, 2, 0, ?, ?, ?, ?, ?, ?)`,
+		111, 111001, "旧第1話", "旧第1话译文", "旧第1话简介", "旧第1话简介译文", now.Unix(), now.Unix(),
+		111, 111002, "第2話", "第2话译文", "第2话简介", "第2话简介译文", now.Unix(), now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO anime_characters(
+    bangumi_id, character_id, name, summary, summary_cn, created_at, updated_at
+) VALUES
+    (?, ?, ?, ?, ?, ?, ?),
+    (?, ?, ?, ?, ?, ?, ?)`,
+		111, 501, "角色一", "旧角色简介", "旧角色译文", now.Unix(), now.Unix(),
+		111, 502, "角色二", "角色二简介", "角色二译文", now.Unix(), now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO actors(actor_id, name, short_summary, short_summary_cn, created_at, updated_at)
+VALUES
+    (?, ?, ?, ?, ?, ?),
+    (?, ?, ?, ?, ?, ?)`,
+		9001, "声优一", "旧声优简介", "旧声优译文", now.Unix(), now.Unix(),
+		9002, "声优二", "声优二简介", "声优二译文", now.Unix(), now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v0/subjects/111":
+			writeJSON(w, `{
+                "id":111,"type":2,"name":"New Anime","name_cn":"新动画",
+                "summary":"新剧情简介","tags":[{"name":"新标签","count":1,"total_cont":1}],
+                "infobox":[],"rating":{"score":8.8},"collection":{"doing":10},
+                "meta_tags":["TV"],"eps":2,"total_episodes":2
+            }`)
+		case "/v0/subjects/111/characters":
+			writeJSON(w, `[
+                {"id":501,"name":"角色一","summary":"新角色简介","actors":[{"id":9001,"name":"声优一","short_summary":"新声优简介"}]},
+                {"id":502,"name":"角色二","summary":"角色二简介","actors":[{"id":9002,"name":"声优二","short_summary":"声优二简介"}]}
+            ]`)
+		case "/v0/episodes":
+			writeJSON(w, `{"data":[
+                {"id":111001,"subject_id":111,"ep":1,"sort":1,"type":0,"name":"新第1話","name_cn":"","desc":"新第1话简介"},
+                {"id":111002,"subject_id":111,"ep":2,"sort":2,"type":0,"name":"第2話","name_cn":"","desc":"第2话简介"}
+            ],"total":2,"limit":100,"offset":0}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	syncer := newTestSyncer(db, settings, logger, server.URL, "test/refresh-translations", filepath.Join(t.TempDir(), "covers"))
+	if err := syncer.RefreshSubject(ctx, 111); err != nil {
+		t.Fatal(err)
+	}
+	var summary, summaryCN string
+	if err := db.QueryRowContext(ctx, "SELECT summary, summary_cn FROM anime_metadata WHERE bangumi_id = 111").Scan(&summary, &summaryCN); err != nil {
+		t.Fatal(err)
+	}
+	if summary != "新剧情简介" || summaryCN != "" {
+		t.Fatalf("expected changed summary translation to be cleared, got summary=%q summary_cn=%q", summary, summaryCN)
+	}
+	var changedEpisodeNameCN, changedEpisodeDescriptionCN, unchangedEpisodeNameCN, unchangedEpisodeDescriptionCN string
+	if err := db.QueryRowContext(ctx, `
+SELECT name_cn, description_cn FROM anime_episodes WHERE episode_id = 111001`).Scan(
+		&changedEpisodeNameCN, &changedEpisodeDescriptionCN,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `
+SELECT name_cn, description_cn FROM anime_episodes WHERE episode_id = 111002`).Scan(
+		&unchangedEpisodeNameCN, &unchangedEpisodeDescriptionCN,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if changedEpisodeNameCN != "" || changedEpisodeDescriptionCN != "" {
+		t.Fatalf("expected changed episode translations to be cleared, got name_cn=%q desc_cn=%q", changedEpisodeNameCN, changedEpisodeDescriptionCN)
+	}
+	if unchangedEpisodeNameCN != "第2话译文" || unchangedEpisodeDescriptionCN != "第2话简介译文" {
+		t.Fatalf("expected unchanged episode translations to be preserved, got name_cn=%q desc_cn=%q", unchangedEpisodeNameCN, unchangedEpisodeDescriptionCN)
+	}
+	var changedCharacterCN, unchangedCharacterCN string
+	if err := db.QueryRowContext(ctx, "SELECT summary_cn FROM anime_characters WHERE character_id = 501").Scan(&changedCharacterCN); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, "SELECT summary_cn FROM anime_characters WHERE character_id = 502").Scan(&unchangedCharacterCN); err != nil {
+		t.Fatal(err)
+	}
+	if changedCharacterCN != "" || unchangedCharacterCN != "角色二译文" {
+		t.Fatalf("unexpected character translations: changed=%q unchanged=%q", changedCharacterCN, unchangedCharacterCN)
+	}
+	var changedActorCN, unchangedActorCN string
+	if err := db.QueryRowContext(ctx, "SELECT short_summary_cn FROM actors WHERE actor_id = 9001").Scan(&changedActorCN); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, "SELECT short_summary_cn FROM actors WHERE actor_id = 9002").Scan(&unchangedActorCN); err != nil {
+		t.Fatal(err)
+	}
+	if changedActorCN != "" || unchangedActorCN != "声优二译文" {
+		t.Fatalf("unexpected actor translations: changed=%q unchanged=%q", changedActorCN, unchangedActorCN)
+	}
+}
+
 func TestActorsAreDeduplicatedAcrossSubjects(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

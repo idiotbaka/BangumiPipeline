@@ -60,7 +60,7 @@ func run(logger *slog.Logger) error {
 	downloadService := download.NewService(db, systemService, logger, download.Config{DownloadDir: cfg.DownloadDir})
 	mediaService := media.NewService(db, logger, media.Config{
 		MediaDir: cfg.MediaDir, FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
-		DownloadCleaner: downloadService,
+		DownloadCleaner: downloadService, MetadataRefresher: metadataSyncer,
 	})
 	translationService := translation.NewService(db, systemService, logger)
 	scheduler := system.NewScheduler(systemService, logger, cfg.SchedulerPoll)

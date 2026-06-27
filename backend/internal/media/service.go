@@ -51,25 +51,31 @@ var (
 )
 
 type Config struct {
-	MediaDir        string
-	FFmpegPath      string
-	FFprobePath     string
-	DownloadCleaner DownloadCleaner
+	MediaDir          string
+	FFmpegPath        string
+	FFprobePath       string
+	DownloadCleaner   DownloadCleaner
+	MetadataRefresher MetadataRefresher
 }
 
 type DownloadCleaner interface {
 	CleanupCompletedQBitTask(context.Context, int64) error
 }
 
+type MetadataRefresher interface {
+	RefreshSubject(context.Context, int64) error
+}
+
 type Service struct {
-	db          *sql.DB
-	logger      *slog.Logger
-	mediaDir    string
-	ffmpegPath  string
-	ffprobePath string
-	cleaner     DownloadCleaner
-	now         func() time.Time
-	storageMu   sync.Mutex
+	db                *sql.DB
+	logger            *slog.Logger
+	mediaDir          string
+	ffmpegPath        string
+	ffprobePath       string
+	cleaner           DownloadCleaner
+	metadataRefresher MetadataRefresher
+	now               func() time.Time
+	storageMu         sync.Mutex
 }
 
 type JobPage struct {
@@ -232,7 +238,7 @@ func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
 	return &Service{
 		db: db, logger: logger, mediaDir: mediaDir,
 		ffmpegPath: ffmpegPath, ffprobePath: ffprobePath,
-		cleaner: config.DownloadCleaner, now: time.Now,
+		cleaner: config.DownloadCleaner, metadataRefresher: config.MetadataRefresher, now: time.Now,
 	}
 }
 
@@ -892,6 +898,7 @@ func (s *Service) processJob(ctx context.Context, job pendingJob) (processResult
 	} else {
 		s.logger.Info("媒体处理完成后 qBittorrent 下载已清理", "source", "media", "media_job_id", job.ID, "download_job_id", job.DownloadJobID)
 	}
+	s.refreshAnimeMetadataOncePerDay(ctx, job.BangumiID)
 	s.logger.Info("媒体处理成功", "source", "media", "media_job_id", job.ID, "action", plan.action, "output_file", filepath.Base(plan.outputPath))
 	return result, nil
 }
@@ -901,6 +908,38 @@ func (s *Service) cleanupDownload(ctx context.Context, job pendingJob) error {
 		return nil
 	}
 	return s.cleaner.CleanupCompletedQBitTask(ctx, job.DownloadJobID)
+}
+
+func (s *Service) refreshAnimeMetadataOncePerDay(ctx context.Context, bangumiID int64) {
+	if s.metadataRefresher == nil || bangumiID <= 0 {
+		return
+	}
+	now := s.now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+	nowUnix := now.UTC().Unix()
+	result, err := s.db.ExecContext(ctx, `
+UPDATE anime_metadata
+SET last_media_refresh_at = ?
+WHERE bangumi_id = ?
+  AND deleted_at IS NULL
+  AND (last_media_refresh_at IS NULL OR last_media_refresh_at < ?)`, nowUnix, bangumiID, dayStart)
+	if err != nil {
+		s.logger.Warn("媒体处理完成后记录番剧元数据刷新时间失败", "source", "media", "bangumi_id", bangumiID, "error", err)
+		return
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		s.logger.Warn("媒体处理完成后确认番剧元数据刷新时间失败", "source", "media", "bangumi_id", bangumiID, "error", err)
+		return
+	}
+	if affected == 0 {
+		return
+	}
+	if err := s.metadataRefresher.RefreshSubject(ctx, bangumiID); err != nil {
+		s.logger.Warn("媒体处理完成后刷新番剧元数据失败", "source", "media", "bangumi_id", bangumiID, "error", err)
+		return
+	}
+	s.logger.Info("媒体处理完成后已刷新番剧元数据", "source", "media", "bangumi_id", bangumiID)
 }
 
 func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error) {

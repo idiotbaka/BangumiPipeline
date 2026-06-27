@@ -257,6 +257,7 @@ UPDATE anime_metadata
 SET detail_date = ?,
     air_date = CASE WHEN ? != '' THEN ? ELSE air_date END,
     platform = ?, summary = ?,
+    summary_cn = CASE WHEN summary != ? THEN '' ELSE summary_cn END,
     name = CASE WHEN ? != '' THEN ? ELSE name END,
     name_cn = CASE WHEN ? != '' THEN ? ELSE name_cn END,
     eps = ?, total_episodes = ?, volumes = ?, series = ?, locked = ?, nsfw = ?,
@@ -265,6 +266,7 @@ SET detail_date = ?,
     detail_status = 'completed', detail_error = '', detail_fetched_at = ?
 WHERE bangumi_id = ?`,
 		detail.Date, detail.Date, detail.Date, detail.Platform, detail.Summary,
+		detail.Summary,
 		detail.Name, detail.Name, detail.NameCN, detail.NameCN,
 		detail.Eps, detail.TotalEpisodes, detail.Volumes, detail.Series, detail.Locked, detail.NSFW,
 		string(infoboxJSON), ratingJSON, collectionJSON, string(metaTagsJSON),
@@ -311,18 +313,26 @@ func saveCharacters(ctx context.Context, db *sql.DB, bangumiID int64, characters
 		return err
 	}
 	defer tx.Rollback()
+	existing, err := existingCharacterTranslations(ctx, tx, bangumiID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM anime_characters WHERE bangumi_id = ?", bangumiID); err != nil {
 		return err
 	}
 	timestamp := now.UTC().Unix()
 	for _, character := range characters {
+		summaryCN := ""
+		if previous, ok := existing[character.CharacterID]; ok && previous.Summary == character.Summary {
+			summaryCN = previous.SummaryCN
+		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO anime_characters(
-    bangumi_id, character_id, name, summary, relation, type,
+    bangumi_id, character_id, name, summary, summary_cn, relation, type,
     image_large_url, image_local_path, image_status, image_error,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			bangumiID, character.CharacterID, character.Name, character.Summary, character.Relation,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			bangumiID, character.CharacterID, character.Name, character.Summary, summaryCN, character.Relation,
 			character.Type, character.ImageLargeURL, character.ImagePath, character.ImageStatus,
 			character.ImageError, timestamp, timestamp,
 		); err != nil {
@@ -351,20 +361,34 @@ func saveEpisodes(ctx context.Context, db *sql.DB, bangumiID int64, episodes []e
 		return err
 	}
 	defer tx.Rollback()
+	existing, err := existingEpisodeTranslations(ctx, tx, bangumiID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM anime_episodes WHERE bangumi_id = ?", bangumiID); err != nil {
 		return err
 	}
 	timestamp := now.UTC().Unix()
 	for _, episode := range episodes {
+		nameCN := episode.NameCN
+		descriptionCN := ""
+		if previous, ok := existing[episode.ID]; ok {
+			if nameCN == "" && previous.Name == episode.Name {
+				nameCN = previous.NameCN
+			}
+			if previous.Description == episode.Description {
+				descriptionCN = previous.DescriptionCN
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO anime_episodes(
     bangumi_id, episode_id, ep_number, sort_number, type, disc,
     airdate, name, name_cn, duration, duration_seconds, description,
-    comment_count, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    description_cn, comment_count, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			bangumiID, episode.ID, episode.Ep, episode.Sort, episode.Type, episode.Disc,
-			episode.Airdate, episode.Name, episode.NameCN, episode.Duration, episode.DurationSeconds,
-			episode.Description, episode.Comment, timestamp, timestamp,
+			episode.Airdate, episode.Name, nameCN, episode.Duration, episode.DurationSeconds,
+			episode.Description, descriptionCN, episode.Comment, timestamp, timestamp,
 		); err != nil {
 			return err
 		}
@@ -383,6 +407,60 @@ WHERE bangumi_id = ?`, timestamp, bangumiID)
 		return errors.New("anime metadata record not found")
 	}
 	return tx.Commit()
+}
+
+type existingCharacterTranslation struct {
+	Summary   string
+	SummaryCN string
+}
+
+func existingCharacterTranslations(ctx context.Context, tx *sql.Tx, bangumiID int64) (map[int64]existingCharacterTranslation, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT character_id, summary, summary_cn
+FROM anime_characters
+WHERE bangumi_id = ?`, bangumiID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[int64]existingCharacterTranslation)
+	for rows.Next() {
+		var characterID int64
+		var translation existingCharacterTranslation
+		if err := rows.Scan(&characterID, &translation.Summary, &translation.SummaryCN); err != nil {
+			return nil, err
+		}
+		result[characterID] = translation
+	}
+	return result, rows.Err()
+}
+
+type existingEpisodeTranslation struct {
+	Name          string
+	NameCN        string
+	Description   string
+	DescriptionCN string
+}
+
+func existingEpisodeTranslations(ctx context.Context, tx *sql.Tx, bangumiID int64) (map[int64]existingEpisodeTranslation, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT episode_id, name, name_cn, description, description_cn
+FROM anime_episodes
+WHERE bangumi_id = ?`, bangumiID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[int64]existingEpisodeTranslation)
+	for rows.Next() {
+		var episodeID int64
+		var translation existingEpisodeTranslation
+		if err := rows.Scan(&episodeID, &translation.Name, &translation.NameCN, &translation.Description, &translation.DescriptionCN); err != nil {
+			return nil, err
+		}
+		result[episodeID] = translation
+	}
+	return result, rows.Err()
 }
 
 func getActorImageState(ctx context.Context, db *sql.DB, actorID int64) (actorImageState, error) {
@@ -411,6 +489,7 @@ INSERT INTO actors(
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(actor_id) DO UPDATE SET
     name = excluded.name,
+    short_summary_cn = CASE WHEN actors.short_summary != excluded.short_summary THEN '' ELSE actors.short_summary_cn END,
     short_summary = excluded.short_summary,
     career_json = excluded.career_json,
     type = excluded.type,

@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS anime_metadata (
     episodes_status TEXT NOT NULL DEFAULT 'pending',
     episodes_error TEXT NOT NULL DEFAULT '',
     episodes_fetched_at INTEGER,
+    last_media_refresh_at INTEGER,
     media_storage_root TEXT NOT NULL DEFAULT '',
     deleted_at       INTEGER,
     created_at       INTEGER NOT NULL
@@ -805,6 +806,14 @@ VALUES (1, '[]', unixepoch());
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (17, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 17 migration: %w", err)
+	}
+	if err := ensureColumn(ctx, db, "anime_metadata", "last_media_refresh_at", "INTEGER"); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (18, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 18 migration: %w", err)
 	}
 	return nil
 }
