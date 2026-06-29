@@ -72,6 +72,7 @@ type DownloadSettings struct {
 	Port                   int    `json:"port"`
 	Username               string `json:"username"`
 	Password               string `json:"password"`
+	QBitDownloadDir        string `json:"qbitDownloadDir"`
 	MaxConcurrentDownloads int    `json:"maxConcurrentDownloads"`
 	UpdatedAt              int64  `json:"updatedAt"`
 }
@@ -311,11 +312,11 @@ WHERE id = 1`, rssURL, s.now().UTC().Unix())
 func (s *Service) GetDownloadSettings(ctx context.Context) (DownloadSettings, error) {
 	var settings DownloadSettings
 	err := s.db.QueryRowContext(ctx, `
-SELECT host, port, username, password, max_concurrent_downloads, updated_at
+SELECT host, port, username, password, qbit_download_dir, max_concurrent_downloads, updated_at
 FROM download_settings
 WHERE id = 1`).Scan(
 		&settings.Host, &settings.Port, &settings.Username, &settings.Password,
-		&settings.MaxConcurrentDownloads, &settings.UpdatedAt,
+		&settings.QBitDownloadDir, &settings.MaxConcurrentDownloads, &settings.UpdatedAt,
 	)
 	return settings, err
 }
@@ -323,15 +324,16 @@ WHERE id = 1`).Scan(
 func (s *Service) UpdateDownloadSettings(ctx context.Context, settings DownloadSettings) (DownloadSettings, error) {
 	settings.Host = strings.TrimSpace(settings.Host)
 	settings.Username = strings.TrimSpace(settings.Username)
+	settings.QBitDownloadDir = strings.TrimSpace(settings.QBitDownloadDir)
 	if err := validateDownloadSettings(settings); err != nil {
 		return DownloadSettings{}, err
 	}
 
 	_, err := s.db.ExecContext(ctx, `
 UPDATE download_settings
-SET host = ?, port = ?, username = ?, password = ?, max_concurrent_downloads = ?, updated_at = ?
+SET host = ?, port = ?, username = ?, password = ?, qbit_download_dir = ?, max_concurrent_downloads = ?, updated_at = ?
 WHERE id = 1`, settings.Host, settings.Port, settings.Username, settings.Password,
-		settings.MaxConcurrentDownloads, s.now().UTC().Unix())
+		settings.QBitDownloadDir, settings.MaxConcurrentDownloads, s.now().UTC().Unix())
 	if err != nil {
 		return DownloadSettings{}, err
 	}
@@ -411,11 +413,25 @@ func validateDownloadSettings(settings DownloadSettings) error {
 	if settings.MaxConcurrentDownloads < MinConcurrentDownloads || settings.MaxConcurrentDownloads > MaxConcurrentDownloads {
 		return ErrInvalidDownloadSettings
 	}
+	if settings.QBitDownloadDir != "" && !isExternalAbsolutePath(settings.QBitDownloadDir) {
+		return ErrInvalidDownloadSettings
+	}
 	parsed, err := url.Parse("//" + settings.Host)
 	if err != nil || parsed.Host == "" {
 		return ErrInvalidDownloadSettings
 	}
 	return nil
+}
+
+func isExternalAbsolutePath(value string) bool {
+	if value == "" || strings.ContainsRune(value, '\x00') {
+		return false
+	}
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\\`) {
+		return true
+	}
+	return len(value) >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) &&
+		value[1] == ':' && (value[2] == '/' || value[2] == '\\')
 }
 
 func normalizeMediaStorageRoots(paths []string) ([]string, error) {

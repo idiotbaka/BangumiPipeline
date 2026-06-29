@@ -35,9 +35,13 @@ export interface DownloadSettings {
   port: number
   username: string
   password: string
+  serverDownloadDir: string
+  qbitDownloadDir: string
   maxConcurrentDownloads: number
   updatedAt: number
 }
+
+export type DownloadSettingsInput = Omit<DownloadSettings, 'serverDownloadDir' | 'updatedAt'>
 
 export interface MediaStorageSettings {
   defaultRoot: string
@@ -548,7 +552,7 @@ export const api = {
       body: JSON.stringify({ rssUrl }),
     }),
   downloadSettings: () => request<{ settings: DownloadSettings }>('/api/settings/download'),
-  updateDownloadSettings: (settings: Omit<DownloadSettings, 'updatedAt'>) =>
+  updateDownloadSettings: (settings: DownloadSettingsInput) =>
     request<{ settings: DownloadSettings }>('/api/settings/download', {
       method: 'PUT',
       body: JSON.stringify(settings),
@@ -642,7 +646,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(settings),
     }),
-  testDownloadSettings: (settings: Omit<DownloadSettings, 'updatedAt'>) =>
+  testDownloadSettings: (settings: DownloadSettingsInput) =>
     request<{ result: DownloadConnectionTestResult }>('/api/settings/download/test', {
       method: 'POST',
       body: JSON.stringify(settings),

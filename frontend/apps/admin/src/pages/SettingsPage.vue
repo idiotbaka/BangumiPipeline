@@ -23,6 +23,7 @@ const subscriptionUpdatedAt = ref(0)
 const downloadUpdatedAt = ref(0)
 const storageUpdatedAt = ref(0)
 const defaultMediaRoot = ref('')
+const serverDownloadDir = ref('')
 const form = reactive({ httpProxy: '', httpsProxy: '' })
 const llmForm = reactive({ baseUrl: '', apiKey: '', model: '' })
 const subscriptionForm = reactive({ rssUrl: '' })
@@ -31,6 +32,7 @@ const downloadForm = reactive({
   port: 8080,
   username: '',
   password: '',
+  qbitDownloadDir: '',
   maxConcurrentDownloads: 2,
 })
 const storageForm = reactive({
@@ -75,6 +77,15 @@ function validateHost(_rule: unknown, value: string, callback: (error?: Error) =
   callback()
 }
 
+function validateExternalAbsolutePath(_rule: unknown, value: string, callback: (error?: Error) => void) {
+  const path = value.trim()
+  if (!path || path.startsWith('/') || path.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(path)) {
+    callback()
+    return
+  }
+  callback(new Error('请输入 qBittorrent 所在环境中的绝对路径'))
+}
+
 const rules: FormRules<typeof form> = {
   httpProxy: [{ validator: validateProxy, trigger: 'blur' }],
   httpsProxy: [{ validator: validateProxy, trigger: 'blur' }],
@@ -91,6 +102,7 @@ const llmRules: FormRules<typeof llmForm> = {
 const downloadRules: FormRules<typeof downloadForm> = {
   host: [{ validator: validateHost, trigger: 'blur' }],
   port: [{ type: 'number', min: 1, max: 65535, message: '端口号必须在 1 到 65535 之间', trigger: 'change' }],
+  qbitDownloadDir: [{ validator: validateExternalAbsolutePath, trigger: 'blur' }],
   maxConcurrentDownloads: [{ type: 'number', min: 1, max: 50, message: '并发下载数必须在 1 到 50 之间', trigger: 'change' }],
 }
 
@@ -117,6 +129,8 @@ async function loadSettings() {
     downloadForm.port = download.settings.port
     downloadForm.username = download.settings.username
     downloadForm.password = download.settings.password
+    serverDownloadDir.value = download.settings.serverDownloadDir
+    downloadForm.qbitDownloadDir = download.settings.qbitDownloadDir
     downloadForm.maxConcurrentDownloads = download.settings.maxConcurrentDownloads
     downloadUpdatedAt.value = download.settings.updatedAt
     defaultMediaRoot.value = storage.settings.defaultRoot
@@ -231,6 +245,7 @@ function downloadPayload() {
     port: downloadForm.port,
     username: downloadForm.username.trim(),
     password: downloadForm.password,
+    qbitDownloadDir: downloadForm.qbitDownloadDir.trim(),
     maxConcurrentDownloads: downloadForm.maxConcurrentDownloads,
   }
 }
@@ -244,6 +259,8 @@ async function saveDownload() {
     downloadForm.port = settings.port
     downloadForm.username = settings.username
     downloadForm.password = settings.password
+    serverDownloadDir.value = settings.serverDownloadDir
+    downloadForm.qbitDownloadDir = settings.qbitDownloadDir
     downloadForm.maxConcurrentDownloads = settings.maxConcurrentDownloads
     downloadUpdatedAt.value = settings.updatedAt
     ElMessage.success('下载设置已保存')
@@ -403,6 +420,21 @@ onMounted(loadSettings)
           <el-input v-model="downloadForm.password" size="large" type="password" show-password placeholder="123456" clearable />
         </el-form-item>
       </div>
+      <el-form-item label="服务器下载目录">
+        <el-input :model-value="serverDownloadDir" size="large" disabled />
+        <div class="form-help">由 BP_DOWNLOAD_DIR 决定，磁盘检查和媒体处理始终使用该宿主机路径。</div>
+      </el-form-item>
+      <el-form-item label="qBittorrent 下载目录" prop="qbitDownloadDir">
+        <el-input
+          v-model.trim="downloadForm.qbitDownloadDir"
+          size="large"
+          :placeholder="serverDownloadDir || '/downloads'"
+          clearable
+        />
+        <div class="form-help">
+          qBittorrent 在 Docker 中运行时，填写上述服务器下载目录在容器内的映射路径；留空表示两边路径相同。任务子目录会自动保持一致。
+        </div>
+      </el-form-item>
       <el-form-item label="并发下载数" prop="maxConcurrentDownloads">
         <el-input-number v-model="downloadForm.maxConcurrentDownloads" :min="1" :max="50" size="large" controls-position="right" />
         <div class="form-help">计划任务只会在当前下载中任务少于该数量时创建新的 qBittorrent 下载。</div>

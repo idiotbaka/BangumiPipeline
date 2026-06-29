@@ -159,6 +159,17 @@ type mediaStorageSettingsResponse struct {
 	UpdatedAt   int64    `json:"updatedAt"`
 }
 
+type downloadSettingsResponse struct {
+	Host                   string `json:"host"`
+	Port                   int    `json:"port"`
+	Username               string `json:"username"`
+	Password               string `json:"password"`
+	ServerDownloadDir      string `json:"serverDownloadDir"`
+	QBitDownloadDir        string `json:"qbitDownloadDir"`
+	MaxConcurrentDownloads int    `json:"maxConcurrentDownloads"`
+	UpdatedAt              int64  `json:"updatedAt"`
+}
+
 func (a *AdminAPI) dashboardOverview(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdministrator(w, r) {
 		return
@@ -462,6 +473,19 @@ func (a *AdminAPI) mediaStorageSettingsResponse(settings system.MediaStorageSett
 		DefaultRoot: a.media.DefaultMediaDir(),
 		ExtraRoots:  settings.ExtraRoots,
 		UpdatedAt:   settings.UpdatedAt,
+	}
+}
+
+func (a *AdminAPI) downloadSettingsResponse(settings system.DownloadSettings) downloadSettingsResponse {
+	return downloadSettingsResponse{
+		Host:                   settings.Host,
+		Port:                   settings.Port,
+		Username:               settings.Username,
+		Password:               settings.Password,
+		ServerDownloadDir:      a.download.DownloadDir(),
+		QBitDownloadDir:        settings.QBitDownloadDir,
+		MaxConcurrentDownloads: settings.MaxConcurrentDownloads,
+		UpdatedAt:              settings.UpdatedAt,
 	}
 }
 
@@ -1375,7 +1399,7 @@ func (a *AdminAPI) getDownloadSettings(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+	writeJSON(w, http.StatusOK, map[string]any{"settings": a.downloadSettingsResponse(settings)})
 }
 
 func (a *AdminAPI) updateDownloadSettings(w http.ResponseWriter, r *http.Request) {
@@ -1396,7 +1420,7 @@ func (a *AdminAPI) updateDownloadSettings(w http.ResponseWriter, r *http.Request
 		a.internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+	writeJSON(w, http.StatusOK, map[string]any{"settings": a.downloadSettingsResponse(settings)})
 }
 
 func (a *AdminAPI) testDownloadSettings(w http.ResponseWriter, r *http.Request) {

@@ -268,19 +268,6 @@ CREATE TABLE IF NOT EXISTS media_storage_settings (
 INSERT OR IGNORE INTO media_storage_settings(id, extra_roots_json, updated_at)
 VALUES (1, '[]', unixepoch());
 
-INSERT OR IGNORE INTO scheduled_tasks(
-    task_key, name, description, schedule, enabled, interval_minutes, created_at, updated_at
-) VALUES (
-    'translate-anime-metadata',
-    '翻译新番元数据',
-    '使用 OpenAI Chat 兼容的大模型将 Bangumi 抓取到的番剧简介、分集信息、角色和声优简介翻译为中文。',
-    'interval',
-    0,
-    1,
-    unixepoch(),
-    unixepoch()
-);
-
 CREATE TABLE IF NOT EXISTS system_logs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     level       TEXT NOT NULL,
@@ -580,6 +567,7 @@ CREATE TABLE IF NOT EXISTS download_settings (
     port                     INTEGER NOT NULL DEFAULT 8080,
     username                 TEXT NOT NULL DEFAULT '',
     password                 TEXT NOT NULL DEFAULT '',
+    qbit_download_dir        TEXT NOT NULL DEFAULT '',
     max_concurrent_downloads INTEGER NOT NULL DEFAULT 2,
     updated_at               INTEGER NOT NULL
 );
@@ -972,6 +960,14 @@ ON viewer_anime_follows(bangumi_id);
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (25, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 25 migration: %w", err)
+	}
+	if err := ensureColumn(ctx, db, "download_settings", "qbit_download_dir", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (26, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 26 migration: %w", err)
 	}
 	return nil
 }

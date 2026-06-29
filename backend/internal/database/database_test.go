@@ -218,6 +218,57 @@ VALUES (6060, ?, ?, 0)`, id, id); err != nil {
 	}
 }
 
+func TestVersion26MigrationAddsQBitDownloadDir(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "version25.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.ExecContext(ctx, `
+CREATE TABLE download_settings (
+    id                       INTEGER PRIMARY KEY CHECK (id = 1),
+    host                     TEXT NOT NULL DEFAULT '127.0.0.1',
+    port                     INTEGER NOT NULL DEFAULT 8080,
+    username                 TEXT NOT NULL DEFAULT '',
+    password                 TEXT NOT NULL DEFAULT '',
+    max_concurrent_downloads INTEGER NOT NULL DEFAULT 2,
+    updated_at               INTEGER NOT NULL
+);
+INSERT INTO download_settings(id, host, port, username, password, max_concurrent_downloads, updated_at)
+VALUES (1, 'qbittorrent', 8080, 'admin', 'secret', 3, 1);`); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := database.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var qbitDownloadDir string
+	if err := db.QueryRowContext(ctx, `
+SELECT qbit_download_dir FROM download_settings WHERE id = 1`).Scan(&qbitDownloadDir); err != nil {
+		t.Fatal(err)
+	}
+	if qbitDownloadDir != "" {
+		t.Fatalf("expected empty default qBittorrent directory, got %q", qbitDownloadDir)
+	}
+	var applied bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 26)`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("expected version 26 migration to be recorded")
+	}
+}
+
 func assertTableExists(t *testing.T, db *sql.DB, table string) {
 	t.Helper()
 	var exists bool

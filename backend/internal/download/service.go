@@ -107,6 +107,7 @@ type activeJob struct {
 	SubscriptionItemID int64
 	QBitHash           string
 	SavePath           string
+	QBitSavePath       string
 	Status             string
 	StartedAt          *int64
 }
@@ -122,6 +123,10 @@ func NewService(db *sql.DB, settings SettingsProvider, logger *slog.Logger, conf
 	return &Service{db: db, settings: settings, logger: logger, downloadDir: downloadDir, now: time.Now}
 }
 
+func (s *Service) DownloadDir() string {
+	return s.downloadDir
+}
+
 func (s *Service) Execute(ctx context.Context) error {
 	settings, err := s.settings.GetDownloadSettings(ctx)
 	if err != nil {
@@ -135,7 +140,7 @@ func (s *Service) Execute(ctx context.Context) error {
 		return fmt.Errorf("连接 qBittorrent: %w", err)
 	}
 
-	synced, err := s.syncActiveJobs(ctx, client)
+	synced, err := s.syncActiveJobs(ctx, client, settings)
 	if err != nil {
 		return fmt.Errorf("同步 qBittorrent 下载状态: %w", err)
 	}
@@ -168,7 +173,7 @@ func (s *Service) Execute(ctx context.Context) error {
 	}
 	started := 0
 	for _, candidate := range candidates {
-		if err := s.startCandidate(ctx, client, candidate); err != nil {
+		if err := s.startCandidate(ctx, client, candidate, settings); err != nil {
 			return err
 		}
 		started++
@@ -263,6 +268,7 @@ func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (RetryResult,
 		return RetryResult{}, fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
 	}
 
+	job.QBitSavePath = s.qBitSavePath(job.SavePath, settings.QBitDownloadDir)
 	torrent, ok := matchTorrent(job, torrents, torrentsByHash(torrents))
 	if !ok {
 		updated, err := s.resetFailedJobToPending(ctx, jobID)
@@ -319,6 +325,7 @@ func (s *Service) CleanupCompletedQBitTask(ctx context.Context, jobID int64) err
 	}
 
 	tag := tagForItem(job.SubscriptionItemID)
+	job.QBitSavePath = s.qBitSavePath(job.SavePath, settings.QBitDownloadDir)
 	torrent, ok := matchTorrent(job, torrents, torrentsByHash(torrents))
 	if ok {
 		if err := client.deleteTorrents(ctx, []string{torrent.Hash}, true); err != nil {
@@ -399,7 +406,7 @@ WHERE dj.id = ?`, jobID)
 	return job, err
 }
 
-func (s *Service) syncActiveJobs(ctx context.Context, client *qBitClient) (int, error) {
+func (s *Service) syncActiveJobs(ctx context.Context, client *qBitClient, settings system.DownloadSettings) (int, error) {
 	jobs, err := s.syncableJobs(ctx)
 	if err != nil {
 		return 0, err
@@ -415,6 +422,7 @@ func (s *Service) syncActiveJobs(ctx context.Context, client *qBitClient) (int, 
 
 	synced := 0
 	for _, job := range jobs {
+		job.QBitSavePath = s.qBitSavePath(job.SavePath, settings.QBitDownloadDir)
 		torrent, ok := matchTorrent(job, torrents, byHash)
 		if !ok {
 			if job.QBitHash != "" {
@@ -494,11 +502,12 @@ LIMIT ?`, StatusPending, limit)
 	return items, rows.Err()
 }
 
-func (s *Service) startCandidate(ctx context.Context, client *qBitClient, candidate pendingCandidate) error {
+func (s *Service) startCandidate(ctx context.Context, client *qBitClient, candidate pendingCandidate, settings system.DownloadSettings) error {
 	now := s.now().UTC().Unix()
 	candidate.SourceURL = normalizeDownloadSourceURL(candidate.SourceURL)
 	folderName := folderNameFor(candidate)
 	savePath := filepath.Join(s.downloadDir, folderName)
+	qBitSavePath := s.qBitSavePath(savePath, settings.QBitDownloadDir)
 	jobID, err := s.ensureJob(ctx, candidate, folderName, savePath, now)
 	if err != nil {
 		return err
@@ -514,11 +523,11 @@ func (s *Service) startCandidate(ctx context.Context, client *qBitClient, candid
 		return err
 	}
 	tags := []string{commonQBitTag, tagForItem(candidate.SubscriptionItemID)}
-	if err := client.addURL(ctx, candidate.SourceURL, savePath, tags); err != nil {
+	if err := client.addURL(ctx, candidate.SourceURL, qBitSavePath, tags); err != nil {
 		_ = s.markFailed(ctx, jobID, err.Error())
 		return nil
 	}
-	torrent, ok, err := s.waitForTorrent(ctx, client, candidate.SubscriptionItemID, savePath)
+	torrent, ok, err := s.waitForTorrent(ctx, client, candidate.SubscriptionItemID, savePath, qBitSavePath)
 	if err != nil {
 		_ = s.markFailed(ctx, jobID, err.Error())
 		return nil
@@ -554,13 +563,13 @@ INSERT INTO download_jobs(
 	return result.LastInsertId()
 }
 
-func (s *Service) waitForTorrent(ctx context.Context, client *qBitClient, itemID int64, savePath string) (qBitTorrent, bool, error) {
+func (s *Service) waitForTorrent(ctx context.Context, client *qBitClient, itemID int64, savePath, qBitSavePath string) (qBitTorrent, bool, error) {
 	for attempt := 0; attempt < 10; attempt++ {
 		torrents, err := client.torrents(ctx)
 		if err != nil {
 			return qBitTorrent{}, false, err
 		}
-		job := activeJob{SubscriptionItemID: itemID, SavePath: savePath}
+		job := activeJob{SubscriptionItemID: itemID, SavePath: savePath, QBitSavePath: qBitSavePath}
 		if torrent, ok := matchTorrent(job, torrents, nil); ok {
 			return torrent, true, nil
 		}
@@ -581,7 +590,7 @@ func matchTorrent(job activeJob, torrents []qBitTorrent, byHash map[string]qBitT
 	}
 	tag := tagForItem(job.SubscriptionItemID)
 	for _, torrent := range torrents {
-		if torrentHasTag(torrent, tag) || sameDownloadPath(torrent.SavePath, job.SavePath) {
+		if torrentHasTag(torrent, tag) || sameDownloadPath(torrent.SavePath, job.SavePath) || sameDownloadPath(torrent.SavePath, job.QBitSavePath) {
 			return torrent, true
 		}
 	}
@@ -612,6 +621,33 @@ func normalizeDownloadPath(value string) string {
 	value = strings.TrimRight(value, `/\`)
 	value = filepath.Clean(value)
 	return strings.ReplaceAll(value, `\`, `/`)
+}
+
+func (s *Service) qBitSavePath(hostSavePath, qBitDownloadDir string) string {
+	qBitDownloadDir = strings.TrimSpace(qBitDownloadDir)
+	if qBitDownloadDir == "" {
+		return hostSavePath
+	}
+	relative, err := filepath.Rel(s.downloadDir, hostSavePath)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return hostSavePath
+	}
+	if relative == "." {
+		return qBitDownloadDir
+	}
+	separator := "/"
+	if strings.Contains(qBitDownloadDir, `\`) && !strings.Contains(qBitDownloadDir, "/") {
+		separator = `\`
+	}
+	root := strings.TrimRight(qBitDownloadDir, `/\`)
+	if root == "" {
+		root = separator
+	}
+	relative = strings.ReplaceAll(filepath.ToSlash(relative), "/", separator)
+	if root == separator {
+		return root + strings.TrimLeft(relative, `/\`)
+	}
+	return root + separator + strings.TrimLeft(relative, `/\`)
 }
 
 func (s *Service) updateFromTorrent(ctx context.Context, jobID int64, torrent qBitTorrent) error {

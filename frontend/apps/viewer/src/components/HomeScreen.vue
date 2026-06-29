@@ -358,7 +358,11 @@ function syncDetailFromLocation() {
             <i class="history-icon" aria-hidden="true" />观看历史
           </button>
           <button :disabled="loading" type="button" role="menuitem" @click="emit('logout')">
-            <i class="exit-icon" aria-hidden="true" />退出登录
+            <svg class="exit-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 1.75v5" />
+              <path d="M4.1 3.9a5.5 5.5 0 1 0 7.8 0" />
+            </svg>
+            退出登录
           </button>
         </div>
       </div>
@@ -933,23 +937,17 @@ function syncDetailFromLocation() {
 }
 
 .exit-icon {
-  position: relative;
-  width: 14px;
-  height: 14px;
-  border: 1px solid currentColor;
-  border-right: 0;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
 }
 
-.exit-icon::after {
-  content: '';
-  position: absolute;
-  top: 5px;
-  right: -5px;
-  width: 8px;
-  height: 4px;
-  border-top: 1px solid currentColor;
-  border-right: 1px solid currentColor;
-  transform: rotate(45deg);
+.exit-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .user-avatar {
