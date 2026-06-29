@@ -28,9 +28,21 @@ export interface ViewerAnimeCard {
   updatedAt: number | null
 }
 
+export interface ViewerCarouselSlide {
+  id: number
+  bangumiId: number
+  title: string
+  summary: string
+  airDate: string
+  ratingScore: number | null
+  sortOrder: number
+  imageUpdatedAt: number
+}
+
 export interface ViewerHome {
   hotRecommendations: ViewerAnimeCard[]
   recentUpdates: ViewerAnimeCard[]
+  carouselSlides: ViewerCarouselSlide[]
 }
 
 interface ErrorPayload {

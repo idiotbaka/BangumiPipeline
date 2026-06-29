@@ -882,6 +882,25 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (21, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 21 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_carousel_items (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    bangumi_id         INTEGER NOT NULL UNIQUE REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    sort_order         INTEGER NOT NULL DEFAULT 0,
+    image_data         BLOB NOT NULL,
+    image_content_type TEXT NOT NULL,
+    image_updated_at   INTEGER NOT NULL,
+    created_at         INTEGER NOT NULL,
+    updated_at         INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_carousel_sort
+ON viewer_carousel_items(sort_order, id);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (22, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 22 migration: %w", err)
+	}
 	return nil
 }
 

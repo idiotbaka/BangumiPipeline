@@ -18,7 +18,6 @@ const maxHotPages = 4
 const hotSkeletonCount = 8
 const recentSkeletonCount = 24 // 最近更新：8 列 × 3 排
 const maxRecentCount = 24 // 最近更新最多显示 24 个（3 排）
-const heroSlideCount = 5 // Hero 轮播取热播前 5 部
 const heroIntervalMs = 5500
 
 const searchQuery = ref('')
@@ -31,12 +30,13 @@ const failedCovers = ref<Set<number>>(new Set())
 const home = ref<ViewerHome>({
   hotRecommendations: [],
   recentUpdates: [],
+  carouselSlides: [],
 })
 
 let heroTimer: ReturnType<typeof setInterval> | null = null
 let relativeTimeTimer: ReturnType<typeof setInterval> | null = null
 
-const heroSlides = computed(() => home.value.hotRecommendations.slice(0, heroSlideCount))
+const heroSlides = computed(() => home.value.carouselSlides)
 const currentHero = computed(() => heroSlides.value[heroIndex.value] ?? null)
 
 const hotPages = computed(() => {
@@ -143,6 +143,10 @@ function coverURL(item: ViewerAnimeCard) {
   return `/api/anime/${item.bangumiId}/cover`
 }
 
+function carouselImageURL(id: number, updatedAt: number) {
+  return `/api/carousels/${id}/image?v=${updatedAt}`
+}
+
 function hasCover(item: ViewerAnimeCard) {
   return item.hasCover && !failedCovers.value.has(item.bangumiId)
 }
@@ -184,15 +188,6 @@ function formatAirDate(value: string) {
 function formatPremiereDate(value: string) {
   return value ? `于 ${formatAirDate(value)} 首播` : '首播日期未定'
 }
-
-// Hero 番剧标题：优先展示标题，回退中文名与原名
-function heroTitle(item: ViewerAnimeCard) {
-  return item.title || item.nameCN || item.name || '未命名番剧'
-}
-
-// Hero 占位简介：API 暂无 summary 字段，未来由管理后台自定义轮播图后接入真实简介
-const PLACEHOLDER_SUMMARY =
-  '这是剧情简介的占位内容——未来可在管理后台为每部番剧配置自定义轮播图与简介。当前轮播仅用于展示首页视觉版式与交互效果。'
 
 // 卡片交错入场延迟
 function stagger(index: number, base = 0.04, step = 0.05) {
@@ -238,10 +233,18 @@ function stagger(index: number, base = 0.04, step = 0.05) {
       <div class="stage-halo halo-b" aria-hidden="true" />
 
       <div class="content-wrap">
-        <!-- ===== Hero 占位轮播 ===== -->
-        <section class="hero-carousel" aria-label="精选轮播">
-          <!-- 背景光晕 + 飘动几何板（容器内不填充图片） -->
-          <div class="hero-bg" aria-hidden="true">
+        <!-- ===== 首页轮播 ===== -->
+        <section class="hero-carousel" :class="{ 'has-slide': currentHero }" aria-label="精选轮播">
+          <img
+            v-if="currentHero"
+            class="hero-image"
+            :src="carouselImageURL(currentHero.id, currentHero.imageUpdatedAt)"
+            :alt="currentHero.title"
+          />
+          <div v-if="currentHero" class="hero-shade" aria-hidden="true" />
+
+          <!-- 未配置轮播图时保留原有几何背景 -->
+          <div v-else class="hero-bg" aria-hidden="true">
             <div class="hero-glow glow-pink" />
             <div class="hero-glow glow-cyan" />
             <div class="hero-glow glow-yellow" />
@@ -251,29 +254,27 @@ function stagger(index: number, base = 0.04, step = 0.05) {
           </div>
           <ParticleField :count="14" palette="cool" :max-size="40" />
 
-          <!-- 玻璃信息卡 -->
-          <div v-if="currentHero" :key="currentHero.bangumiId" class="hero-content">
+          <div v-if="currentHero" :key="currentHero.id" class="hero-content">
             <span class="hero-index-tag">
               <i>{{ String(heroIndex + 1).padStart(2, '0') }}</i>
               <span>/ {{ String(heroSlides.length).padStart(2, '0') }}</span>
             </span>
             <p class="hero-kicker">FEATURED</p>
-            <h1 class="hero-title">{{ heroTitle(currentHero) }}</h1>
+            <h1 class="hero-title">{{ currentHero.title }}</h1>
             <div class="hero-meta">
               <span class="meta-pill">
                 <i class="meta-dot" aria-hidden="true" />
                 {{ formatAirDate(currentHero.airDate) }}
               </span>
-              <span class="meta-pill">
+              <span v-if="currentHero.ratingScore !== null" class="meta-pill">
                 <i class="meta-star" aria-hidden="true">★</i>
                 {{ ratingText(currentHero.ratingScore) }}
               </span>
-              <span class="meta-pill">{{ updateText(currentHero) }}</span>
             </div>
-            <p class="hero-summary">{{ PLACEHOLDER_SUMMARY }}</p>
+            <p class="hero-summary">{{ currentHero.summary || '暂无剧情简介' }}</p>
           </div>
 
-          <!-- 空态：暂无热播数据 -->
+          <!-- 空态：暂无轮播配置 -->
           <div v-else class="hero-content hero-empty">
             <span class="hero-index-tag">
               <i>00</i>
@@ -281,7 +282,7 @@ function stagger(index: number, base = 0.04, step = 0.05) {
             </span>
             <p class="hero-kicker">FEATURED</p>
             <h1 class="hero-title">{{ siteName }}</h1>
-            <p class="hero-summary">暂无精选内容，配置订阅后这里会展示热门番剧的轮播推荐。</p>
+            <p class="hero-summary">暂无轮播内容，请在管理后台的轮播图管理中新增配置。</p>
           </div>
 
           <!-- 切换箭头 -->
@@ -304,7 +305,7 @@ function stagger(index: number, base = 0.04, step = 0.05) {
           <div v-if="heroSlides.length > 1" class="hero-dots" role="tablist" aria-label="切换轮播">
             <button
               v-for="(slide, index) in heroSlides"
-              :key="slide.bangumiId"
+              :key="slide.id"
               class="hero-dot"
               :class="{ active: index === heroIndex }"
               type="button"
@@ -702,7 +703,7 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   padding: 34px 0 64px;
 }
 
-/* ============ Hero 占位轮播 ============ */
+/* ============ 首页轮播 ============ */
 .hero-carousel {
   position: relative;
   display: grid;
@@ -714,6 +715,31 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   box-shadow: 0 26px 60px rgba(255, 95, 158, 0.12);
   clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 30px, 100% 100%, 30px 100%, 0 calc(100% - 30px));
   animation: bp-rise 0.58s var(--ease-out) 0.04s both;
+}
+
+.hero-carousel.has-slide {
+  background: #101624;
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 28px 64px rgba(26, 36, 58, 0.28);
+}
+
+.hero-image {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.hero-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(6, 11, 22, 0.94) 0%, rgba(8, 14, 27, 0.8) 34%, rgba(8, 14, 27, 0.38) 58%, transparent 82%),
+    linear-gradient(0deg, rgba(6, 11, 22, 0.28), transparent 56%);
 }
 
 .hero-bg {
@@ -888,6 +914,27 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
+}
+
+.has-slide .hero-kicker {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.has-slide .hero-title {
+  color: #ffffff;
+  text-shadow: 0 3px 16px rgba(0, 0, 0, 0.52);
+}
+
+.has-slide .meta-pill {
+  color: #ffffff;
+  background: rgba(8, 14, 27, 0.42);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+}
+
+.has-slide .hero-summary {
+  color: rgba(255, 255, 255, 0.84);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
 }
 
 .hero-empty .hero-summary {

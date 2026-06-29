@@ -15,6 +15,7 @@ import TranscodeManagementPage from './pages/TranscodeManagementPage.vue'
 import ViewerUserManagementPage from './pages/ViewerUserManagementPage.vue'
 import ViewerSiteSettingsPage from './pages/ViewerSiteSettingsPage.vue'
 import ViewerInviteManagementPage from './pages/ViewerInviteManagementPage.vue'
+import ViewerCarouselManagementPage from './pages/ViewerCarouselManagementPage.vue'
 import AdminLayout from './components/AdminLayout.vue'
 
 const router = createRouter({
@@ -40,6 +41,7 @@ const router = createRouter({
         { path: 'viewer-users', name: 'viewer-users', component: ViewerUserManagementPage },
         { path: 'viewer-invites', name: 'viewer-invites', component: ViewerInviteManagementPage },
         { path: 'viewer-site-settings', name: 'viewer-site-settings', component: ViewerSiteSettingsPage },
+        { path: 'viewer-carousels', name: 'viewer-carousels', component: ViewerCarouselManagementPage },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

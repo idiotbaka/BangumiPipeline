@@ -75,6 +75,22 @@ export interface ViewerSiteSettings {
   updatedAt: number
 }
 
+export interface ViewerCarouselItem {
+  id: number
+  bangumiId: number
+  title: string
+  sortOrder: number
+  imageUpdatedAt: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ViewerCarouselInput {
+  bangumiId: number
+  sortOrder: number
+  file?: File | null
+}
+
 export interface ViewerInvite {
   id: number
   code: string
@@ -470,6 +486,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+function viewerCarouselForm(input: ViewerCarouselInput) {
+  const form = new FormData()
+  form.append('bangumiId', String(input.bangumiId))
+  form.append('sortOrder', String(input.sortOrder))
+  if (input.file) form.append('file', input.file)
+  return form
+}
+
 export const api = {
   setupStatus: () => request<{ initialized: boolean }>('/api/setup/status'),
   setup: (username: string, password: string) =>
@@ -565,6 +589,19 @@ export const api = {
       body: form,
     })
   },
+  viewerCarousels: () => request<{ items: ViewerCarouselItem[] }>('/api/viewer/carousels'),
+  createViewerCarousel: (input: ViewerCarouselInput) =>
+    request<{ item: ViewerCarouselItem }>('/api/viewer/carousels', {
+      method: 'POST',
+      body: viewerCarouselForm(input),
+    }),
+  updateViewerCarousel: (carouselId: number, input: ViewerCarouselInput) =>
+    request<{ item: ViewerCarouselItem }>(`/api/viewer/carousels/${carouselId}`, {
+      method: 'PUT',
+      body: viewerCarouselForm(input),
+    }),
+  deleteViewerCarousel: (carouselId: number) =>
+    request<void>(`/api/viewer/carousels/${carouselId}`, { method: 'DELETE' }),
   llmSettings: () => request<{ settings: LLMSettings }>('/api/settings/llm'),
   updateLLMSettings: (settings: Omit<LLMSettings, 'updatedAt'>) =>
     request<{ settings: LLMSettings }>('/api/settings/llm', {

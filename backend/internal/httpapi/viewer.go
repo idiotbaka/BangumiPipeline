@@ -30,6 +30,7 @@ func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, log
 	mux.HandleFunc("GET /api/auth/me", api.me)
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
 	mux.HandleFunc("GET /api/home", api.home)
+	mux.HandleFunc("GET /api/carousels/{carouselID}/image", api.carouselImage)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
 	mux.HandleFunc("GET /favicon.png", api.favicon)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
@@ -119,7 +120,36 @@ func (a *ViewerAPI) home(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"home": home})
+	slides, err := a.auth.CarouselSlides(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"home": map[string]any{
+		"hotRecommendations": home.HotRecommendations,
+		"recentUpdates":      home.RecentUpdates,
+		"carouselSlides":     slides,
+	}})
+}
+
+func (a *ViewerAPI) carouselImage(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("carouselID"))
+	if !ok {
+		return
+	}
+	image, err := a.auth.CarouselImage(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, viewer.ErrCarouselNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeCarouselImage(w, image, "private, max-age=86400")
 }
 
 func (a *ViewerAPI) animeCover(w http.ResponseWriter, r *http.Request) {
