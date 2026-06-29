@@ -901,6 +901,33 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (22, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 22 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_filter_dimensions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS viewer_filter_tags (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    dimension_id INTEGER NOT NULL REFERENCES viewer_filter_dimensions(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(dimension_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_filter_dimensions_sort
+ON viewer_filter_dimensions(sort_order, id);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_filter_tags_dimension_sort
+ON viewer_filter_tags(dimension_id, sort_order, id);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (23, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 23 migration: %w", err)
+	}
 	return nil
 }
 

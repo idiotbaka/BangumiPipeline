@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { api, type ViewerAnimeCard, type ViewerHome, type ViewerUser } from '../api'
+import LibraryScreen from './LibraryScreen.vue'
 import ParticleField from './ParticleField.vue'
 import ScheduleScreen from './ScheduleScreen.vue'
 
@@ -22,7 +23,9 @@ const maxRecentCount = 24 // 最近更新最多显示 24 个（3 排）
 const heroIntervalMs = 5500
 
 const searchQuery = ref('')
-const activeView = ref<'home' | 'schedule'>('home')
+const libraryQuery = ref('')
+const librarySearchKey = ref(0)
+const activeView = ref<'home' | 'schedule' | 'library'>('home')
 const homeLoading = ref(false)
 const homeError = ref('')
 const hotPage = ref(0)
@@ -195,6 +198,12 @@ function formatPremiereDate(value: string) {
 function stagger(index: number, base = 0.04, step = 0.05) {
   return `${base + index * step}s`
 }
+
+function submitGlobalSearch() {
+  libraryQuery.value = searchQuery.value.trim()
+  librarySearchKey.value++
+  activeView.value = 'library'
+}
 </script>
 
 <template>
@@ -224,13 +233,20 @@ function stagger(index: number, base = 0.04, step = 0.05) {
         >
           番剧时间表
         </button>
-        <button class="nav-item" type="button">番剧图书馆</button>
+        <button
+          class="nav-item"
+          :class="{ active: activeView === 'library' }"
+          type="button"
+          @click="activeView = 'library'"
+        >
+          番剧图书馆
+        </button>
       </nav>
 
-      <label class="search-box">
+      <form class="search-box" role="search" @submit.prevent="submitGlobalSearch">
         <span class="search-symbol" aria-hidden="true" />
         <input v-model="searchQuery" type="search" placeholder="搜索番剧" />
-      </label>
+      </form>
 
       <div class="user-chip">
         <span class="user-avatar" aria-hidden="true">{{ user.username.slice(0, 1).toUpperCase() }}</span>
@@ -243,6 +259,11 @@ function stagger(index: number, base = 0.04, step = 0.05) {
     </header>
 
     <ScheduleScreen v-if="activeView === 'schedule'" />
+    <LibraryScreen
+      v-else-if="activeView === 'library'"
+      :initial-query="libraryQuery"
+      :search-key="librarySearchKey"
+    />
 
     <section v-else class="home-stage" aria-label="首页">
       <ParticleField :count="16" palette="pink" :max-size="30" />

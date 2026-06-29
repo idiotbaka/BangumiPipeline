@@ -91,6 +91,21 @@ export interface ViewerCarouselInput {
   file?: File | null
 }
 
+export interface ViewerFilterDimension {
+  id: number
+  name: string
+  sortOrder: number
+  tags: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ViewerFilterDimensionInput {
+  name: string
+  sortOrder: number
+  tags: string[]
+}
+
 export interface ViewerInvite {
   id: number
   code: string
@@ -602,6 +617,20 @@ export const api = {
     }),
   deleteViewerCarousel: (carouselId: number) =>
     request<void>(`/api/viewer/carousels/${carouselId}`, { method: 'DELETE' }),
+  viewerFilterDimensions: () =>
+    request<{ items: ViewerFilterDimension[] }>('/api/viewer/filter-dimensions'),
+  createViewerFilterDimension: (input: ViewerFilterDimensionInput) =>
+    request<{ item: ViewerFilterDimension }>('/api/viewer/filter-dimensions', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  updateViewerFilterDimension: (dimensionId: number, input: ViewerFilterDimensionInput) =>
+    request<{ item: ViewerFilterDimension }>(`/api/viewer/filter-dimensions/${dimensionId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  deleteViewerFilterDimension: (dimensionId: number) =>
+    request<void>(`/api/viewer/filter-dimensions/${dimensionId}`, { method: 'DELETE' }),
   llmSettings: () => request<{ settings: LLMSettings }>('/api/settings/llm'),
   updateLLMSettings: (settings: Omit<LLMSettings, 'updatedAt'>) =>
     request<{ settings: LLMSettings }>('/api/settings/llm', {

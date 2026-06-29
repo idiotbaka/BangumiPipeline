@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"bangumipipeline.local/server/internal/bangumi"
@@ -32,6 +33,8 @@ func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, log
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
 	mux.HandleFunc("GET /api/home", api.home)
 	mux.HandleFunc("GET /api/anime-schedule", api.animeSchedule)
+	mux.HandleFunc("GET /api/library/filters", api.libraryFilters)
+	mux.HandleFunc("GET /api/library", api.animeLibrary)
 	mux.HandleFunc("GET /api/carousels/{carouselID}/image", api.carouselImage)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
 	mux.HandleFunc("GET /favicon.png", api.favicon)
@@ -149,6 +152,63 @@ func (a *ViewerAPI) animeSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"schedule": schedule})
+}
+
+func (a *ViewerAPI) libraryFilters(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	items, err := a.auth.ListFilterDimensions(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (a *ViewerAPI) animeLibrary(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len([]rune(query)) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid_query", "搜索关键词不能超过 100 个字符")
+		return
+	}
+	selections := make(map[int64][]string)
+	rawFilters := r.URL.Query()["filter"]
+	if len(rawFilters) > 1000 {
+		writeError(w, http.StatusBadRequest, "invalid_filter", "筛选标签数量过多")
+		return
+	}
+	for _, value := range rawFilters {
+		parts := strings.SplitN(value, ":", 2)
+		if len(parts) != 2 {
+			writeError(w, http.StatusBadRequest, "invalid_filter", "筛选标签参数无效")
+			return
+		}
+		dimensionID, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil || dimensionID < 1 || parts[1] == "" {
+			writeError(w, http.StatusBadRequest, "invalid_filter", "筛选标签参数无效")
+			return
+		}
+		selections[dimensionID] = append(selections[dimensionID], parts[1])
+	}
+	groups, err := a.auth.ResolveLibraryFilters(r.Context(), selections)
+	if err != nil {
+		if errors.Is(err, viewer.ErrInvalidLibraryFilter) {
+			writeError(w, http.StatusBadRequest, "invalid_filter", "筛选标签不存在或已被管理员移除")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	library, err := a.catalog.ViewerLibrary(r.Context(), query, groups)
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"library": library})
 }
 
 func parseAnimeSeason(value string) (int, int, bool) {

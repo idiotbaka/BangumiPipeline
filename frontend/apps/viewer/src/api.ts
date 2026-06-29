@@ -63,6 +63,20 @@ export interface ViewerSchedule {
   items: ViewerScheduleCard[]
 }
 
+export interface ViewerFilterDimension {
+  id: number
+  name: string
+  sortOrder: number
+  tags: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ViewerLibrary {
+  items: ViewerScheduleCard[]
+  total: number
+}
+
 interface ErrorPayload {
   error?: {
     code?: string
@@ -117,4 +131,13 @@ export const api = {
   home: () => request<{ home: ViewerHome }>('/api/home'),
   animeSchedule: (season: string) =>
     request<{ schedule: ViewerSchedule }>(`/api/anime-schedule?season=${encodeURIComponent(season)}`),
+  libraryFilters: () => request<{ items: ViewerFilterDimension[] }>('/api/library/filters'),
+  animeLibrary: (query: string, filters: Record<number, string[]>) => {
+    const params = new URLSearchParams()
+    if (query.trim()) params.set('q', query.trim())
+    for (const [dimensionID, tags] of Object.entries(filters)) {
+      for (const tag of tags) params.append('filter', `${dimensionID}:${tag}`)
+    }
+    return request<{ library: ViewerLibrary }>(`/api/library?${params}`)
+  },
 }
