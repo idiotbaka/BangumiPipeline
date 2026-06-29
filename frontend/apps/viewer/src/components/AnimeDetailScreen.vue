@@ -60,6 +60,25 @@ const metadataItems = computed(() => {
   }
   return items
 })
+const displayMetaTags = computed(() => {
+  const seen = new Set<string>()
+  return (anime.value?.metaTags ?? []).filter((tag) => {
+    const key = normalizeTagName(tag)
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+})
+const displayTags = computed(() => {
+  const metaTagNames = new Set(displayMetaTags.value.map(normalizeTagName))
+  const seen = new Set<string>()
+  return (anime.value?.tags ?? []).filter((tag) => {
+    const key = normalizeTagName(tag.name)
+    if (!key || metaTagNames.has(key) || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+})
 
 onMounted(loadDetail)
 watch(() => props.bangumiId, loadDetail)
@@ -159,6 +178,10 @@ function markImageFailed(key: string) {
 
 function formatAirDate(value: string) {
   return value ? value.replaceAll('-', '.') : '日期未定'
+}
+
+function normalizeTagName(value: string) {
+  return value.trim().normalize('NFKC').toLocaleLowerCase()
 }
 
 function episodeAvailability(episode: ViewerDetailEpisode) {
@@ -301,8 +324,8 @@ function formatInfoValue(value: unknown): string {
           <header><p>STORY</p><h2>剧情简介</h2></header>
           <p class="anime-summary">{{ anime.summary || '该番剧暂无剧情简介。' }}</p>
           <div class="anime-tags">
-            <span v-for="tag in anime.tags" :key="tag.name">{{ tag.name }}</span>
-            <span v-for="tag in anime.metaTags" :key="`meta-${tag}`" class="meta-tag">{{ tag }}</span>
+            <span v-for="tag in displayMetaTags" :key="`meta-${tag}`" class="meta-tag">{{ tag }}</span>
+            <span v-for="tag in displayTags" :key="tag.name">{{ tag.name }}</span>
           </div>
         </article>
 

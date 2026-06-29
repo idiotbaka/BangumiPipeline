@@ -253,7 +253,6 @@ function showView(view: 'home' | 'schedule' | 'library' | 'history' | 'follows')
     detailMediaId.value = 0
     detailPosition.value = 0
     window.history.replaceState({}, '', '/')
-    scheduleHomeRefresh()
   }
 }
 
@@ -289,11 +288,9 @@ function closeAnimeDetail() {
   activeView.value = 'home'
   window.history.replaceState({}, '', '/')
   window.scrollTo({ top: 0, behavior: 'smooth' })
-  scheduleHomeRefresh()
 }
 
 function syncDetailFromLocation() {
-  const wasShowingDetail = detailAnimeId.value !== null
   const match = window.location.pathname.match(/^\/anime\/(\d+)\/?$/)
   detailAnimeId.value = match ? Number(match[1]) : null
   const params = new URLSearchParams(window.location.search)
@@ -302,11 +299,6 @@ function syncDetailFromLocation() {
   detailMediaId.value = Number.isInteger(mediaID) && mediaID > 0 ? mediaID : 0
   detailPosition.value = Number.isFinite(position) && position > 0 ? position : 0
   window.scrollTo({ top: 0 })
-  if (wasShowingDetail && detailAnimeId.value === null) scheduleHomeRefresh()
-}
-
-function scheduleHomeRefresh() {
-  window.setTimeout(() => void loadHome(), 500)
 }
 </script>
 

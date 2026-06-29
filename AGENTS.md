@@ -29,6 +29,7 @@ backend/
   internal/download/      qBittorrent 对接、下载任务创建/同步/重试/清理
   internal/media/         下载产物识别、ffmpeg/ffprobe、最终产物、封面、存储移动
   internal/translation/   OpenAI Chat 兼容 LLM 元数据翻译
+  internal/viewer/        观看端用户、Session、站点配置、轮播、筛选、历史与追番
 frontend/apps/
   admin/                  Vue 3 + TypeScript + Element Plus 管理端
   viewer/                 观看端
@@ -41,9 +42,10 @@ Dockerfile                多阶段生产构建
 - 后端入口：`backend/cmd/server/main.go`。
 - 管理端默认监听 `:8080`。
 - 观看端默认监听 `:8090`。
-- 初始化顺序：SQLite -> 日志 handler -> auth/system/bangumi/subscription/download/media/translation -> scheduler -> HTTP servers。
+- 初始化顺序：SQLite -> 日志 handler -> admin auth/viewer auth/system/bangumi/subscription/download/media/translation -> scheduler -> HTTP servers。
 - Admin API 路由集中在 `backend/internal/httpapi/admin.go` 的 `NewAdminHandler`。
-- 前端 API 类型和请求函数集中在 `frontend/apps/admin/src/api.ts`。
+- Viewer API 路由集中在 `backend/internal/httpapi/viewer.go` 的 `NewViewerHandler`。
+- 两个前端的 API 类型和请求函数分别集中在 `frontend/apps/admin/src/api.ts`、`frontend/apps/viewer/src/api.ts`。
 - 管理端路由在 `frontend/apps/admin/src/router.ts`。
 - 侧边栏在 `frontend/apps/admin/src/components/AdminLayout.vue`。
 
@@ -115,6 +117,12 @@ SQLite 是唯一事实源。打开逻辑在 `backend/internal/database/database.
 - `media_jobs`：媒体处理状态、最终视频、封面图、转码信息。
 - `media_storage_settings`：额外成品视频存储根目录。
 - `llm_settings`：OpenAI Chat 兼容 LLM 配置。
+- `viewer_users`、`viewer_sessions`：观看端独立用户和 Session。
+- `viewer_site_settings`、`viewer_invitation_codes`：观看端站点配置、favicon、注册开关和邀请码。
+- `viewer_carousel_items`：首页轮播图二进制图片、绑定番剧和排序。
+- `viewer_filter_dimensions`、`viewer_filter_tags`：番剧图书馆可配置的筛选维度与标签。
+- `viewer_watch_history`：按用户和成品媒体记录播放位置、时长、完播状态及最后观看时间。
+- `viewer_anime_follows`：用户追番关系；同一用户和番剧唯一。
 
 ## 调度器
 
@@ -237,7 +245,7 @@ RSS 流程：
 - 抓取结果写入 `subscription_items`。
 - 自动匹配根据本地番剧名称、中文名和别名解析标题、季数、话数和集数类型。
 - 自动匹配成功的条目仍是待确认，不可视为已绑定资源。
-- 只有 `binding_status='bound'` 的条目才能进入番剧管理、下载和媒体处理链路。
+- 只有 `binding_status='bound'` 的订阅条目才能进入下载和媒体处理链路；管理端元数据目录和观看端无产物卡片不受此限制。
 - 手动确认或手动绑定会写入 `bound_*` 字段，并保存标题记忆规则到 `subscription_title_rules`。
 - 同一番剧、季数、话类型、话数只能有一个已绑定条目，新增绑定不得静默覆盖。
 
@@ -442,6 +450,11 @@ RSS 流程：
 - `frontend/apps/admin/src/pages/DownloadManagementPage.vue`：下载管理。
 - `frontend/apps/admin/src/pages/TranscodeManagementPage.vue`：媒体处理管理。
 - `frontend/apps/admin/src/pages/SystemLogsPage.vue`：系统日志。
+- `frontend/apps/admin/src/pages/ViewerUserManagementPage.vue`：观看端用户启停与密码重置。
+- `frontend/apps/admin/src/pages/ViewerInviteManagementPage.vue`：观看端邀请码生成与使用状态。
+- `frontend/apps/admin/src/pages/ViewerSiteSettingsPage.vue`：观看端站点名称、注册策略和 favicon。
+- `frontend/apps/admin/src/pages/ViewerCarouselManagementPage.vue`：首页轮播图新增、编辑、删除、图片上传、番剧绑定和排序。
+- `frontend/apps/admin/src/pages/ViewerFilterManagementPage.vue`：番剧图书馆筛选维度、标签列表和排序。
 
 前端约定：
 
@@ -452,6 +465,7 @@ RSS 流程：
 - 观看端和普通媒体接口不要暴露服务器本地绝对路径。
 - 管理端系统设置、系统概览、番剧存储管理可以展示服务器路径。
 - 番剧卡片按钮区保持固定宽度和可读文本，避免话数 tag 或按钮遮挡。
+- “前端管理”下的观看端配置仍通过 Admin API 管理，必须使用管理员鉴权，不得复用观看端 Session。
 
 ## 观看端前端
 
@@ -461,9 +475,19 @@ RSS 流程：
 
 - `frontend/apps/viewer/src/App.vue`：观看端入口、登录/注册门禁、站点设置应用和登录后首页壳。
 - `frontend/apps/viewer/src/api.ts`：观看端 HTTP 调用和 API 类型。
+- `frontend/apps/viewer/src/components/HomeScreen.vue`：顶部导航、首页轮播、热播、最近更新、我的追番以及页面/详情切换壳。
+- `frontend/apps/viewer/src/components/ScheduleScreen.vue`：季度番剧时间表。
+- `frontend/apps/viewer/src/components/LibraryScreen.vue`：番剧图书馆标签筛选与搜索。
+- `frontend/apps/viewer/src/components/AnimeDetailScreen.vue`：详情、选集、播放、元数据、角色声优及追番入口。
+- `frontend/apps/viewer/src/components/AnimeVideoPlayer.vue`：自定义 HTML5 播放器、网页全屏和播放进度上报。
+- `frontend/apps/viewer/src/components/HistoryScreen.vue`：按话展示观看历史。
+- `frontend/apps/viewer/src/components/FollowScreen.vue`、`FollowCard.vue`：我的追番列表和复用卡片。
 - `frontend/apps/viewer/src/assets/`：观看端本地图片、字体、样式依赖等静态资源。
-- `backend/internal/httpapi/viewer.go`：观看端公开 API、用户认证接口和 SPA 托管。
-- `backend/internal/viewer/service.go`：观看端用户、Session、站点设置、邀请码注册逻辑。
+- `backend/internal/httpapi/viewer.go`：观看端 API、用户认证、受控媒体接口和 SPA 托管。
+- `backend/internal/viewer/service.go`：观看端用户、Session、站点设置和邀请码注册逻辑。
+- `backend/internal/viewer/carousel.go`、`filter.go`：轮播图与图书馆筛选配置。
+- `backend/internal/viewer/history.go`、`follow.go`：观看进度、历史和追番聚合。
+- `backend/internal/bangumi/viewer_schedule.go`、`viewer_library.go`、`viewer_detail.go`：观看端时间表、图书馆和详情查询。
 
 前端约定：
 
@@ -472,7 +496,38 @@ RSS 流程：
 - 网站名称、favicon、注册开关和邀请码要求来自 `GET /api/site-settings`，不要在观看端硬编码站点标题。
 - 注册接口必须尊重后端注册开关和邀请码策略；邀请码只在后端事务中校验并消费。
 - 观看端认证与管理端认证相互独立，使用 viewer 用户和 viewer session。
-- 观看端和普通媒体接口不要向浏览器暴露服务器本地绝对路径，后续播放能力应通过受控 ID 或流式接口提供。
+- 除健康检查、站点设置、favicon、注册和登录外，首页、目录、详情、图片、媒体、历史与追番接口都要求观看端登录。
+- 观看端页面当前由 `HomeScreen.vue` 内部状态切换；详情页使用 `/anime/{bangumiID}` 和 History API，未引入 viewer 端 vue-router。
+- 观看端和普通媒体接口不得向浏览器暴露服务器本地绝对路径；视频、分集封面、番剧封面、角色和声优图片都通过受控 ID 接口读取。
+- 首页数据首次加载后应复用已有状态；从详情返回时不要无条件完整刷新首页，避免骨架屏和轮播重置闪动。
+
+### 首页、时间表与图书馆
+
+- 首页 `GET /api/home` 返回热播推荐、最近更新、已配置轮播和当前用户追番聚合。
+- 轮播图片保存在 SQLite，绑定有效番剧；观看端轮播可进入对应详情页。
+- 番剧时间表按日本动画季度 `1/4/7/10` 月切换，并用 `YYYY年M月` 精确匹配 `anime_tags`；周一到周日之外归入“其他”。
+- 时间表和图书馆卡片都可展示没有产物的番剧，并按首播日期区分“尚未开播”和“尚未放流”。
+- 图书馆标题搜索匹配原名、中文名和别名；同一筛选维度内为 OR，不同维度之间为 AND，标签匹配 `anime_tags.name`。
+- 图书馆默认将存在 `media_jobs.status='completed'` 且产物路径非空的番剧排在前面。
+- 顶部“搜索番剧”回车后切换到图书馆并应用关键词。
+
+### 详情、播放与进度
+
+- 详情接口组合番剧基础信息、分集元数据、已完成媒体、最后观看进度和追番状态；角色按主角、配角、其他顺序展示。
+- 分集只有关联到 `media_jobs.status='completed'` 且 `output_path` 非空时才可播放；未产出的分集不可点击。
+- 视频和分集封面必须同时校验 `bangumiID` 与 `mediaID`；视频由 `http.ServeFile` 提供 Range 播放，不在 JSON 中返回路径。
+- 默认选择请求指定的媒体，否则恢复最后观看媒体，再否则选择第一个可播放分集。已完播记录从 0 秒开始，未完播记录恢复位置。
+- 播放器每 10 秒以及暂停、结束、组件卸载时上报进度；实际播放不超过 15 秒不落库，达到时长 90% 记为完播。
+- 自定义播放器支持普通全屏和网页全屏；网页全屏期间隐藏顶部导航。播放中 3 秒无交互会隐藏 UI，暂停、缓冲或报错时保持显示，隐藏态底部保留粉色进度线。
+- 详情标签先显示蓝色 Meta Tags；粉色普通 Tags 中与 Meta Tags 重复的项不再显示。
+
+### 观看历史与追番
+
+- 观看历史按话记录，同一用户和 `media_job_id` 唯一；列表按最后观看时间倒序并显示该番最新产物话数。
+- 从历史进入详情时恢复到该话和进度；完播记录从该话起始位置播放。
+- 详情页“追番”按钮写入 `viewer_anime_follows`。独立“我的追番”页展示全部追番，首页只展示尚未追到最新产物的项目。
+- 追番恢复目标依次为：未完播的最后观看话、已有更新时的最新产物、未观看时的最早产物；没有产物时不生成可播放目标。
+- “已追到最新”仅指最后观看话已完播且与当前最新产物为同一季、同类型、同话数。
 
 ## HTTP API
 
@@ -480,7 +535,7 @@ Admin API 都在 `backend/internal/httpapi/admin.go`。
 
 约定：
 
-- 使用 `requireAdministrator` 保护管理接口。
+- 除健康检查、初始化和登录接口外，使用 `requireAdministrator` 保护管理接口。
 - 错误响应使用 `writeError`。
 - 错误格式：`{ "error": { "code": "...", "message": "..." } }`。
 - 路径 ID 使用 `parsePathID`。
@@ -497,6 +552,17 @@ Admin API 都在 `backend/internal/httpapi/admin.go`。
 - `POST /api/settings/llm/test`
 - `GET/PUT /api/settings/media-storage`
 - `GET/PUT /api/settings/bangumi-custom-search`
+- `GET /api/viewer/users`
+- `PATCH /api/viewer/users/{userID}`
+- `POST /api/viewer/users/{userID}/password`
+- `GET/POST /api/viewer/invites`
+- `GET/PUT /api/viewer/site-settings`
+- `GET/PUT /api/viewer/site-settings/favicon`
+- `GET/POST /api/viewer/carousels`
+- `PUT/DELETE /api/viewer/carousels/{carouselID}`
+- `GET /api/viewer/carousels/{carouselID}/image`
+- `GET/POST /api/viewer/filter-dimensions`
+- `PUT/DELETE /api/viewer/filter-dimensions/{dimensionID}`
 - `GET /api/scheduled-tasks`
 - `PATCH /api/scheduled-tasks/{taskKey}`
 - `POST /api/scheduled-tasks/{taskKey}/run`
@@ -525,13 +591,36 @@ Admin API 都在 `backend/internal/httpapi/admin.go`。
 
 Viewer API 在 `backend/internal/httpapi/viewer.go`。
 
+约定：
+
+- 仅需确认登录的接口使用 `requireViewer`；需要当前用户 ID 的历史、追番、详情与首页接口使用 `authenticatedViewer`。
+- 错误响应沿用 `{ "error": { "code": "...", "message": "..." } }`，路径 ID 继续使用 `parsePathID`。
+- 任何媒体、封面或人物图片接口只能返回文件内容，不得返回服务器路径。
+
 关键接口：
 
+- `GET /api/health`
 - `GET /api/site-settings`
 - `GET /api/auth/me`
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
+- `GET /api/home`
+- `GET /api/anime-schedule?season=YYYY-MM`
+- `GET /api/library/filters`
+- `GET /api/library?q=...&filter={dimensionID}:{tag}`
+- `GET /api/watch-history`
+- `GET /api/follows`
+- `GET /api/carousels/{carouselID}/image`
+- `GET /api/anime/{bangumiID}/detail`
+- `GET /api/anime/{bangumiID}/cover`
+- `PUT /api/anime/{bangumiID}/follow`
+- `GET /api/anime/{bangumiID}/media/{mediaID}/stream`
+- `GET /api/anime/{bangumiID}/media/{mediaID}/cover`
+- `PUT /api/anime/{bangumiID}/media/{mediaID}/progress`
+- `GET /api/anime/{bangumiID}/characters/{characterID}/image`
+- `GET /api/actors/{actorID}/image`
+- `GET /favicon.png`
 
 ## 必须保持的行为
 
@@ -543,7 +632,7 @@ Viewer API 在 `backend/internal/httpapi/viewer.go`。
 - Bangumi 图片下载后压缩为 JPG，最大宽度 680px，quality 80。
 - 图片 404 或空 URL 记录为 `not_found` 且不再重试。
 - 自动匹配的订阅条目不能当作已绑定资源。
-- 只有 `binding_status='bound'` 才能下载和显示在番剧卡片。
+- 只有 `binding_status='bound'` 的订阅条目才能进入下载和媒体处理链路；时间表和图书馆允许展示尚无绑定或成品的元数据番剧。
 - 下载任务创建前检查并发上限和 10GB 剩余磁盘空间。
 - 下载失败不自动重试。
 - 媒体最终产物完成后再清理 qBittorrent 原下载任务和文件。
@@ -557,6 +646,9 @@ Viewer API 在 `backend/internal/httpapi/viewer.go`。
 - 原文元数据变化时才清空对应译文字段；未变化不清空。
 - 系统概览的磁盘空间必须实时探测，不写数据库缓存。
 - 观看端和普通媒体接口不向前端暴露本地绝对路径。
+- 观看端媒体流、媒体封面和进度写入必须同时校验番剧 ID 与媒体 ID，且只接受已完成产物。
+- 播放进度不超过 15 秒不记录，达到 90% 才标记完播；不得仅由前端决定完播状态。
+- 观看历史和追番数据必须按当前 viewer 用户隔离，不能使用客户端传入的用户 ID。
 
 ## 命名约定
 

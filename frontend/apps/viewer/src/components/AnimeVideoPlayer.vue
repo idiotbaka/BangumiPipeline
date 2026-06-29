@@ -24,10 +24,12 @@ const muted = ref(false)
 const playbackRate = ref(1)
 const errorMessage = ref('')
 const webFullscreen = ref(false)
+const controlsVisible = ref(true)
 const resumeApplied = ref(false)
 const hasPlayed = ref(false)
 let previousBodyOverflow = ''
 let progressTimer: ReturnType<typeof setInterval> | null = null
+let controlsTimer: ReturnType<typeof setTimeout> | null = null
 
 const progressStyle = computed(() => {
   const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
@@ -45,6 +47,7 @@ watch(
     resumeApplied.value = false
     hasPlayed.value = false
     stopProgressTimer()
+    showControls()
     await nextTick()
     video.value?.load()
   },
@@ -56,6 +59,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleWindowKeydown)
   reportProgress()
   stopProgressTimer()
+  stopControlsTimer()
   exitWebFullscreen()
 })
 
@@ -98,19 +102,68 @@ function handlePlay() {
   playing.value = true
   hasPlayed.value = true
   startProgressTimer()
+  scheduleControlsHide()
 }
 
 function handlePause() {
   playing.value = false
+  showControls()
   reportProgress()
   stopProgressTimer()
 }
 
 function handleEnded() {
   playing.value = false
+  showControls()
   currentTime.value = duration.value
   reportProgress()
   stopProgressTimer()
+}
+
+function handleWaiting() {
+  buffering.value = true
+  showControls()
+}
+
+function handlePlaying() {
+  buffering.value = false
+  scheduleControlsHide()
+}
+
+function handleCanPlay() {
+  buffering.value = false
+  if (playing.value) scheduleControlsHide()
+}
+
+function handleError() {
+  errorMessage.value = '视频加载失败，请稍后重试'
+  showControls()
+}
+
+function handlePlayerInteraction() {
+  controlsVisible.value = true
+  scheduleControlsHide()
+}
+
+function showControls() {
+  controlsVisible.value = true
+  stopControlsTimer()
+}
+
+function scheduleControlsHide() {
+  stopControlsTimer()
+  if (!playing.value || buffering.value || errorMessage.value) return
+  controlsTimer = setTimeout(() => {
+    if (playing.value && !buffering.value && !errorMessage.value) controlsVisible.value = false
+    controlsTimer = null
+  }, 3_000)
+}
+
+function stopControlsTimer() {
+  if (controlsTimer !== null) {
+    clearTimeout(controlsTimer)
+    controlsTimer = null
+  }
 }
 
 function startProgressTimer() {
@@ -211,9 +264,13 @@ function formatTime(value: number) {
   <section
     ref="player"
     class="anime-player"
-    :class="{ 'web-fullscreen': webFullscreen }"
+    :class="{ 'web-fullscreen': webFullscreen, 'ui-hidden': !controlsVisible && playing }"
     tabindex="0"
     :aria-label="`正在播放 ${title}`"
+    @pointermove="handlePlayerInteraction"
+    @pointerdown="handlePlayerInteraction"
+    @focusin="handlePlayerInteraction"
+    @keydown="handlePlayerInteraction"
     @keydown.space.prevent="togglePlay"
   >
     <video
@@ -226,13 +283,13 @@ function formatTime(value: number) {
       @play="handlePlay"
       @pause="handlePause"
       @ended="handleEnded"
-      @waiting="buffering = true"
-      @playing="buffering = false"
-      @canplay="buffering = false"
+      @waiting="handleWaiting"
+      @playing="handlePlaying"
+      @canplay="handleCanPlay"
       @loadedmetadata="updateDuration"
       @durationchange="updateDuration"
       @timeupdate="updateTime"
-      @error="errorMessage = '视频加载失败，请稍后重试'"
+      @error="handleError"
     />
 
     <div class="screen-shade" aria-hidden="true" />
@@ -291,14 +348,15 @@ function formatTime(value: number) {
         <button class="fullscreen-control" type="button" aria-label="全屏" @click="toggleFullscreen"><i aria-hidden="true" /></button>
       </div>
     </div>
+    <div class="hidden-progress" :style="progressStyle" aria-hidden="true" />
   </section>
 </template>
 
 <style scoped>
 .anime-player { position: relative; width: 100%; height: 100%; min-height: 480px; overflow: hidden; color: #fff; background: #101522; outline: 0; clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 20px, 100% 100%, 20px 100%, 0 calc(100% - 20px)); }
 .anime-player video { width: 100%; height: 100%; object-fit: contain; background: #090d17; cursor: pointer; }
-.screen-shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(to bottom, rgba(8,12,22,.48), transparent 20%, transparent 68%, rgba(8,12,22,.86)); }
-.player-corners { position: absolute; inset: 12px; pointer-events: none; }
+.screen-shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(to bottom, rgba(8,12,22,.48), transparent 20%, transparent 68%, rgba(8,12,22,.86)); transition: opacity 180ms ease; }
+.player-corners { position: absolute; inset: 12px; pointer-events: none; transition: opacity 180ms ease; }
 .player-corners i { position: absolute; width: 18px; height: 18px; opacity: .72; }
 .player-corners i:nth-child(1) { top: 0; left: 0; border-top: 1px solid var(--cyan-300); border-left: 1px solid var(--cyan-300); }
 .player-corners i:nth-child(2) { top: 0; right: 0; border-top: 1px solid var(--pink-300); border-right: 1px solid var(--pink-300); }
@@ -307,10 +365,10 @@ function formatTime(value: number) {
 .center-play { position: absolute; top: 50%; left: 50%; width: 74px; height: 74px; display: grid; place-items: center; color: #fff; background: rgba(255,95,158,.88); border: 1px solid rgba(255,255,255,.55); box-shadow: 0 0 0 10px rgba(255,255,255,.08), 0 15px 38px rgba(0,0,0,.34); backdrop-filter: blur(10px); transform: translate(-50%, -50%); clip-path: polygon(16px 0, 100% 0, 100% calc(100% - 16px), calc(100% - 16px) 100%, 0 100%, 0 16px); transition: transform 180ms ease, background 180ms ease; }
 .center-play:hover { background: var(--pink-500); transform: translate(-50%, -50%) scale(1.05); }
 .center-play i { width: 0; height: 0; margin-left: 5px; border-top: 11px solid transparent; border-bottom: 11px solid transparent; border-left: 17px solid #fff; }
-.player-heading { position: absolute; top: 24px; left: 28px; max-width: 70%; text-shadow: 0 2px 8px rgba(0,0,0,.7); pointer-events: none; }
+.player-heading { position: absolute; top: 24px; left: 28px; max-width: 70%; text-shadow: 0 2px 8px rgba(0,0,0,.7); pointer-events: none; transition: opacity 180ms ease, transform 180ms ease; }
 .player-heading span { color: var(--cyan-300); font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; }
 .player-heading p { margin-top: 3px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.player-controls { position: absolute; right: 24px; bottom: 20px; left: 24px; }
+.player-controls { position: absolute; right: 24px; bottom: 20px; left: 24px; transition: opacity 180ms ease, transform 180ms ease; }
 .timeline { width: 100%; height: 4px; appearance: none; cursor: pointer; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(255,255,255,.28) var(--progress) 100%); }
 .timeline::-webkit-slider-thumb { width: 13px; height: 13px; appearance: none; background: #fff; border: 3px solid var(--pink-400); transform: rotate(45deg); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
 .control-row { height: 46px; display: flex; align-items: flex-end; gap: 14px; }
@@ -335,6 +393,16 @@ function formatTime(value: number) {
 .buffering-mark span { font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; }
 .player-error span { width: 42px; height: 42px; display: grid; place-items: center; color: var(--pink-300); font-family: var(--font-mono); font-size: 22px; border: 1px solid var(--pink-300); transform: rotate(45deg); }
 .player-error p { font-size: 13px; }
+.hidden-progress { position: absolute; right: 0; bottom: 0; left: 0; z-index: 2; height: 3px; pointer-events: none; opacity: 0; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), transparent var(--progress) 100%); filter: drop-shadow(0 -1px 3px rgba(255,95,158,.42)); transition: opacity 180ms ease; }
+.anime-player.ui-hidden { cursor: none; }
+.anime-player.ui-hidden video { cursor: none; }
+.anime-player.ui-hidden .screen-shade,
+.anime-player.ui-hidden .player-corners,
+.anime-player.ui-hidden .player-heading,
+.anime-player.ui-hidden .player-controls { opacity: 0; pointer-events: none; }
+.anime-player.ui-hidden .player-heading { transform: translateY(-8px); }
+.anime-player.ui-hidden .player-controls { transform: translateY(8px); }
+.anime-player.ui-hidden .hidden-progress { opacity: 1; }
 .anime-player:fullscreen { clip-path: none; }
 .anime-player.web-fullscreen { position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh; height: 100dvh; min-height: 0; clip-path: none; }
 </style>
