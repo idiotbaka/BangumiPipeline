@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Delete, FolderOpened, Link, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
+import { Delete, EditPen, FolderOpened, Link, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api, type AnimeListItem, type AnimeListSort, type MediaStorageSettings } from '../api'
+import { api, type AnimeListItem, type AnimeListSort, type EpisodeBindingIdentity, type MediaStorageSettings } from '../api'
 import AnimeDetailPanel from '../components/AnimeDetailPanel.vue'
 
 const items = ref<AnimeListItem[]>([])
@@ -46,6 +46,27 @@ const manualEpisodeConfirmDisabled = computed(() =>
   Number(manualEpisodeForm.seasonNumber) < 1 ||
   manualEpisodeForm.episodeNumber.trim() === '',
 )
+const episodeBindingVisible = ref(false)
+const episodeBindingTarget = ref<AnimeListItem | null>(null)
+const episodeBindingSource = ref<EpisodeBindingIdentity | null>(null)
+const episodeBindingForm = reactive<{
+  seasonNumber: number | undefined
+  episodeType: string
+  episodeNumber: string
+}>({
+  seasonNumber: 1,
+  episodeType: 'episode',
+  episodeNumber: '',
+})
+const savingEpisodeBinding = ref(false)
+const deletingEpisodeBindingKey = ref('')
+const episodeBindingConfirmDisabled = computed(() => {
+  const target = normalizedEpisodeBindingForm()
+  if (episodeBindingTarget.value === null || episodeBindingSource.value === null || target === null) {
+    return true
+  }
+  return sameEpisodeIdentity(episodeBindingSource.value, target)
+})
 const addVisible = ref(false)
 const adding = ref(false)
 const addBangumiId = ref('')
@@ -156,6 +177,111 @@ function episodeTagLabel(episode: AnimeListItem['matchedEpisodes'][number]) {
 
 function episodeTagType(episode: AnimeListItem['matchedEpisodes'][number]) {
   return episode.status === 'completed' ? 'success' : 'warning'
+}
+
+function episodeBindingKey(anime: AnimeListItem, episode: EpisodeBindingIdentity) {
+  return `${anime.bangumiId}:${episode.seasonNumber}:${episode.episodeType || 'episode'}:${episode.episodeNumber}`
+}
+
+function toEpisodeBindingIdentity(episode: EpisodeBindingIdentity): EpisodeBindingIdentity {
+  return {
+    seasonNumber: episode.seasonNumber,
+    episodeType: episode.episodeType || 'episode',
+    episodeNumber: episode.episodeNumber,
+  }
+}
+
+function sameEpisodeIdentity(left: EpisodeBindingIdentity, right: EpisodeBindingIdentity) {
+  return left.seasonNumber === right.seasonNumber &&
+    (left.episodeType || 'episode') === (right.episodeType || 'episode') &&
+    left.episodeNumber.trim() === right.episodeNumber.trim()
+}
+
+function normalizedEpisodeBindingForm(): EpisodeBindingIdentity | null {
+  const seasonNumber = Number(episodeBindingForm.seasonNumber)
+  const episodeNumber = episodeBindingForm.episodeNumber.trim()
+  if (!Number.isInteger(seasonNumber) || seasonNumber < 1 || episodeNumber === '') {
+    return null
+  }
+  return {
+    seasonNumber,
+    episodeType: episodeBindingForm.episodeType || 'episode',
+    episodeNumber,
+  }
+}
+
+function clearEpisodeBindingDialog() {
+  episodeBindingTarget.value = null
+  episodeBindingSource.value = null
+  episodeBindingForm.seasonNumber = 1
+  episodeBindingForm.episodeType = 'episode'
+  episodeBindingForm.episodeNumber = ''
+}
+
+function openEpisodeBindingDialog(anime: AnimeListItem, episode: AnimeListItem['matchedEpisodes'][number]) {
+  if (savingEpisodeBinding.value || deletingEpisodeBindingKey.value !== '') {
+    return
+  }
+  const source = toEpisodeBindingIdentity(episode)
+  episodeBindingTarget.value = anime
+  episodeBindingSource.value = source
+  episodeBindingForm.seasonNumber = source.seasonNumber
+  episodeBindingForm.episodeType = source.episodeType
+  episodeBindingForm.episodeNumber = source.episodeNumber
+  episodeBindingVisible.value = true
+}
+
+function resetEpisodeBindingDialog() {
+  if (!savingEpisodeBinding.value) {
+    clearEpisodeBindingDialog()
+  }
+}
+
+async function updateEpisodeBinding() {
+  if (savingEpisodeBinding.value || episodeBindingTarget.value === null || episodeBindingSource.value === null) {
+    return
+  }
+  const target = normalizedEpisodeBindingForm()
+  if (target === null) {
+    ElMessage.warning('请填写季数、集类型和集数')
+    return
+  }
+  if (sameEpisodeIdentity(episodeBindingSource.value, target)) {
+    return
+  }
+  const anime = episodeBindingTarget.value
+  const source = episodeBindingSource.value
+  savingEpisodeBinding.value = true
+  try {
+    await api.updateAnimeEpisodeBinding(anime.bangumiId, source, target)
+    ElMessage.success('集数标识已更新')
+    episodeBindingVisible.value = false
+    await load()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '集数标识更新失败')
+  } finally {
+    savingEpisodeBinding.value = false
+    if (!episodeBindingVisible.value) {
+      clearEpisodeBindingDialog()
+    }
+  }
+}
+
+async function deleteEpisodeBinding(anime: AnimeListItem, episode: AnimeListItem['matchedEpisodes'][number]) {
+  if (savingEpisodeBinding.value || deletingEpisodeBindingKey.value !== '') {
+    return
+  }
+  const source = toEpisodeBindingIdentity(episode)
+  deletingEpisodeBindingKey.value = episodeBindingKey(anime, source)
+  try {
+    await api.deleteAnimeEpisodeBinding(anime.bangumiId, source)
+    ElMessage.success('集数标识已删除')
+    await load()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '集数标识删除失败')
+  } finally {
+    deletingEpisodeBindingKey.value = ''
+  }
 }
 
 function openStorageMoveDialog(anime: AnimeListItem) {
@@ -422,14 +548,49 @@ onBeforeUnmount(stopFilterLoading)
             </dl>
             <p class="anime-storage-path" :title="anime.storagePath">存储：{{ anime.storagePath }}</p>
             <div v-if="anime.matchedEpisodes.length > 0" class="anime-episode-tags">
-              <el-tag
+              <span
                 v-for="episode in anime.matchedEpisodes"
                 :key="`${episode.seasonNumber}-${episode.episodeType}-${episode.episodeNumber}`"
-                :type="episodeTagType(episode)"
-                effect="light"
-                size="small"
-                round
-              >{{ episodeTagLabel(episode) }}</el-tag>
+                class="anime-episode-tag"
+              >
+                <el-tag
+                  :type="episodeTagType(episode)"
+                  effect="light"
+                  size="small"
+                  round
+                >{{ episodeTagLabel(episode) }}</el-tag>
+                <el-tooltip content="编辑集数标识" placement="top" :show-after="350">
+                  <el-button
+                    class="episode-tag-icon"
+                    :icon="EditPen"
+                    size="small"
+                    text
+                    circle
+                    :disabled="savingEpisodeBinding || deletingEpisodeBindingKey !== ''"
+                    @click="openEpisodeBindingDialog(anime, episode)"
+                  />
+                </el-tooltip>
+                <el-popconfirm
+                  width="220"
+                  confirm-button-text="删除"
+                  cancel-button-text="取消"
+                  confirm-button-type="danger"
+                  title="删除这个集数标识？"
+                  @confirm="deleteEpisodeBinding(anime, episode)"
+                >
+                  <template #reference>
+                    <el-button
+                      class="episode-tag-icon"
+                      :icon="Delete"
+                      size="small"
+                      text
+                      circle
+                      :loading="deletingEpisodeBindingKey === episodeBindingKey(anime, episode)"
+                      :disabled="savingEpisodeBinding || (deletingEpisodeBindingKey !== '' && deletingEpisodeBindingKey !== episodeBindingKey(anime, episode))"
+                    />
+                  </template>
+                </el-popconfirm>
+              </span>
             </div>
           </div>
           <div class="anime-actions">
@@ -565,6 +726,40 @@ onBeforeUnmount(stopFilterLoading)
           :loading="historySyncTarget !== null && syncingHistoryId === historySyncTarget.bangumiId"
           @click="syncHistory"
         >确认</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="episodeBindingVisible"
+      title="编辑集数标识"
+      width="min(460px, calc(100vw - 32px))"
+      destroy-on-close
+      append-to-body
+      @closed="resetEpisodeBindingDialog"
+    >
+      <el-form class="episode-binding-dialog" label-position="top" @submit.prevent>
+        <div class="manual-episode-source-grid">
+          <el-form-item label="季数" required>
+            <el-input-number v-model="episodeBindingForm.seasonNumber" :min="1" :step="1" step-strictly controls-position="right" />
+          </el-form-item>
+          <el-form-item label="集类型" required>
+            <el-select v-model="episodeBindingForm.episodeType">
+              <el-option v-for="option in episodeTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="集数" required>
+            <el-input v-model.trim="episodeBindingForm.episodeNumber" placeholder="03" clearable @keyup.enter="updateEpisodeBinding" />
+          </el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="episodeBindingVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="episodeBindingConfirmDisabled"
+          :loading="savingEpisodeBinding"
+          @click="updateEpisodeBinding"
+        >保存</el-button>
       </template>
     </el-dialog>
 

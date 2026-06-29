@@ -20,6 +20,7 @@ import (
 	"unicode"
 
 	"bangumipipeline.local/server/internal/imageutil"
+	"bangumipipeline.local/server/internal/subscription"
 )
 
 const (
@@ -203,6 +204,27 @@ type animeStorageInfo struct {
 type pathMove struct {
 	Source string
 	Target string
+}
+
+type episodeBindingMediaJob struct {
+	ID          int64
+	AnimeName   string
+	Status      string
+	OutputPath  string
+	CoverPath   string
+	CoverStatus string
+}
+
+type episodeBindingMovePlan struct {
+	jobID      int64
+	outputPath string
+	coverPath  string
+	moves      []fileMove
+}
+
+type fileMove struct {
+	source string
+	target string
 }
 
 type coverCandidate struct {
@@ -517,6 +539,368 @@ WHERE binding_status = 'bound'
 			"episode_number", episodeNumber, "media_jobs_removed", removed, "files_deleted", filesDeleted)
 	}
 	return EpisodeReplacementCleanup{MediaJobsRemoved: removed, FilesDeleted: filesDeleted}, nil
+}
+
+func (s *Service) UpdateEpisodeBinding(ctx context.Context, bangumiID int64, sourceInput, targetInput subscription.EpisodeBindingIdentity) (subscription.EpisodeBindingMutationResult, error) {
+	if bangumiID < 1 {
+		return subscription.EpisodeBindingMutationResult{}, subscription.ErrInvalidBinding
+	}
+	sourceInput, err := subscription.NormalizeEpisodeBindingIdentity(sourceInput)
+	if err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	targetInput, err = subscription.NormalizeEpisodeBindingIdentity(targetInput)
+	if err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	result := subscription.EpisodeBindingMutationResult{
+		BangumiID: bangumiID,
+		Source:    sourceInput,
+		Target:    &targetInput,
+	}
+
+	s.storageMu.Lock()
+	defer s.storageMu.Unlock()
+
+	animeName, storageRoot, err := s.episodeBindingAnime(ctx, bangumiID)
+	if err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	count, err := s.boundEpisodeBindingCount(ctx, bangumiID, sourceInput)
+	if err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	if count == 0 {
+		return subscription.EpisodeBindingMutationResult{}, subscription.ErrEpisodeBindingNotFound
+	}
+	if err := s.ensureEpisodeBindingEditable(ctx, bangumiID, sourceInput); err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	if !sameEpisodeBindingIdentity(sourceInput, targetInput) {
+		exists, err := s.episodeBindingTargetExists(ctx, bangumiID, sourceInput, targetInput)
+		if err != nil {
+			return subscription.EpisodeBindingMutationResult{}, err
+		}
+		if exists {
+			return subscription.EpisodeBindingMutationResult{}, subscription.ErrEpisodeBindingExists
+		}
+	}
+
+	jobs, err := s.episodeBindingMediaJobs(ctx, bangumiID, sourceInput)
+	if err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	plans, err := s.planEpisodeBindingMoves(jobs, animeName, storageRoot, targetInput)
+	if err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	for _, plan := range plans {
+		for _, move := range plan.moves {
+			if err := moveFileNoOverwrite(move.source, move.target); err != nil {
+				return subscription.EpisodeBindingMutationResult{}, err
+			}
+		}
+	}
+
+	now := s.now().UTC().Unix()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	defer tx.Rollback()
+
+	titleRules, err := tx.ExecContext(ctx, `
+UPDATE subscription_title_rules
+SET season_number = ?, episode_type = ?, updated_at = ?
+WHERE created_from_item_id IN (
+    SELECT id
+    FROM subscription_items
+    WHERE binding_status = ?
+      AND bound_bangumi_id = ?
+      AND bound_season_number = ?
+      AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+      AND bound_episode_number = ?
+)`, targetInput.SeasonNumber, targetInput.EpisodeType, now,
+		subscription.BindingStatusBound, bangumiID, sourceInput.SeasonNumber, sourceInput.EpisodeType, sourceInput.EpisodeNumber)
+	if err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	result.UpdatedTitleRules, _ = titleRules.RowsAffected()
+
+	for _, plan := range plans {
+		updated, err := tx.ExecContext(ctx, `
+UPDATE media_jobs
+SET season_number = ?, episode_type = ?, episode_number = ?,
+    output_path = ?, cover_path = ?, updated_at = ?
+WHERE id = ? AND status != ?`, targetInput.SeasonNumber, targetInput.EpisodeType, targetInput.EpisodeNumber,
+			plan.outputPath, plan.coverPath, now, plan.jobID, StatusTranscoding)
+		if err != nil {
+			return subscription.EpisodeBindingMutationResult{}, err
+		}
+		affected, err := updated.RowsAffected()
+		if err != nil {
+			return subscription.EpisodeBindingMutationResult{}, err
+		}
+		result.UpdatedMediaJobs += affected
+	}
+
+	items, err := tx.ExecContext(ctx, `
+UPDATE subscription_items
+SET bound_season_number = ?,
+    bound_episode_type = ?,
+    bound_episode_number = ?,
+    binding_note = CASE
+        WHEN binding_note = '' THEN '绑定集数标识已在番剧管理中修改'
+        ELSE binding_note
+    END,
+    updated_at = ?
+WHERE binding_status = ?
+  AND bound_bangumi_id = ?
+  AND bound_season_number = ?
+  AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+  AND bound_episode_number = ?`, targetInput.SeasonNumber, targetInput.EpisodeType, targetInput.EpisodeNumber, now,
+		subscription.BindingStatusBound, bangumiID, sourceInput.SeasonNumber, sourceInput.EpisodeType, sourceInput.EpisodeNumber)
+	if err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	result.UpdatedItems, _ = items.RowsAffected()
+	if result.UpdatedItems == 0 {
+		return subscription.EpisodeBindingMutationResult{}, subscription.ErrEpisodeBindingNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return subscription.EpisodeBindingMutationResult{}, err
+	}
+	s.logger.Info("番剧绑定集数标识和媒体产物路径已修改", "source", "media",
+		"bangumi_id", bangumiID, "from_season_number", sourceInput.SeasonNumber,
+		"from_episode_type", sourceInput.EpisodeType, "from_episode_number", sourceInput.EpisodeNumber,
+		"to_season_number", targetInput.SeasonNumber, "to_episode_type", targetInput.EpisodeType,
+		"to_episode_number", targetInput.EpisodeNumber, "updated_items", result.UpdatedItems,
+		"updated_media_jobs", result.UpdatedMediaJobs)
+	return result, nil
+}
+
+func (s *Service) episodeBindingAnime(ctx context.Context, bangumiID int64) (animeName, storageRoot string, err error) {
+	var name, nameCN, storedRoot string
+	err = s.db.QueryRowContext(ctx, `
+SELECT name, name_cn, media_storage_root
+FROM anime_metadata
+WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(&name, &nameCN, &storedRoot)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrAnimeNotFound
+	}
+	if err != nil {
+		return "", "", err
+	}
+	animeName = strings.TrimSpace(nameCN)
+	if animeName == "" {
+		animeName = strings.TrimSpace(name)
+	}
+	if animeName == "" {
+		animeName = fmt.Sprintf("Bangumi-%d", bangumiID)
+	}
+	storageRoot = strings.TrimSpace(storedRoot)
+	if storageRoot == "" {
+		storageRoot = s.mediaDir
+	}
+	return animeName, storageRoot, nil
+}
+
+func (s *Service) boundEpisodeBindingCount(ctx context.Context, bangumiID int64, identity subscription.EpisodeBindingIdentity) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM subscription_items
+WHERE binding_status = ?
+  AND bound_bangumi_id = ?
+  AND bound_season_number = ?
+  AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+  AND bound_episode_number = ?`, subscription.BindingStatusBound, bangumiID, identity.SeasonNumber, identity.EpisodeType, identity.EpisodeNumber).Scan(&count)
+	return count, err
+}
+
+func (s *Service) ensureEpisodeBindingEditable(ctx context.Context, bangumiID int64, identity subscription.EpisodeBindingIdentity) error {
+	var downloading int
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM download_jobs dj
+JOIN subscription_items si ON si.id = dj.subscription_item_id
+WHERE si.binding_status = ?
+  AND si.bound_bangumi_id = ?
+  AND si.bound_season_number = ?
+  AND COALESCE(NULLIF(si.bound_episode_type, ''), 'episode') = ?
+  AND si.bound_episode_number = ?
+  AND dj.status = 'downloading'`, subscription.BindingStatusBound, bangumiID, identity.SeasonNumber, identity.EpisodeType, identity.EpisodeNumber).Scan(&downloading); err != nil {
+		return err
+	}
+	if downloading > 0 {
+		return subscription.ErrEpisodeBindingBusy
+	}
+
+	var transcoding int
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM media_jobs
+WHERE bangumi_id = ?
+  AND season_number = ?
+  AND COALESCE(NULLIF(episode_type, ''), 'episode') = ?
+  AND episode_number = ?
+  AND status = ?`, bangumiID, identity.SeasonNumber, identity.EpisodeType, identity.EpisodeNumber, StatusTranscoding).Scan(&transcoding); err != nil {
+		return err
+	}
+	if transcoding > 0 {
+		return subscription.ErrEpisodeBindingBusy
+	}
+	return nil
+}
+
+func (s *Service) episodeBindingTargetExists(ctx context.Context, bangumiID int64, source, target subscription.EpisodeBindingIdentity) (bool, error) {
+	var boundCount int
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM subscription_items
+WHERE binding_status = ?
+  AND bound_bangumi_id = ?
+  AND bound_season_number = ?
+  AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+  AND bound_episode_number = ?
+  AND NOT (
+    bound_season_number = ?
+    AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+    AND bound_episode_number = ?
+  )`, subscription.BindingStatusBound, bangumiID, target.SeasonNumber, target.EpisodeType, target.EpisodeNumber,
+		source.SeasonNumber, source.EpisodeType, source.EpisodeNumber).Scan(&boundCount); err != nil {
+		return false, err
+	}
+	if boundCount > 0 {
+		return true, nil
+	}
+
+	var mediaCount int
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM media_jobs
+WHERE bangumi_id = ?
+  AND season_number = ?
+  AND COALESCE(NULLIF(episode_type, ''), 'episode') = ?
+  AND episode_number = ?
+  AND NOT (
+    season_number = ?
+    AND COALESCE(NULLIF(episode_type, ''), 'episode') = ?
+    AND episode_number = ?
+  )`, bangumiID, target.SeasonNumber, target.EpisodeType, target.EpisodeNumber,
+		source.SeasonNumber, source.EpisodeType, source.EpisodeNumber).Scan(&mediaCount); err != nil {
+		return false, err
+	}
+	return mediaCount > 0, nil
+}
+
+func (s *Service) episodeBindingMediaJobs(ctx context.Context, bangumiID int64, identity subscription.EpisodeBindingIdentity) ([]episodeBindingMediaJob, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, anime_name, status, output_path, cover_path, cover_status
+FROM media_jobs
+WHERE bangumi_id = ?
+  AND season_number = ?
+  AND COALESCE(NULLIF(episode_type, ''), 'episode') = ?
+  AND episode_number = ?`, bangumiID, identity.SeasonNumber, identity.EpisodeType, identity.EpisodeNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := make([]episodeBindingMediaJob, 0)
+	for rows.Next() {
+		var job episodeBindingMediaJob
+		if err := rows.Scan(&job.ID, &job.AnimeName, &job.Status, &job.OutputPath, &job.CoverPath, &job.CoverStatus); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func (s *Service) planEpisodeBindingMoves(jobs []episodeBindingMediaJob, animeName, storageRoot string, target subscription.EpisodeBindingIdentity) ([]episodeBindingMovePlan, error) {
+	plans := make([]episodeBindingMovePlan, 0, len(jobs))
+	seenTargets := make(map[string]int64)
+	for _, job := range jobs {
+		if job.Status == StatusTranscoding {
+			return nil, subscription.ErrEpisodeBindingBusy
+		}
+		plan := episodeBindingMovePlan{jobID: job.ID, outputPath: job.OutputPath, coverPath: job.CoverPath}
+		targetAnimeName := strings.TrimSpace(job.AnimeName)
+		if targetAnimeName == "" {
+			targetAnimeName = animeName
+		}
+		if strings.TrimSpace(job.OutputPath) != "" {
+			targetJob := pendingJob{
+				AnimeName: targetAnimeName, SeasonNumber: target.SeasonNumber,
+				EpisodeType: target.EpisodeType, EpisodeNumber: target.EpisodeNumber,
+			}
+			plan.outputPath = finalOutputPath(storageRoot, targetJob)
+			if strings.TrimSpace(job.CoverPath) != "" {
+				plan.coverPath = coverPathForOutput(plan.outputPath)
+			}
+			if err := ensureUniqueEpisodeBindingTarget(seenTargets, plan.outputPath, job.ID); err != nil {
+				return nil, err
+			}
+			if err := appendEpisodeBindingMove(&plan.moves, job.OutputPath, plan.outputPath); err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(job.CoverPath) != "" {
+				if err := ensureUniqueEpisodeBindingTarget(seenTargets, plan.coverPath, job.ID); err != nil {
+					return nil, err
+				}
+				if err := appendEpisodeBindingMove(&plan.moves, job.CoverPath, plan.coverPath); err != nil {
+					return nil, err
+				}
+			}
+		}
+		plans = append(plans, plan)
+	}
+	return plans, nil
+}
+
+func ensureUniqueEpisodeBindingTarget(seen map[string]int64, path string, jobID int64) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	key := filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	if existing, ok := seen[key]; ok && existing != jobID {
+		return ErrStorageTargetConflict
+	}
+	seen[key] = jobID
+	return nil
+}
+
+func appendEpisodeBindingMove(moves *[]fileMove, source, target string) error {
+	source = strings.TrimSpace(source)
+	target = strings.TrimSpace(target)
+	if source == "" || target == "" || samePath(source, target) {
+		return nil
+	}
+	sourceExists, err := fileExists(source)
+	if err != nil {
+		return err
+	}
+	targetExists, err := fileExists(target)
+	if err != nil {
+		return err
+	}
+	if targetExists {
+		return ErrStorageTargetConflict
+	}
+	if sourceExists {
+		*moves = append(*moves, fileMove{source: source, target: target})
+	}
+	return nil
+}
+
+func sameEpisodeBindingIdentity(left, right subscription.EpisodeBindingIdentity) bool {
+	return left.SeasonNumber == right.SeasonNumber &&
+		left.EpisodeType == right.EpisodeType &&
+		left.EpisodeNumber == right.EpisodeNumber
 }
 
 func (s *Service) MoveAnimeStorage(ctx context.Context, bangumiID int64, targetRoot string) (StorageMoveResult, error) {
@@ -1785,6 +2169,37 @@ func copyFileNoOverwrite(source, destination string, mode os.FileMode) error {
 		return copyErr
 	}
 	return closeErr
+}
+
+func moveFileNoOverwrite(source, destination string) error {
+	if samePath(source, destination) {
+		return nil
+	}
+	info, err := os.Stat(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return ErrStorageTargetConflict
+	}
+	if _, err := os.Stat(destination); err == nil {
+		return ErrStorageTargetConflict
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(source, destination); err == nil {
+		return nil
+	}
+	if err := copyFileNoOverwrite(source, destination, info.Mode()); err != nil {
+		return err
+	}
+	return os.Remove(source)
 }
 
 func replaceFile(source, destination string) error {

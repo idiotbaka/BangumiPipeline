@@ -103,6 +103,8 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("POST /api/anime/{bangumiID}/refresh", api.refreshAnime)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/sync-history", api.syncAnimeHistory)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/sync-episode", api.syncAnimeEpisode)
+	mux.HandleFunc("PATCH /api/anime/{bangumiID}/bound-episodes", api.updateAnimeEpisodeBinding)
+	mux.HandleFunc("DELETE /api/anime/{bangumiID}/bound-episodes", api.deleteAnimeEpisodeBinding)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/storage", api.moveAnimeStorage)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/characters/{characterID}/image", api.characterImage)
@@ -781,6 +783,53 @@ func (a *AdminAPI) syncAnimeEpisode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"result": result, "cleanup": cleanup})
 }
 
+func (a *AdminAPI) updateAnimeEpisodeBinding(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	var input struct {
+		Source subscription.EpisodeBindingIdentity `json:"source"`
+		Target subscription.EpisodeBindingIdentity `json:"target"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := a.media.UpdateEpisodeBinding(r.Context(), id, input.Source, input.Target)
+	if err != nil {
+		a.episodeBindingError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result})
+}
+
+func (a *AdminAPI) deleteAnimeEpisodeBinding(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	var input struct {
+		Source subscription.EpisodeBindingIdentity `json:"source"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := a.subscription.DeleteEpisodeBinding(r.Context(), id, input.Source)
+	if err != nil {
+		a.episodeBindingError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result})
+}
+
 func (a *AdminAPI) moveAnimeStorage(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdministrator(w, r) {
 		return
@@ -978,6 +1027,25 @@ func (a *AdminAPI) manualEpisodeSyncError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "episode_transcoding", "该话正在转码中，暂不能同步或替换")
 	case errors.Is(err, subscription.ErrInvalidBinding):
 		writeError(w, http.StatusBadRequest, "invalid_subscription_binding", "绑定信息不完整或番剧不存在")
+	default:
+		a.internalError(w, err)
+	}
+}
+
+func (a *AdminAPI) episodeBindingError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, subscription.ErrEpisodeBindingNotFound):
+		writeError(w, http.StatusNotFound, "episode_binding_not_found", "该绑定集数不存在")
+	case errors.Is(err, subscription.ErrEpisodeBindingBusy):
+		writeError(w, http.StatusConflict, "episode_binding_busy", "该话正在下载或转码中，暂不能修改或删除")
+	case errors.Is(err, subscription.ErrEpisodeBindingExists):
+		writeError(w, http.StatusConflict, "episode_binding_exists", "目标集数已有绑定或媒体任务，请先处理目标集数")
+	case errors.Is(err, media.ErrStorageTargetConflict):
+		writeError(w, http.StatusConflict, "episode_media_target_conflict", "目标集数的媒体文件路径已存在，请先处理目标文件")
+	case errors.Is(err, subscription.ErrInvalidBinding):
+		writeError(w, http.StatusBadRequest, "invalid_episode_target", "季数和集数必须填写完整")
+	case errors.Is(err, media.ErrAnimeNotFound):
+		writeError(w, http.StatusNotFound, "anime_not_found", "番剧不存在")
 	default:
 		a.internalError(w, err)
 	}

@@ -41,14 +41,17 @@ const (
 )
 
 var (
-	ErrItemNotFound          = errors.New("subscription item not found")
-	ErrInvalidBinding        = errors.New("invalid subscription binding")
-	ErrHistorySourceNotFound = errors.New("history source not found")
-	ErrHistoryRSSURLRequired = errors.New("history rss url required")
-	ErrInvalidHistorySearch  = errors.New("invalid history search")
-	ErrInvalidHistoryRSSURL  = errors.New("invalid history rss url")
-	ErrInvalidManualEpisode  = errors.New("invalid manual episode")
-	ErrInvalidManualMagnet   = errors.New("invalid manual episode magnet")
+	ErrItemNotFound           = errors.New("subscription item not found")
+	ErrInvalidBinding         = errors.New("invalid subscription binding")
+	ErrHistorySourceNotFound  = errors.New("history source not found")
+	ErrHistoryRSSURLRequired  = errors.New("history rss url required")
+	ErrInvalidHistorySearch   = errors.New("invalid history search")
+	ErrInvalidHistoryRSSURL   = errors.New("invalid history rss url")
+	ErrInvalidManualEpisode   = errors.New("invalid manual episode")
+	ErrInvalidManualMagnet    = errors.New("invalid manual episode magnet")
+	ErrEpisodeBindingNotFound = errors.New("episode binding not found")
+	ErrEpisodeBindingBusy     = errors.New("episode binding is downloading or transcoding")
+	ErrEpisodeBindingExists   = errors.New("episode binding target already exists")
 )
 
 type SettingsProvider interface {
@@ -106,6 +109,24 @@ type ManualEpisodeInput struct {
 type ManualEpisodeResult struct {
 	Item          Item  `json:"item"`
 	DownloadJobID int64 `json:"downloadJobId"`
+}
+
+type EpisodeBindingIdentity struct {
+	SeasonNumber  int    `json:"seasonNumber"`
+	EpisodeType   string `json:"episodeType"`
+	EpisodeNumber string `json:"episodeNumber"`
+}
+
+type EpisodeBindingMutationResult struct {
+	BangumiID           int64                   `json:"bangumiId"`
+	Source              EpisodeBindingIdentity  `json:"source"`
+	Target              *EpisodeBindingIdentity `json:"target,omitempty"`
+	UpdatedItems        int64                   `json:"updatedItems"`
+	UpdatedMediaJobs    int64                   `json:"updatedMediaJobs"`
+	UpdatedTitleRules   int64                   `json:"updatedTitleRules"`
+	DeletedDownloadJobs int64                   `json:"deletedDownloadJobs"`
+	DeletedMediaJobs    int64                   `json:"deletedMediaJobs"`
+	DeletedTitleRules   int64                   `json:"deletedTitleRules"`
 }
 
 type BindingInput struct {
@@ -384,6 +405,15 @@ func NormalizeManualEpisodeInput(input ManualEpisodeInput) (ManualEpisodeInput, 
 	return input, nil
 }
 
+func NormalizeEpisodeBindingIdentity(input EpisodeBindingIdentity) (EpisodeBindingIdentity, error) {
+	input.EpisodeType = normalizeEpisodeType(input.EpisodeType)
+	input.EpisodeNumber = strings.TrimSpace(input.EpisodeNumber)
+	if input.SeasonNumber < 1 || input.EpisodeNumber == "" {
+		return EpisodeBindingIdentity{}, ErrInvalidBinding
+	}
+	return input, nil
+}
+
 func (s *Service) SyncManualEpisode(ctx context.Context, bangumiID int64, input ManualEpisodeInput) (ManualEpisodeResult, error) {
 	if bangumiID < 1 {
 		return ManualEpisodeResult{}, ErrInvalidBinding
@@ -546,6 +576,119 @@ ON CONFLICT(subscription_item_id) DO UPDATE SET
 	return ManualEpisodeResult{Item: item, DownloadJobID: downloadJobID}, nil
 }
 
+func (s *Service) DeleteEpisodeBinding(ctx context.Context, bangumiID int64, sourceInput EpisodeBindingIdentity) (EpisodeBindingMutationResult, error) {
+	if bangumiID < 1 {
+		return EpisodeBindingMutationResult{}, ErrInvalidBinding
+	}
+	sourceInput, err := NormalizeEpisodeBindingIdentity(sourceInput)
+	if err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+	source := episodeIdentityFromBinding(sourceInput)
+	result := EpisodeBindingMutationResult{BangumiID: bangumiID, Source: sourceInput}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+	defer tx.Rollback()
+
+	if _, err := animeNameByID(ctx, tx, bangumiID); err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+	count, err := countBoundEpisodeItems(ctx, tx, bangumiID, source)
+	if err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+	if count == 0 {
+		return EpisodeBindingMutationResult{}, ErrEpisodeBindingNotFound
+	}
+	if err := ensureEpisodeBindingEditable(ctx, tx, bangumiID, source); err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+
+	now := s.now().UTC().Unix()
+	titleRules, err := tx.ExecContext(ctx, `
+DELETE FROM subscription_title_rules
+WHERE created_from_item_id IN (
+    SELECT id
+    FROM subscription_items
+    WHERE binding_status = ?
+      AND bound_bangumi_id = ?
+      AND bound_season_number = ?
+      AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+      AND bound_episode_number = ?
+)`, BindingStatusBound, bangumiID, source.SeasonNumber, source.EpisodeType, source.EpisodeNumber)
+	if err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+	result.DeletedTitleRules, _ = titleRules.RowsAffected()
+
+	mediaJobs, err := tx.ExecContext(ctx, `
+DELETE FROM media_jobs
+WHERE bangumi_id = ?
+  AND season_number = ?
+  AND COALESCE(NULLIF(episode_type, ''), 'episode') = ?
+  AND episode_number = ?
+  AND status != 'transcoding'`, bangumiID, source.SeasonNumber, source.EpisodeType, source.EpisodeNumber)
+	if err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+	result.DeletedMediaJobs, _ = mediaJobs.RowsAffected()
+
+	downloadJobs, err := tx.ExecContext(ctx, `
+DELETE FROM download_jobs
+WHERE status != 'downloading'
+  AND subscription_item_id IN (
+    SELECT id
+    FROM subscription_items
+    WHERE binding_status = ?
+      AND bound_bangumi_id = ?
+      AND bound_season_number = ?
+      AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+      AND bound_episode_number = ?
+)`, BindingStatusBound, bangumiID, source.SeasonNumber, source.EpisodeType, source.EpisodeNumber)
+	if err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+	result.DeletedDownloadJobs, _ = downloadJobs.RowsAffected()
+
+	items, err := tx.ExecContext(ctx, `
+UPDATE subscription_items
+SET binding_status = ?,
+    binding_note = ?,
+    bound_bangumi_id = NULL,
+    bound_anime_name = '',
+    bound_season_number = NULL,
+    bound_episode_type = '',
+    bound_episode_number = '',
+    bound_at = NULL,
+    ignored_at = NULL,
+    updated_at = ?
+WHERE binding_status = ?
+  AND bound_bangumi_id = ?
+  AND bound_season_number = ?
+  AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+  AND bound_episode_number = ?`, BindingStatusPending, "绑定已在番剧管理中删除", now,
+		BindingStatusBound, bangumiID, source.SeasonNumber, source.EpisodeType, source.EpisodeNumber)
+	if err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+	result.UpdatedItems, _ = items.RowsAffected()
+	if result.UpdatedItems == 0 {
+		return EpisodeBindingMutationResult{}, ErrEpisodeBindingNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return EpisodeBindingMutationResult{}, err
+	}
+	s.logger.Info("番剧绑定集数标识已删除", "source", "subscription",
+		"bangumi_id", bangumiID, "season_number", source.SeasonNumber,
+		"episode_type", source.EpisodeType, "episode_number", source.EpisodeNumber,
+		"updated_items", result.UpdatedItems, "deleted_download_jobs", result.DeletedDownloadJobs,
+		"deleted_media_jobs", result.DeletedMediaJobs)
+	return result, nil
+}
+
 func (s *Service) historySourceForSync(ctx context.Context, bangumiID int64, options HistorySyncOptions) (historySource, error) {
 	source, err := s.latestHistorySource(ctx, bangumiID)
 	if err == nil {
@@ -622,6 +765,62 @@ WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(&name, &nameCN)
 		return nameCN, nil
 	}
 	return name, nil
+}
+
+func episodeIdentityFromBinding(input EpisodeBindingIdentity) episodeIdentity {
+	return episodeIdentity{
+		SeasonNumber:  input.SeasonNumber,
+		EpisodeType:   normalizeEpisodeType(input.EpisodeType),
+		EpisodeNumber: strings.TrimSpace(input.EpisodeNumber),
+	}
+}
+
+func countBoundEpisodeItems(ctx context.Context, tx *sql.Tx, bangumiID int64, identity episodeIdentity) (int, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM subscription_items
+WHERE binding_status = ?
+  AND bound_bangumi_id = ?
+  AND bound_season_number = ?
+  AND COALESCE(NULLIF(bound_episode_type, ''), 'episode') = ?
+  AND bound_episode_number = ?`, BindingStatusBound, bangumiID, identity.SeasonNumber, identity.EpisodeType, identity.EpisodeNumber).Scan(&count)
+	return count, err
+}
+
+func ensureEpisodeBindingEditable(ctx context.Context, tx *sql.Tx, bangumiID int64, identity episodeIdentity) error {
+	var downloading int
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM download_jobs dj
+JOIN subscription_items si ON si.id = dj.subscription_item_id
+WHERE si.binding_status = ?
+  AND si.bound_bangumi_id = ?
+  AND si.bound_season_number = ?
+  AND COALESCE(NULLIF(si.bound_episode_type, ''), 'episode') = ?
+  AND si.bound_episode_number = ?
+  AND dj.status = 'downloading'`, BindingStatusBound, bangumiID, identity.SeasonNumber, identity.EpisodeType, identity.EpisodeNumber).Scan(&downloading); err != nil {
+		return err
+	}
+	if downloading > 0 {
+		return ErrEpisodeBindingBusy
+	}
+
+	var transcoding int
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM media_jobs
+WHERE bangumi_id = ?
+  AND season_number = ?
+  AND COALESCE(NULLIF(episode_type, ''), 'episode') = ?
+  AND episode_number = ?
+  AND status = 'transcoding'`, bangumiID, identity.SeasonNumber, identity.EpisodeType, identity.EpisodeNumber).Scan(&transcoding); err != nil {
+		return err
+	}
+	if transcoding > 0 {
+		return ErrEpisodeBindingBusy
+	}
+	return nil
 }
 
 func (s *Service) boundEpisodeSet(ctx context.Context, bangumiID int64) (map[episodeIdentity]struct{}, error) {

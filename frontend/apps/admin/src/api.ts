@@ -347,6 +347,24 @@ export interface EpisodeReplacementCleanup {
   filesDeleted: number
 }
 
+export interface EpisodeBindingIdentity {
+  seasonNumber: number
+  episodeType: string
+  episodeNumber: string
+}
+
+export interface EpisodeBindingMutationResult {
+  bangumiId: number
+  source: EpisodeBindingIdentity
+  target?: EpisodeBindingIdentity
+  updatedItems: number
+  updatedMediaJobs: number
+  updatedTitleRules: number
+  deletedDownloadJobs: number
+  deletedMediaJobs: number
+  deletedTitleRules: number
+}
+
 export type SubscriptionMatchStatus = 'matched' | 'unmatched'
 export type SubscriptionBindingStatus = 'pending' | 'bound' | 'ignored'
 
@@ -683,6 +701,16 @@ export const api = {
     request<{ result: ManualEpisodeResult; cleanup: EpisodeReplacementCleanup }>(`/api/anime/${bangumiId}/sync-episode`, {
       method: 'POST',
       body: JSON.stringify(input),
+    }),
+  updateAnimeEpisodeBinding: (bangumiId: number, source: EpisodeBindingIdentity, target: EpisodeBindingIdentity) =>
+    request<{ result: EpisodeBindingMutationResult }>(`/api/anime/${bangumiId}/bound-episodes`, {
+      method: 'PATCH',
+      body: JSON.stringify({ source, target }),
+    }),
+  deleteAnimeEpisodeBinding: (bangumiId: number, source: EpisodeBindingIdentity) =>
+    request<{ result: EpisodeBindingMutationResult }>(`/api/anime/${bangumiId}/bound-episodes`, {
+      method: 'DELETE',
+      body: JSON.stringify({ source }),
     }),
   moveAnimeStorage: (bangumiId: number, storageRoot: string) =>
     request<{ result: StorageMoveResult }>(`/api/anime/${bangumiId}/storage`, {
