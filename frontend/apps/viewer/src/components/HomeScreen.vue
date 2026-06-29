@@ -153,6 +153,10 @@ function coverURL(item: ViewerAnimeCard) {
   return `/api/anime/${item.bangumiId}/cover`
 }
 
+function openCurrentHero() {
+  if (currentHero.value) openAnime(currentHero.value.bangumiId)
+}
+
 function carouselImageURL(id: number, updatedAt: number) {
   return `/api/carousels/${id}/image?v=${updatedAt}`
 }
@@ -312,7 +316,12 @@ function syncDetailFromLocation() {
 
       <div class="content-wrap">
         <!-- ===== 首页轮播 ===== -->
-        <section class="hero-carousel" :class="{ 'has-slide': currentHero }" aria-label="精选轮播">
+        <section
+          class="hero-carousel"
+          :class="{ 'has-slide': currentHero, clickable: currentHero }"
+          aria-label="精选轮播"
+          @click="openCurrentHero"
+        >
           <img
             v-if="currentHero"
             class="hero-image"
@@ -369,14 +378,14 @@ function syncDetailFromLocation() {
             class="hero-arrow arrow-prev"
             type="button"
             aria-label="上一个"
-            @click="turnHero(-1)"
+            @click.stop="turnHero(-1)"
           />
           <button
             v-if="heroSlides.length > 1"
             class="hero-arrow arrow-next"
             type="button"
             aria-label="下一个"
-            @click="turnHero(1)"
+            @click.stop="turnHero(1)"
           />
 
           <!-- 指示器 -->
@@ -390,7 +399,7 @@ function syncDetailFromLocation() {
               role="tab"
               :aria-selected="index === heroIndex"
               :aria-label="`第 ${index + 1} 张`"
-              @click="selectHero(index)"
+              @click.stop="selectHero(index)"
             />
           </div>
         </section>
@@ -807,6 +816,10 @@ function syncDetailFromLocation() {
   background: #101624;
   border-color: rgba(255, 255, 255, 0.2);
   box-shadow: 0 28px 64px rgba(26, 36, 58, 0.28);
+}
+
+.hero-carousel.clickable {
+  cursor: pointer;
 }
 
 .hero-image {

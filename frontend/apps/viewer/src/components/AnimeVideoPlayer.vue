@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 interface Props {
   src: string
@@ -18,6 +18,8 @@ const volume = ref(1)
 const muted = ref(false)
 const playbackRate = ref(1)
 const errorMessage = ref('')
+const webFullscreen = ref(false)
+let previousBodyOverflow = ''
 
 const progressStyle = computed(() => {
   const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
@@ -36,6 +38,13 @@ watch(
     video.value?.load()
   },
 )
+
+onMounted(() => window.addEventListener('keydown', handleWindowKeydown))
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleWindowKeydown)
+  exitWebFullscreen()
+})
 
 async function togglePlay() {
   const element = video.value
@@ -91,7 +100,34 @@ function cyclePlaybackRate() {
 async function toggleFullscreen() {
   if (!player.value) return
   if (document.fullscreenElement) await document.exitFullscreen()
-  else await player.value.requestFullscreen()
+  else {
+    exitWebFullscreen()
+    await nextTick()
+    await player.value.requestFullscreen()
+  }
+}
+
+function toggleWebFullscreen() {
+  if (webFullscreen.value) {
+    exitWebFullscreen()
+    return
+  }
+  previousBodyOverflow = document.body.style.overflow
+  document.body.style.overflow = 'hidden'
+  document.body.classList.add('bp-web-fullscreen')
+  webFullscreen.value = true
+  void nextTick(() => player.value?.focus())
+}
+
+function exitWebFullscreen() {
+  if (!webFullscreen.value) return
+  webFullscreen.value = false
+  document.body.style.overflow = previousBodyOverflow
+  document.body.classList.remove('bp-web-fullscreen')
+}
+
+function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && webFullscreen.value) exitWebFullscreen()
 }
 
 function formatTime(value: number) {
@@ -109,6 +145,7 @@ function formatTime(value: number) {
   <section
     ref="player"
     class="anime-player"
+    :class="{ 'web-fullscreen': webFullscreen }"
     tabindex="0"
     :aria-label="`正在播放 ${title}`"
     @keydown.space.prevent="togglePlay"
@@ -176,6 +213,15 @@ function formatTime(value: number) {
           @input="changeVolume"
         />
         <button class="text-control rate" type="button" @click="cyclePlaybackRate">{{ playbackRate }}×</button>
+        <button
+          class="web-fullscreen-control"
+          :class="{ active: webFullscreen }"
+          type="button"
+          :aria-label="webFullscreen ? '退出网页全屏' : '进入网页全屏'"
+          @click="toggleWebFullscreen"
+        >
+          <i aria-hidden="true" />{{ webFullscreen ? '退出网页全屏' : '网页全屏' }}
+        </button>
         <button class="fullscreen-control" type="button" aria-label="全屏" @click="toggleFullscreen"><i aria-hidden="true" /></button>
       </div>
     </div>
@@ -215,10 +261,14 @@ function formatTime(value: number) {
 .volume-range::-webkit-slider-thumb { width: 9px; height: 9px; appearance: none; background: var(--cyan-300); transform: rotate(45deg); }
 .fullscreen-control { width: 28px; height: 28px; display: grid; place-items: center; }
 .fullscreen-control i { width: 14px; height: 14px; border: 1px solid rgba(255,255,255,.84); clip-path: polygon(0 0, 42% 0, 42% 12%, 12% 12%, 12% 42%, 0 42%, 0 0, 100% 0, 100% 42%, 88% 42%, 88% 12%, 58% 12%, 58% 0, 100% 0, 100% 100%, 58% 100%, 58% 88%, 88% 88%, 88% 58%, 100% 58%, 100% 100%, 0 100%, 0 58%, 12% 58%, 12% 88%, 42% 88%, 42% 100%, 0 100%); }
+.web-fullscreen-control { height: 29px; display: inline-flex; align-items: center; gap: 7px; margin-bottom: -1px; padding: 0 9px; color: rgba(255,255,255,.78); font-size: 13px; white-space: nowrap; border: 1px solid rgba(255,255,255,.24); background: rgba(9,13,23,.38); clip-path: polygon(var(--bevel-sm)); }
+.web-fullscreen-control:hover, .web-fullscreen-control.active { color: #fff; border-color: rgba(142,232,242,.55); background: rgba(73,214,233,.18); }
+.web-fullscreen-control i { width: 12px; height: 9px; border: 1px solid currentColor; box-shadow: inset 0 2px 0 rgba(142,232,242,.45); }
 .buffering-mark, .player-error { position: absolute; top: 50%; left: 50%; display: grid; place-items: center; gap: 10px; transform: translate(-50%, -50%); }
 .buffering-mark i { width: 38px; height: 38px; border: 2px solid rgba(255,255,255,.2); border-top-color: var(--cyan-300); border-radius: 50%; animation: bp-spin .8s linear infinite; }
 .buffering-mark span { font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; }
 .player-error span { width: 42px; height: 42px; display: grid; place-items: center; color: var(--pink-300); font-family: var(--font-mono); font-size: 22px; border: 1px solid var(--pink-300); transform: rotate(45deg); }
 .player-error p { font-size: 13px; }
 .anime-player:fullscreen { clip-path: none; }
+.anime-player.web-fullscreen { position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh; height: 100dvh; min-height: 0; clip-path: none; }
 </style>

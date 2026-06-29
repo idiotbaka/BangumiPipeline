@@ -114,6 +114,11 @@ body {
   line-height: 1.5;
 }
 
+body.bp-web-fullscreen .topbar {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 button,
 input,
 select,
