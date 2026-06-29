@@ -953,6 +953,26 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (24, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 24 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_anime_follows (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES viewer_users(id) ON DELETE CASCADE,
+    bangumi_id INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(user_id, bangumi_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_anime_follows_user_updated
+ON viewer_anime_follows(user_id, updated_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_anime_follows_bangumi
+ON viewer_anime_follows(bangumi_id);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (25, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 25 migration: %w", err)
+	}
 	return nil
 }
 

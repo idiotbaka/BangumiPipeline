@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
-import { api, type ViewerAnimeCard, type ViewerHome, type ViewerUser, type ViewerWatchHistoryItem } from '../api'
+import { api, type ViewerAnimeCard, type ViewerFollowedAnime, type ViewerHome, type ViewerUser, type ViewerWatchHistoryItem } from '../api'
 import AnimeDetailScreen from './AnimeDetailScreen.vue'
+import FollowCard from './FollowCard.vue'
+import FollowScreen from './FollowScreen.vue'
 import HistoryScreen from './HistoryScreen.vue'
 import LibraryScreen from './LibraryScreen.vue'
 import ParticleField from './ParticleField.vue'
@@ -22,18 +24,20 @@ const maxHotPages = 4
 const hotSkeletonCount = 8
 const recentSkeletonCount = 24 // 最近更新：8 列 × 3 排
 const maxRecentCount = 24 // 最近更新最多显示 24 个（3 排）
+const followPageSize = 6
 const heroIntervalMs = 5500
 
 const searchQuery = ref('')
 const libraryQuery = ref('')
 const librarySearchKey = ref(0)
-const activeView = ref<'home' | 'schedule' | 'library' | 'history'>('home')
+const activeView = ref<'home' | 'schedule' | 'library' | 'history' | 'follows'>('home')
 const detailAnimeId = ref<number | null>(null)
 const detailMediaId = ref(0)
 const detailPosition = ref(0)
 const homeLoading = ref(false)
 const homeError = ref('')
 const hotPage = ref(0)
+const followPage = ref(0)
 const heroIndex = ref(0)
 const relativeTimeNow = ref(Date.now())
 const failedCovers = ref<Set<number>>(new Set())
@@ -41,6 +45,7 @@ const home = ref<ViewerHome>({
   hotRecommendations: [],
   recentUpdates: [],
   carouselSlides: [],
+  myFollows: [],
 })
 
 let heroTimer: ReturnType<typeof setInterval> | null = null
@@ -74,6 +79,20 @@ onMounted(() => {
     relativeTimeNow.value = Date.now()
   }, 60_000)
 })
+const unfinishedFollows = computed(() => home.value.myFollows.filter((item) => !item.caughtUp))
+const followPages = computed(() => {
+  const pages: ViewerFollowedAnime[][] = []
+  for (let index = 0; index < unfinishedFollows.value.length; index += followPageSize) {
+    pages.push(unfinishedFollows.value.slice(index, index + followPageSize))
+  }
+  return pages
+})
+const currentFollowItems = computed(() => followPages.value[followPage.value] ?? [])
+const canTurnFollow = computed(() => followPages.value.length > 1)
+const followPageIndicator = computed(() => {
+  const total = Math.max(followPages.value.length, 1)
+  return `${Math.min(followPage.value + 1, total)} / ${total}`
+})
 
 onUnmounted(() => {
   window.removeEventListener('popstate', syncDetailFromLocation)
@@ -91,6 +110,10 @@ watch(heroSlides, (slides) => {
   } else {
     stopHeroAutoplay()
   }
+})
+
+watch(unfinishedFollows, () => {
+  followPage.value = 0
 })
 
 function startHeroAutoplay() {
@@ -156,6 +179,12 @@ function coverURL(item: ViewerAnimeCard) {
   return `/api/anime/${item.bangumiId}/cover`
 }
 
+function turnFollowPage(direction: number) {
+  if (!canTurnFollow.value) return
+  const total = followPages.value.length
+  followPage.value = (followPage.value + direction + total) % total
+}
+
 function openCurrentHero() {
   if (currentHero.value) openAnime(currentHero.value.bangumiId)
 }
@@ -217,13 +246,14 @@ function submitGlobalSearch() {
   showView('library')
 }
 
-function showView(view: 'home' | 'schedule' | 'library' | 'history') {
+function showView(view: 'home' | 'schedule' | 'library' | 'history' | 'follows') {
   activeView.value = view
   if (detailAnimeId.value !== null) {
     detailAnimeId.value = null
     detailMediaId.value = 0
     detailPosition.value = 0
     window.history.replaceState({}, '', '/')
+    scheduleHomeRefresh()
   }
 }
 
@@ -244,6 +274,10 @@ function openHistoryItem(item: ViewerWatchHistoryItem) {
   openAnime(item.bangumiId, item.mediaId, item.completed ? 0 : item.positionSeconds)
 }
 
+function openFollowedAnime(item: ViewerFollowedAnime) {
+  openAnime(item.bangumiId, item.mediaId, item.positionSeconds)
+}
+
 function closeAnimeDetail() {
   if (window.history.state?.bpAnimeDetail) {
     window.history.back()
@@ -255,9 +289,11 @@ function closeAnimeDetail() {
   activeView.value = 'home'
   window.history.replaceState({}, '', '/')
   window.scrollTo({ top: 0, behavior: 'smooth' })
+  scheduleHomeRefresh()
 }
 
 function syncDetailFromLocation() {
+  const wasShowingDetail = detailAnimeId.value !== null
   const match = window.location.pathname.match(/^\/anime\/(\d+)\/?$/)
   detailAnimeId.value = match ? Number(match[1]) : null
   const params = new URLSearchParams(window.location.search)
@@ -266,6 +302,11 @@ function syncDetailFromLocation() {
   detailMediaId.value = Number.isInteger(mediaID) && mediaID > 0 ? mediaID : 0
   detailPosition.value = Number.isFinite(position) && position > 0 ? position : 0
   window.scrollTo({ top: 0 })
+  if (wasShowingDetail && detailAnimeId.value === null) scheduleHomeRefresh()
+}
+
+function scheduleHomeRefresh() {
+  window.setTimeout(() => void loadHome(), 500)
 }
 </script>
 
@@ -318,6 +359,9 @@ function syncDetailFromLocation() {
           <i class="user-arrow" aria-hidden="true" />
         </button>
         <div class="user-menu" role="menu">
+          <button type="button" role="menuitem" @click="showView('follows')">
+            <i class="follow-menu-icon" aria-hidden="true" />我的追番
+          </button>
           <button type="button" role="menuitem" @click="showView('history')">
             <i class="history-icon" aria-hidden="true" />观看历史
           </button>
@@ -334,6 +378,7 @@ function syncDetailFromLocation() {
       :initial-media-id="detailMediaId"
       :initial-position="detailPosition"
       @back="closeAnimeDetail"
+      @follow-changed="loadHome"
     />
     <ScheduleScreen v-else-if="activeView === 'schedule'" @open-anime="openAnime" />
     <LibraryScreen
@@ -343,6 +388,7 @@ function syncDetailFromLocation() {
       @open-anime="openAnime"
     />
     <HistoryScreen v-else-if="activeView === 'history'" @open-history="openHistoryItem" />
+    <FollowScreen v-else-if="activeView === 'follows'" @open-follow="openFollowedAnime" />
 
     <section v-else class="home-stage" aria-label="首页">
       <ParticleField :count="16" palette="pink" :max-size="30" />
@@ -436,6 +482,48 @@ function syncDetailFromLocation() {
               :aria-selected="index === heroIndex"
               :aria-label="`第 ${index + 1} 张`"
               @click.stop="selectHero(index)"
+            />
+          </div>
+        </section>
+
+        <!-- ===== 我的追番 ===== -->
+        <section v-if="homeLoading || unfinishedFollows.length > 0" class="anime-section follow-section">
+          <div class="section-head">
+            <div class="section-title">
+              <p class="section-kicker">MY FOLLOWING</p>
+              <h2>我的追番</h2>
+              <i class="section-bar" aria-hidden="true" />
+            </div>
+            <div class="section-controls">
+              <span class="page-count">{{ followPageIndicator }}</span>
+              <button
+                class="arrow-button page-arrow-prev"
+                :disabled="!canTurnFollow"
+                type="button"
+                aria-label="上一页"
+                @click="turnFollowPage(-1)"
+              />
+              <button
+                class="arrow-button page-arrow-next"
+                :disabled="!canTurnFollow"
+                type="button"
+                aria-label="下一页"
+                @click="turnFollowPage(1)"
+              />
+            </div>
+          </div>
+          <div v-if="homeLoading" class="follow-home-grid">
+            <article v-for="index in 6" :key="index" class="follow-home-skeleton">
+              <div class="skeleton-follow-cover skeleton-block" />
+              <div class="skeleton-title skeleton-block" />
+            </article>
+          </div>
+          <div v-else class="follow-home-grid">
+            <FollowCard
+              v-for="item in currentFollowItems"
+              :key="item.bangumiId"
+              :item="item"
+              @open="openFollowedAnime"
             />
           </div>
         </section>
@@ -815,6 +903,21 @@ function syncDetailFromLocation() {
   height: 15px;
   border: 1px solid currentColor;
   border-radius: 50%;
+}
+
+.follow-menu-icon {
+  position: relative;
+  width: 15px;
+  height: 15px;
+  border: 1px solid currentColor;
+  transform: rotate(45deg) scale(.78);
+}
+
+.follow-menu-icon::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  background: currentColor;
 }
 
 .history-icon::before,
@@ -1367,6 +1470,20 @@ function syncDetailFromLocation() {
 }
 
 /* ============ 海报网格 ============ */
+.follow-home-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.follow-home-skeleton {
+  min-width: 0;
+}
+
+.skeleton-follow-cover {
+  aspect-ratio: 16 / 9;
+}
+
 .poster-grid {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));

@@ -36,9 +36,11 @@ func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, log
 	mux.HandleFunc("GET /api/library/filters", api.libraryFilters)
 	mux.HandleFunc("GET /api/library", api.animeLibrary)
 	mux.HandleFunc("GET /api/watch-history", api.watchHistory)
+	mux.HandleFunc("GET /api/follows", api.followedAnime)
 	mux.HandleFunc("GET /api/carousels/{carouselID}/image", api.carouselImage)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/detail", api.animeDetail)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
+	mux.HandleFunc("PUT /api/anime/{bangumiID}/follow", api.updateAnimeFollow)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/stream", api.animeMediaStream)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/cover", api.animeMediaCover)
 	mux.HandleFunc("PUT /api/anime/{bangumiID}/media/{mediaID}/progress", api.updateWatchProgress)
@@ -124,7 +126,8 @@ func (a *ViewerAPI) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *ViewerAPI) home(w http.ResponseWriter, r *http.Request) {
-	if !a.requireViewer(w, r) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
 		return
 	}
 	home, err := a.catalog.ViewerHome(r.Context())
@@ -137,10 +140,16 @@ func (a *ViewerAPI) home(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, err)
 		return
 	}
+	follows, err := a.auth.FollowedAnime(r.Context(), user.ID)
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"home": map[string]any{
 		"hotRecommendations": home.HotRecommendations,
 		"recentUpdates":      home.RecentUpdates,
 		"carouselSlides":     slides,
+		"myFollows":          follows,
 	}})
 }
 
@@ -291,7 +300,55 @@ func (a *ViewerAPI) animeDetail(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"anime": detail, "watchProgress": progress})
+	followed, err := a.auth.IsAnimeFollowed(r.Context(), user.ID, id)
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"anime": detail, "watchProgress": progress, "followed": followed,
+	})
+}
+
+func (a *ViewerAPI) followedAnime(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
+		return
+	}
+	items, err := a.auth.FollowedAnime(r.Context(), user.ID)
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (a *ViewerAPI) updateAnimeFollow(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
+		return
+	}
+	bangumiID, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	var input struct {
+		Followed bool `json:"followed"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	followed, err := a.auth.SetAnimeFollow(r.Context(), user.ID, bangumiID, input.Followed)
+	if err != nil {
+		if errors.Is(err, viewer.ErrFollowAnimeNotFound) {
+			writeError(w, http.StatusNotFound, "anime_not_found", "番剧不存在")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"followed": followed})
 }
 
 func (a *ViewerAPI) watchHistory(w http.ResponseWriter, r *http.Request) {

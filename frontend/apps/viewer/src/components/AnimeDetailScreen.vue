@@ -18,12 +18,18 @@ interface Props {
 }
 
 const props = defineProps<Props>()
-const emit = defineEmits<{ (event: 'back'): void }>()
+const emit = defineEmits<{
+  (event: 'back'): void
+  (event: 'follow-changed'): void
+}>()
 const anime = ref<ViewerAnimeDetail | null>(null)
 const selectedEpisodeKey = ref('')
 const resumePosition = ref(0)
 const loading = ref(false)
 const errorMessage = ref('')
+const followed = ref(false)
+const followSaving = ref(false)
+const followError = ref('')
 const failedImages = ref<Set<string>>(new Set())
 let progressSaving = false
 let queuedProgress: { mediaId: number; positionSeconds: number; durationSeconds: number } | null = null
@@ -61,9 +67,11 @@ watch(() => props.bangumiId, loadDetail)
 async function loadDetail() {
   loading.value = true
   errorMessage.value = ''
+  followError.value = ''
   try {
     const result = await api.animeDetail(props.bangumiId)
     anime.value = result.anime
+    followed.value = result.followed
     const requestedMediaID = props.initialMediaId || result.watchProgress?.mediaId || 0
     const requestedEpisode = result.anime.episodes.find(
       (episode) => episode.hasMedia && episode.mediaId === requestedMediaID,
@@ -82,6 +90,21 @@ async function loadDetail() {
     errorMessage.value = error instanceof Error ? error.message : '番剧详情加载失败'
   } finally {
     loading.value = false
+  }
+}
+
+async function toggleFollow() {
+  if (followSaving.value) return
+  followSaving.value = true
+  followError.value = ''
+  try {
+    const result = await api.updateAnimeFollow(props.bangumiId, !followed.value)
+    followed.value = result.followed
+    emit('follow-changed')
+  } catch (error) {
+    followError.value = error instanceof Error ? error.message : '追番状态更新失败'
+  } finally {
+    followSaving.value = false
   }
 }
 
@@ -193,11 +216,23 @@ function formatInfoValue(value: unknown): string {
           <span v-if="anime.originalTitle && anime.originalTitle !== anime.title">{{ anime.originalTitle }}</span>
         </div>
         <div class="heading-meta">
-          <span>{{ formatAirDate(anime.airDate) }}</span>
-          <i />
-          <span>{{ weekdays[anime.airWeekday] || '放送日未定' }}</span>
-          <i />
-          <span>{{ anime.totalEpisodes > 0 ? `全 ${anime.totalEpisodes} 话` : '话数未定' }}</span>
+          <button
+            class="follow-button"
+            :class="{ followed }"
+            type="button"
+            :disabled="followSaving"
+            @click="toggleFollow"
+          >
+            <i aria-hidden="true" />{{ followed ? '已追番' : '追番' }}
+          </button>
+          <small v-if="followError" class="follow-error">{{ followError }}</small>
+          <div class="heading-facts">
+            <span>{{ formatAirDate(anime.airDate) }}</span>
+            <i />
+            <span>{{ weekdays[anime.airWeekday] || '放送日未定' }}</span>
+            <i />
+            <span>{{ anime.totalEpisodes > 0 ? `全 ${anime.totalEpisodes} 话` : '话数未定' }}</span>
+          </div>
         </div>
       </header>
 
@@ -343,8 +378,15 @@ function formatInfoValue(value: unknown): string {
 .title-copy > p i { width: 54px; height: 1px; background: linear-gradient(90deg, var(--pink-400), transparent); }
 .title-copy h1 { margin-top: 7px; overflow: hidden; color: var(--ink-900); font-size: 34px; line-height: 1.25; letter-spacing: 1px; text-overflow: ellipsis; white-space: nowrap; }
 .title-copy > span { display: block; margin-top: 5px; overflow: hidden; color: var(--ink-400); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.heading-meta { display: flex; align-items: center; gap: 10px; padding-bottom: 5px; color: var(--ink-600); font-size: 13px; white-space: nowrap; }
-.heading-meta i { width: 5px; height: 5px; background: var(--pink-300); transform: rotate(45deg); }
+.heading-meta { display: grid; justify-items: end; gap: 11px; padding-bottom: 5px; color: var(--ink-600); font-size: 13px; white-space: nowrap; }
+.heading-facts { display: flex; align-items: center; gap: 10px; }
+.heading-facts i { width: 5px; height: 5px; background: var(--pink-300); transform: rotate(45deg); }
+.follow-button { min-width: 96px; height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; padding: 0 17px; color: var(--pink-600); font-size: 14px; border: 1px solid var(--pink-200); background: rgba(255,255,255,.76); box-shadow: 0 10px 22px rgba(255,95,158,.1); clip-path: polygon(var(--bevel-sm)); transition: color 160ms ease, background 160ms ease; }
+.follow-button:hover:not(:disabled), .follow-button.followed { color: #fff; background: linear-gradient(135deg, var(--pink-400), var(--pink-600)); }
+.follow-button:disabled { cursor: wait; opacity: .65; }
+.follow-button i { width: 11px; height: 11px; border: 1px solid currentColor; transform: rotate(45deg); }
+.follow-button.followed i { background: rgba(255,255,255,.86); box-shadow: inset 0 0 0 3px var(--pink-500); }
+.follow-error { max-width: 280px; overflow: hidden; color: #d92d20; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 
 .playback-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(400px, 1fr); gap: 18px; height: 650px; margin-top: 28px; }
 .player-column { min-width: 0; height: 100%; }

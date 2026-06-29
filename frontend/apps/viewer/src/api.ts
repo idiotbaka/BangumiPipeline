@@ -43,6 +43,7 @@ export interface ViewerHome {
   hotRecommendations: ViewerAnimeCard[]
   recentUpdates: ViewerAnimeCard[]
   carouselSlides: ViewerCarouselSlide[]
+  myFollows: ViewerFollowedAnime[]
 }
 
 export interface ViewerScheduleCard {
@@ -160,6 +161,26 @@ export interface ViewerWatchHistoryItem {
   lastWatchedAt: number
 }
 
+export interface ViewerFollowedAnime {
+  bangumiId: number
+  animeTitle: string
+  totalEpisodes: number
+  mediaId: number
+  episodeLabel: string
+  episodeTitle: string
+  hasCover: boolean
+  hasWatchProgress: boolean
+  watchedEpisodeLabel: string
+  positionSeconds: number
+  durationSeconds: number
+  progressPercent: number
+  watchCompleted: boolean
+  latestEpisodeLabel: string
+  caughtUp: boolean
+  lastWatchedAt: number
+  followedAt: number
+}
+
 interface ErrorPayload {
   error?: {
     code?: string
@@ -224,7 +245,15 @@ export const api = {
     return request<{ library: ViewerLibrary }>(`/api/library?${params}`)
   },
   animeDetail: (bangumiId: number) =>
-    request<{ anime: ViewerAnimeDetail; watchProgress: ViewerWatchProgress | null }>(`/api/anime/${bangumiId}/detail`),
+    request<{ anime: ViewerAnimeDetail; watchProgress: ViewerWatchProgress | null; followed: boolean }>(
+      `/api/anime/${bangumiId}/detail`,
+    ),
+  updateAnimeFollow: (bangumiId: number, followed: boolean) =>
+    request<{ followed: boolean }>(`/api/anime/${bangumiId}/follow`, {
+      method: 'PUT',
+      body: JSON.stringify({ followed }),
+    }),
+  followedAnime: () => request<{ items: ViewerFollowedAnime[] }>('/api/follows'),
   watchHistory: () => request<{ items: ViewerWatchHistoryItem[] }>('/api/watch-history'),
   updateWatchProgress: (
     bangumiId: number,
