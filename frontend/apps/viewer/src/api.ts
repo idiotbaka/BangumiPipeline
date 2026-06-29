@@ -45,6 +45,24 @@ export interface ViewerHome {
   carouselSlides: ViewerCarouselSlide[]
 }
 
+export interface ViewerScheduleCard {
+  bangumiId: number
+  title: string
+  airDate: string
+  airWeekday: number
+  totalEpisodes: number
+  hasCover: boolean
+  imageStatus: string
+  latestEpisode: string
+  latestEpisodeLabel: string
+}
+
+export interface ViewerSchedule {
+  seasonKey: string
+  seasonLabel: string
+  items: ViewerScheduleCard[]
+}
+
 interface ErrorPayload {
   error?: {
     code?: string
@@ -97,4 +115,6 @@ export const api = {
   me: () => request<{ user: ViewerUser }>('/api/auth/me'),
   logout: () => request<void>('/api/auth/logout', { method: 'POST', body: '{}' }),
   home: () => request<{ home: ViewerHome }>('/api/home'),
+  animeSchedule: (season: string) =>
+    request<{ schedule: ViewerSchedule }>(`/api/anime-schedule?season=${encodeURIComponent(season)}`),
 }

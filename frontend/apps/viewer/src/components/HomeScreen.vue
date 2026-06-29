@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { api, type ViewerAnimeCard, type ViewerHome, type ViewerUser } from '../api'
 import ParticleField from './ParticleField.vue'
+import ScheduleScreen from './ScheduleScreen.vue'
 
 interface Props {
   user: ViewerUser
@@ -21,6 +22,7 @@ const maxRecentCount = 24 // 最近更新最多显示 24 个（3 排）
 const heroIntervalMs = 5500
 
 const searchQuery = ref('')
+const activeView = ref<'home' | 'schedule'>('home')
 const homeLoading = ref(false)
 const homeError = ref('')
 const hotPage = ref(0)
@@ -206,8 +208,22 @@ function stagger(index: number, base = 0.04, step = 0.05) {
       </div>
 
       <nav class="main-nav" aria-label="主导航">
-        <button class="nav-item active" type="button">首页</button>
-        <button class="nav-item" type="button">番剧时间表</button>
+        <button
+          class="nav-item"
+          :class="{ active: activeView === 'home' }"
+          type="button"
+          @click="activeView = 'home'"
+        >
+          首页
+        </button>
+        <button
+          class="nav-item"
+          :class="{ active: activeView === 'schedule' }"
+          type="button"
+          @click="activeView = 'schedule'"
+        >
+          番剧时间表
+        </button>
         <button class="nav-item" type="button">番剧图书馆</button>
       </nav>
 
@@ -226,7 +242,9 @@ function stagger(index: number, base = 0.04, step = 0.05) {
       </div>
     </header>
 
-    <section class="home-stage" aria-label="首页">
+    <ScheduleScreen v-if="activeView === 'schedule'" />
+
+    <section v-else class="home-stage" aria-label="首页">
       <ParticleField :count="16" palette="pink" :max-size="30" />
       <div class="stage-grid" aria-hidden="true" />
       <div class="stage-halo halo-a" aria-hidden="true" />

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"bangumipipeline.local/server/internal/bangumi"
@@ -30,6 +31,7 @@ func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, log
 	mux.HandleFunc("GET /api/auth/me", api.me)
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
 	mux.HandleFunc("GET /api/home", api.home)
+	mux.HandleFunc("GET /api/anime-schedule", api.animeSchedule)
 	mux.HandleFunc("GET /api/carousels/{carouselID}/image", api.carouselImage)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
 	mux.HandleFunc("GET /favicon.png", api.favicon)
@@ -130,6 +132,42 @@ func (a *ViewerAPI) home(w http.ResponseWriter, r *http.Request) {
 		"recentUpdates":      home.RecentUpdates,
 		"carouselSlides":     slides,
 	}})
+}
+
+func (a *ViewerAPI) animeSchedule(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	year, month, ok := parseAnimeSeason(r.URL.Query().Get("season"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_season", "季度参数必须为 YYYY-MM，月份仅支持 01、04、07、10")
+		return
+	}
+	schedule, err := a.catalog.ViewerSchedule(r.Context(), year, month)
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"schedule": schedule})
+}
+
+func parseAnimeSeason(value string) (int, int, bool) {
+	if value == "" {
+		now := time.Now()
+		return now.Year(), ((int(now.Month())-1)/3)*3 + 1, true
+	}
+	if len(value) != 7 || value[4] != '-' {
+		return 0, 0, false
+	}
+	year, err := strconv.Atoi(value[:4])
+	if err != nil || year < 1 || year > 9999 {
+		return 0, 0, false
+	}
+	month, err := strconv.Atoi(value[5:])
+	if err != nil || (month != 1 && month != 4 && month != 7 && month != 10) {
+		return 0, 0, false
+	}
+	return year, month, true
 }
 
 func (a *ViewerAPI) carouselImage(w http.ResponseWriter, r *http.Request) {
