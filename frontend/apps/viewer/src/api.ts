@@ -135,6 +135,31 @@ export interface ViewerAnimeDetail {
   episodes: ViewerDetailEpisode[]
 }
 
+export interface ViewerWatchProgress {
+  mediaId: number
+  bangumiId: number
+  positionSeconds: number
+  durationSeconds: number
+  completed: boolean
+  updatedAt: number
+}
+
+export interface ViewerWatchHistoryItem {
+  bangumiId: number
+  mediaId: number
+  animeTitle: string
+  episodeLabel: string
+  episodeTitle: string
+  latestEpisodeLabel: string
+  totalEpisodes: number
+  positionSeconds: number
+  durationSeconds: number
+  progressPercent: number
+  completed: boolean
+  hasCover: boolean
+  lastWatchedAt: number
+}
+
 interface ErrorPayload {
   error?: {
     code?: string
@@ -199,5 +224,16 @@ export const api = {
     return request<{ library: ViewerLibrary }>(`/api/library?${params}`)
   },
   animeDetail: (bangumiId: number) =>
-    request<{ anime: ViewerAnimeDetail }>(`/api/anime/${bangumiId}/detail`),
+    request<{ anime: ViewerAnimeDetail; watchProgress: ViewerWatchProgress | null }>(`/api/anime/${bangumiId}/detail`),
+  watchHistory: () => request<{ items: ViewerWatchHistoryItem[] }>('/api/watch-history'),
+  updateWatchProgress: (
+    bangumiId: number,
+    mediaId: number,
+    positionSeconds: number,
+    durationSeconds: number,
+  ) =>
+    request<{ progress: ViewerWatchProgress | null }>(`/api/anime/${bangumiId}/media/${mediaId}/progress`, {
+      method: 'PUT',
+      body: JSON.stringify({ positionSeconds, durationSeconds }),
+    }),
 }

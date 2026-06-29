@@ -35,11 +35,13 @@ func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, log
 	mux.HandleFunc("GET /api/anime-schedule", api.animeSchedule)
 	mux.HandleFunc("GET /api/library/filters", api.libraryFilters)
 	mux.HandleFunc("GET /api/library", api.animeLibrary)
+	mux.HandleFunc("GET /api/watch-history", api.watchHistory)
 	mux.HandleFunc("GET /api/carousels/{carouselID}/image", api.carouselImage)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/detail", api.animeDetail)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/stream", api.animeMediaStream)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/cover", api.animeMediaCover)
+	mux.HandleFunc("PUT /api/anime/{bangumiID}/media/{mediaID}/progress", api.updateWatchProgress)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/characters/{characterID}/image", api.animeCharacterImage)
 	mux.HandleFunc("GET /api/actors/{actorID}/image", api.animeActorImage)
 	mux.HandleFunc("GET /favicon.png", api.favicon)
@@ -267,7 +269,8 @@ func (a *ViewerAPI) animeCover(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *ViewerAPI) animeDetail(w http.ResponseWriter, r *http.Request) {
-	if !a.requireViewer(w, r) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
 		return
 	}
 	id, ok := parsePathID(w, r.PathValue("bangumiID"))
@@ -283,7 +286,61 @@ func (a *ViewerAPI) animeDetail(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"anime": detail})
+	progress, err := a.auth.LastWatchProgress(r.Context(), user.ID, id)
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"anime": detail, "watchProgress": progress})
+}
+
+func (a *ViewerAPI) watchHistory(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
+		return
+	}
+	items, err := a.auth.WatchHistory(r.Context(), user.ID, 100)
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (a *ViewerAPI) updateWatchProgress(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
+		return
+	}
+	bangumiID, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	mediaID, ok := parsePathID(w, r.PathValue("mediaID"))
+	if !ok {
+		return
+	}
+	var input struct {
+		PositionSeconds float64 `json:"positionSeconds"`
+		DurationSeconds float64 `json:"durationSeconds"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	progress, err := a.auth.RecordWatchProgress(r.Context(), user.ID, viewer.WatchProgressInput{
+		BangumiID: bangumiID, MediaID: mediaID,
+		PositionSeconds: input.PositionSeconds, DurationSeconds: input.DurationSeconds,
+	})
+	if err != nil {
+		if errors.Is(err, viewer.ErrWatchMediaNotFound) {
+			writeError(w, http.StatusBadRequest, "invalid_watch_progress", "播放进度或媒体信息无效")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"progress": progress})
 }
 
 func (a *ViewerAPI) animeMediaStream(w http.ResponseWriter, r *http.Request) {
@@ -399,15 +456,21 @@ func (a *ViewerAPI) favicon(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *ViewerAPI) requireViewer(w http.ResponseWriter, r *http.Request) bool {
-	if _, err := a.auth.Authenticate(r.Context(), readViewerSessionToken(r)); err != nil {
+	_, ok := a.authenticatedViewer(w, r)
+	return ok
+}
+
+func (a *ViewerAPI) authenticatedViewer(w http.ResponseWriter, r *http.Request) (viewer.User, bool) {
+	user, err := a.auth.Authenticate(r.Context(), readViewerSessionToken(r))
+	if err != nil {
 		if errors.Is(err, viewer.ErrUnauthorized) {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "请先登录")
-			return false
+			return viewer.User{}, false
 		}
 		a.internalError(w, err)
-		return false
+		return viewer.User{}, false
 	}
-	return true
+	return user, true
 }
 
 func (a *ViewerAPI) serveCatalogImage(w http.ResponseWriter, r *http.Request, resolve func() (string, error)) {

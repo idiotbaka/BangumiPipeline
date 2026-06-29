@@ -928,6 +928,31 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (23, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 23 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_watch_history (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          INTEGER NOT NULL REFERENCES viewer_users(id) ON DELETE CASCADE,
+    bangumi_id       INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    media_job_id     INTEGER NOT NULL REFERENCES media_jobs(id) ON DELETE CASCADE,
+    position_seconds REAL NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL DEFAULT 0,
+    completed        INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+    last_watched_at  INTEGER NOT NULL,
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    UNIQUE(user_id, media_job_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_watch_history_user_updated
+ON viewer_watch_history(user_id, last_watched_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_watch_history_user_anime
+ON viewer_watch_history(user_id, bangumi_id, last_watched_at DESC);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (24, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 24 migration: %w", err)
+	}
 	return nil
 }
 

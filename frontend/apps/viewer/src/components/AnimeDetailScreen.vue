@@ -13,15 +13,20 @@ import ParticleField from './ParticleField.vue'
 
 interface Props {
   bangumiId: number
+  initialMediaId: number
+  initialPosition: number
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{ (event: 'back'): void }>()
 const anime = ref<ViewerAnimeDetail | null>(null)
 const selectedEpisodeKey = ref('')
+const resumePosition = ref(0)
 const loading = ref(false)
 const errorMessage = ref('')
 const failedImages = ref<Set<string>>(new Set())
+let progressSaving = false
+let queuedProgress: { mediaId: number; positionSeconds: number; durationSeconds: number } | null = null
 
 const weekdays = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const selectedEpisode = computed(() =>
@@ -59,7 +64,19 @@ async function loadDetail() {
   try {
     const result = await api.animeDetail(props.bangumiId)
     anime.value = result.anime
-    selectedEpisodeKey.value = result.anime.episodes.find((episode) => episode.hasMedia)?.key ?? ''
+    const requestedMediaID = props.initialMediaId || result.watchProgress?.mediaId || 0
+    const requestedEpisode = result.anime.episodes.find(
+      (episode) => episode.hasMedia && episode.mediaId === requestedMediaID,
+    )
+    const defaultEpisode = requestedEpisode ?? result.anime.episodes.find((episode) => episode.hasMedia)
+    selectedEpisodeKey.value = defaultEpisode?.key ?? ''
+    if (requestedEpisode && props.initialMediaId) {
+      resumePosition.value = Math.max(props.initialPosition, 0)
+    } else if (requestedEpisode && result.watchProgress) {
+      resumePosition.value = result.watchProgress.completed ? 0 : Math.max(result.watchProgress.positionSeconds, 0)
+    } else {
+      resumePosition.value = 0
+    }
     failedImages.value = new Set()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '番剧详情加载失败'
@@ -71,6 +88,28 @@ async function loadDetail() {
 function selectEpisode(episode: ViewerDetailEpisode) {
   if (!episode.hasMedia) return
   selectedEpisodeKey.value = episode.key
+  resumePosition.value = 0
+}
+
+async function saveProgress(progress: { mediaId: number; positionSeconds: number; durationSeconds: number }) {
+  queuedProgress = progress
+  if (progressSaving) return
+  progressSaving = true
+  while (queuedProgress) {
+    const current = queuedProgress
+    queuedProgress = null
+    try {
+      await api.updateWatchProgress(
+        props.bangumiId,
+        current.mediaId,
+        current.positionSeconds,
+        current.durationSeconds,
+      )
+    } catch {
+      // 进度记录失败不打断视频播放，下一次轮询会继续尝试。
+    }
+  }
+  progressSaving = false
 }
 
 function episodeCoverURL(episode: ViewerDetailEpisode) {
@@ -167,9 +206,12 @@ function formatInfoValue(value: unknown): string {
           <AnimeVideoPlayer
             v-if="selectedEpisode"
             :key="selectedEpisode.mediaId"
+            :media-id="selectedEpisode.mediaId"
             :src="streamURL"
             poster=""
             :title="`${selectedEpisode.label} · ${selectedEpisode.title || anime.title}`"
+            :start-time="resumePosition"
+            @progress="saveProgress"
           />
           <div v-else class="player-empty">
             <div class="empty-symbol"><i /><i /></div>

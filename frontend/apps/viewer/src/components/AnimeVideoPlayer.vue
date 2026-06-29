@@ -2,12 +2,17 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 interface Props {
+  mediaId: number
   src: string
   poster: string
   title: string
+  startTime: number
 }
 
 const props = defineProps<Props>()
+const emit = defineEmits<{
+  (event: 'progress', value: { mediaId: number; positionSeconds: number; durationSeconds: number }): void
+}>()
 const player = ref<HTMLElement | null>(null)
 const video = ref<HTMLVideoElement | null>(null)
 const playing = ref(false)
@@ -19,7 +24,10 @@ const muted = ref(false)
 const playbackRate = ref(1)
 const errorMessage = ref('')
 const webFullscreen = ref(false)
+const resumeApplied = ref(false)
+const hasPlayed = ref(false)
 let previousBodyOverflow = ''
+let progressTimer: ReturnType<typeof setInterval> | null = null
 
 const progressStyle = computed(() => {
   const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
@@ -34,6 +42,9 @@ watch(
     currentTime.value = 0
     duration.value = 0
     errorMessage.value = ''
+    resumeApplied.value = false
+    hasPlayed.value = false
+    stopProgressTimer()
     await nextTick()
     video.value?.load()
   },
@@ -43,6 +54,8 @@ onMounted(() => window.addEventListener('keydown', handleWindowKeydown))
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleWindowKeydown)
+  reportProgress()
+  stopProgressTimer()
   exitWebFullscreen()
 })
 
@@ -62,10 +75,63 @@ async function togglePlay() {
 
 function updateDuration() {
   duration.value = Number.isFinite(video.value?.duration) ? video.value?.duration ?? 0 : 0
+  applyResumePosition()
 }
 
 function updateTime() {
   currentTime.value = video.value?.currentTime ?? 0
+}
+
+function applyResumePosition() {
+  const element = video.value
+  if (!element || resumeApplied.value || duration.value <= 0) return
+  resumeApplied.value = true
+  if (props.startTime <= 0) return
+  const target = Math.min(props.startTime, Math.max(duration.value - 1, 0))
+  if (target > 0) {
+    element.currentTime = target
+    currentTime.value = target
+  }
+}
+
+function handlePlay() {
+  playing.value = true
+  hasPlayed.value = true
+  startProgressTimer()
+}
+
+function handlePause() {
+  playing.value = false
+  reportProgress()
+  stopProgressTimer()
+}
+
+function handleEnded() {
+  playing.value = false
+  currentTime.value = duration.value
+  reportProgress()
+  stopProgressTimer()
+}
+
+function startProgressTimer() {
+  stopProgressTimer()
+  progressTimer = setInterval(reportProgress, 10_000)
+}
+
+function stopProgressTimer() {
+  if (progressTimer !== null) {
+    clearInterval(progressTimer)
+    progressTimer = null
+  }
+}
+
+function reportProgress() {
+  if (!hasPlayed.value || props.mediaId < 1 || currentTime.value <= 0 || duration.value <= 0) return
+  emit('progress', {
+    mediaId: props.mediaId,
+    positionSeconds: currentTime.value,
+    durationSeconds: duration.value,
+  })
 }
 
 function seek(event: Event) {
@@ -157,9 +223,9 @@ function formatTime(value: number) {
       preload="metadata"
       playsinline
       @click="togglePlay"
-      @play="playing = true"
-      @pause="playing = false"
-      @ended="playing = false"
+      @play="handlePlay"
+      @pause="handlePause"
+      @ended="handleEnded"
       @waiting="buffering = true"
       @playing="buffering = false"
       @canplay="buffering = false"

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
-import { api, type ViewerAnimeCard, type ViewerHome, type ViewerUser } from '../api'
+import { api, type ViewerAnimeCard, type ViewerHome, type ViewerUser, type ViewerWatchHistoryItem } from '../api'
 import AnimeDetailScreen from './AnimeDetailScreen.vue'
+import HistoryScreen from './HistoryScreen.vue'
 import LibraryScreen from './LibraryScreen.vue'
 import ParticleField from './ParticleField.vue'
 import ScheduleScreen from './ScheduleScreen.vue'
@@ -26,8 +27,10 @@ const heroIntervalMs = 5500
 const searchQuery = ref('')
 const libraryQuery = ref('')
 const librarySearchKey = ref(0)
-const activeView = ref<'home' | 'schedule' | 'library'>('home')
+const activeView = ref<'home' | 'schedule' | 'library' | 'history'>('home')
 const detailAnimeId = ref<number | null>(null)
+const detailMediaId = ref(0)
+const detailPosition = ref(0)
 const homeLoading = ref(false)
 const homeError = ref('')
 const hotPage = ref(0)
@@ -214,19 +217,31 @@ function submitGlobalSearch() {
   showView('library')
 }
 
-function showView(view: 'home' | 'schedule' | 'library') {
+function showView(view: 'home' | 'schedule' | 'library' | 'history') {
   activeView.value = view
   if (detailAnimeId.value !== null) {
     detailAnimeId.value = null
+    detailMediaId.value = 0
+    detailPosition.value = 0
     window.history.replaceState({}, '', '/')
   }
 }
 
-function openAnime(bangumiId: number) {
+function openAnime(bangumiId: number, mediaId = 0, positionSeconds = 0) {
   if (bangumiId < 1) return
   detailAnimeId.value = bangumiId
-  window.history.pushState({ bpAnimeDetail: true }, '', `/anime/${bangumiId}`)
+  detailMediaId.value = mediaId > 0 ? mediaId : 0
+  detailPosition.value = positionSeconds > 0 ? positionSeconds : 0
+  const params = new URLSearchParams()
+  if (detailMediaId.value > 0) params.set('media', String(detailMediaId.value))
+  if (detailPosition.value > 0) params.set('t', String(Math.floor(detailPosition.value)))
+  const query = params.toString()
+  window.history.pushState({ bpAnimeDetail: true }, '', `/anime/${bangumiId}${query ? `?${query}` : ''}`)
   window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function openHistoryItem(item: ViewerWatchHistoryItem) {
+  openAnime(item.bangumiId, item.mediaId, item.completed ? 0 : item.positionSeconds)
 }
 
 function closeAnimeDetail() {
@@ -235,6 +250,8 @@ function closeAnimeDetail() {
     return
   }
   detailAnimeId.value = null
+  detailMediaId.value = 0
+  detailPosition.value = 0
   activeView.value = 'home'
   window.history.replaceState({}, '', '/')
   window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -243,6 +260,11 @@ function closeAnimeDetail() {
 function syncDetailFromLocation() {
   const match = window.location.pathname.match(/^\/anime\/(\d+)\/?$/)
   detailAnimeId.value = match ? Number(match[1]) : null
+  const params = new URLSearchParams(window.location.search)
+  const mediaID = Number(params.get('media'))
+  const position = Number(params.get('t'))
+  detailMediaId.value = Number.isInteger(mediaID) && mediaID > 0 ? mediaID : 0
+  detailPosition.value = Number.isFinite(position) && position > 0 ? position : 0
   window.scrollTo({ top: 0 })
 }
 </script>
@@ -289,17 +311,30 @@ function syncDetailFromLocation() {
         <input v-model="searchQuery" type="search" placeholder="搜索番剧" />
       </form>
 
-      <div class="user-chip">
-        <span class="user-avatar" aria-hidden="true">{{ user.username.slice(0, 1).toUpperCase() }}</span>
-        <span class="user-name">{{ user.username }}</span>
-        <button class="logout-button" :disabled="loading" type="button" @click="emit('logout')">
-          <span class="logout-label">退出</span>
-          <i class="logout-sweep" aria-hidden="true" />
+      <div class="user-area">
+        <button class="user-chip" type="button" aria-haspopup="menu">
+          <span class="user-avatar" aria-hidden="true">{{ user.username.slice(0, 1).toUpperCase() }}</span>
+          <span class="user-name">{{ user.username }}</span>
+          <i class="user-arrow" aria-hidden="true" />
         </button>
+        <div class="user-menu" role="menu">
+          <button type="button" role="menuitem" @click="showView('history')">
+            <i class="history-icon" aria-hidden="true" />观看历史
+          </button>
+          <button :disabled="loading" type="button" role="menuitem" @click="emit('logout')">
+            <i class="exit-icon" aria-hidden="true" />退出登录
+          </button>
+        </div>
       </div>
     </header>
 
-    <AnimeDetailScreen v-if="detailAnimeId !== null" :bangumi-id="detailAnimeId" @back="closeAnimeDetail" />
+    <AnimeDetailScreen
+      v-if="detailAnimeId !== null"
+      :bangumi-id="detailAnimeId"
+      :initial-media-id="detailMediaId"
+      :initial-position="detailPosition"
+      @back="closeAnimeDetail"
+    />
     <ScheduleScreen v-else-if="activeView === 'schedule'" @open-anime="openAnime" />
     <LibraryScreen
       v-else-if="activeView === 'library'"
@@ -307,6 +342,7 @@ function syncDetailFromLocation() {
       :search-key="librarySearchKey"
       @open-anime="openAnime"
     />
+    <HistoryScreen v-else-if="activeView === 'history'" @open-history="openHistoryItem" />
 
     <section v-else class="home-stage" aria-label="首页">
       <ParticleField :count="16" palette="pink" :max-size="30" />
@@ -676,16 +712,149 @@ function syncDetailFromLocation() {
 }
 
 /* 用户区 */
+.user-area {
+  position: relative;
+  height: 44px;
+}
+
+.user-area::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: 9px;
+}
+
 .user-chip {
   display: flex;
   align-items: center;
   gap: 12px;
   height: 44px;
-  padding: 4px 6px;
+  padding: 4px 13px 4px 6px;
   background: #ffffff;
   border: 1px solid var(--line-soft);
   box-shadow: 0 10px 24px rgba(255, 95, 158, 0.08);
   clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+}
+
+.user-arrow {
+  width: 8px;
+  height: 8px;
+  margin: 0 3px 4px 0;
+  border-right: 1px solid var(--ink-400);
+  border-bottom: 1px solid var(--ink-400);
+  transform: rotate(45deg);
+  transition: transform 180ms var(--ease-soft);
+}
+
+.user-area:hover .user-arrow,
+.user-area:focus-within .user-arrow {
+  transform: translateY(3px) rotate(225deg);
+}
+
+.user-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 172px;
+  padding: 7px;
+  visibility: hidden;
+  opacity: 0;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 18px 38px rgba(85, 119, 217, 0.16);
+  backdrop-filter: blur(16px);
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+  transform: translateY(-7px);
+  transition: opacity 160ms ease, transform 160ms ease, visibility 160ms ease;
+}
+
+.user-menu::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  height: 9px;
+}
+
+.user-area:hover .user-menu,
+.user-area:focus-within .user-menu {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.user-menu button {
+  width: 100%;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 12px;
+  color: var(--ink-600);
+  font-size: 13px;
+  text-align: left;
+  clip-path: polygon(var(--bevel-sm));
+}
+
+.user-menu button:hover:not(:disabled) {
+  color: var(--pink-600);
+  background: var(--pink-50);
+}
+
+.user-menu button:disabled {
+  opacity: 0.5;
+}
+
+.history-icon {
+  position: relative;
+  width: 15px;
+  height: 15px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.history-icon::before,
+.history-icon::after {
+  content: '';
+  position: absolute;
+  background: currentColor;
+  transform-origin: left center;
+}
+
+.history-icon::before {
+  width: 5px;
+  height: 1px;
+  transform: translate(7px, 7px) rotate(-90deg);
+}
+
+.history-icon::after {
+  width: 4px;
+  height: 1px;
+  transform: translate(7px, 7px) rotate(25deg);
+}
+
+.exit-icon {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border: 1px solid currentColor;
+  border-right: 0;
+}
+
+.exit-icon::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: -5px;
+  width: 8px;
+  height: 4px;
+  border-top: 1px solid currentColor;
+  border-right: 1px solid currentColor;
+  transform: rotate(45deg);
 }
 
 .user-avatar {
