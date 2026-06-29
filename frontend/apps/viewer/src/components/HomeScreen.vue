@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { api, type ViewerAnimeCard, type ViewerHome, type ViewerUser } from '../api'
+import AnimeDetailScreen from './AnimeDetailScreen.vue'
 import LibraryScreen from './LibraryScreen.vue'
 import ParticleField from './ParticleField.vue'
 import ScheduleScreen from './ScheduleScreen.vue'
@@ -26,6 +27,7 @@ const searchQuery = ref('')
 const libraryQuery = ref('')
 const librarySearchKey = ref(0)
 const activeView = ref<'home' | 'schedule' | 'library'>('home')
+const detailAnimeId = ref<number | null>(null)
 const homeLoading = ref(false)
 const homeError = ref('')
 const hotPage = ref(0)
@@ -62,6 +64,8 @@ const pageIndicator = computed(() => {
 })
 
 onMounted(() => {
+  syncDetailFromLocation()
+  window.addEventListener('popstate', syncDetailFromLocation)
   void loadHome()
   relativeTimeTimer = setInterval(() => {
     relativeTimeNow.value = Date.now()
@@ -69,6 +73,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('popstate', syncDetailFromLocation)
   stopHeroAutoplay()
   if (relativeTimeTimer !== null) {
     clearInterval(relativeTimeTimer)
@@ -202,7 +207,39 @@ function stagger(index: number, base = 0.04, step = 0.05) {
 function submitGlobalSearch() {
   libraryQuery.value = searchQuery.value.trim()
   librarySearchKey.value++
-  activeView.value = 'library'
+  showView('library')
+}
+
+function showView(view: 'home' | 'schedule' | 'library') {
+  activeView.value = view
+  if (detailAnimeId.value !== null) {
+    detailAnimeId.value = null
+    window.history.replaceState({}, '', '/')
+  }
+}
+
+function openAnime(bangumiId: number) {
+  if (bangumiId < 1) return
+  detailAnimeId.value = bangumiId
+  window.history.pushState({ bpAnimeDetail: true }, '', `/anime/${bangumiId}`)
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function closeAnimeDetail() {
+  if (window.history.state?.bpAnimeDetail) {
+    window.history.back()
+    return
+  }
+  detailAnimeId.value = null
+  activeView.value = 'home'
+  window.history.replaceState({}, '', '/')
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function syncDetailFromLocation() {
+  const match = window.location.pathname.match(/^\/anime\/(\d+)\/?$/)
+  detailAnimeId.value = match ? Number(match[1]) : null
+  window.scrollTo({ top: 0 })
 }
 </script>
 
@@ -221,7 +258,7 @@ function submitGlobalSearch() {
           class="nav-item"
           :class="{ active: activeView === 'home' }"
           type="button"
-          @click="activeView = 'home'"
+          @click="showView('home')"
         >
           首页
         </button>
@@ -229,7 +266,7 @@ function submitGlobalSearch() {
           class="nav-item"
           :class="{ active: activeView === 'schedule' }"
           type="button"
-          @click="activeView = 'schedule'"
+          @click="showView('schedule')"
         >
           番剧时间表
         </button>
@@ -237,7 +274,7 @@ function submitGlobalSearch() {
           class="nav-item"
           :class="{ active: activeView === 'library' }"
           type="button"
-          @click="activeView = 'library'"
+          @click="showView('library')"
         >
           番剧图书馆
         </button>
@@ -258,11 +295,13 @@ function submitGlobalSearch() {
       </div>
     </header>
 
-    <ScheduleScreen v-if="activeView === 'schedule'" />
+    <AnimeDetailScreen v-if="detailAnimeId !== null" :bangumi-id="detailAnimeId" @back="closeAnimeDetail" />
+    <ScheduleScreen v-else-if="activeView === 'schedule'" @open-anime="openAnime" />
     <LibraryScreen
       v-else-if="activeView === 'library'"
       :initial-query="libraryQuery"
       :search-key="librarySearchKey"
+      @open-anime="openAnime"
     />
 
     <section v-else class="home-stage" aria-label="首页">
@@ -402,6 +441,10 @@ function submitGlobalSearch() {
               :key="item.bangumiId"
               class="poster-card"
               :style="{ '--stagger': stagger(index) }"
+              role="link"
+              tabindex="0"
+              @click="openAnime(item.bangumiId)"
+              @keydown.enter="openAnime(item.bangumiId)"
             >
               <div class="poster-frame">
                 <img
@@ -448,6 +491,10 @@ function submitGlobalSearch() {
               :key="item.bangumiId"
               class="poster-card recent-card"
               :style="{ '--stagger': stagger(index) }"
+              role="link"
+              tabindex="0"
+              @click="openAnime(item.bangumiId)"
+              @keydown.enter="openAnime(item.bangumiId)"
             >
               <div class="poster-frame">
                 <span class="new-tag">NEW</span>
@@ -1152,6 +1199,8 @@ function submitGlobalSearch() {
 
 .poster-card {
   min-width: 0;
+  cursor: pointer;
+  outline: 0;
   animation: bp-rise 0.42s var(--ease-out) both;
   animation-delay: var(--stagger, 0s);
 }
@@ -1191,6 +1240,10 @@ function submitGlobalSearch() {
   width: 100%;
   height: 100%;
   object-fit: unset;
+}
+
+.poster-card:focus-visible .poster-frame {
+  box-shadow: 0 0 0 3px rgba(255, 95, 158, 0.24), 0 26px 50px rgba(255, 95, 158, 0.2);
 }
 
 /* 热播海报底部评分：使用渐变衬底保证浅色封面上的可读性 */

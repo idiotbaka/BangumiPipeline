@@ -4,6 +4,8 @@ import { computed, onMounted, ref } from 'vue'
 import { api, type ViewerSchedule, type ViewerScheduleCard } from '../api'
 import ParticleField from './ParticleField.vue'
 
+const emit = defineEmits<{ (event: 'open-anime', bangumiId: number): void }>()
+
 const weekdays = [
   { value: 1, label: '周一', kana: 'MON' },
   { value: 2, label: '周二', kana: 'TUE' },
@@ -194,6 +196,10 @@ function stagger(index: number) {
           :key="item.bangumiId"
           class="schedule-card"
           :style="{ '--stagger': stagger(index) }"
+          role="link"
+          tabindex="0"
+          @click="emit('open-anime', item.bangumiId)"
+          @keydown.enter="emit('open-anime', item.bangumiId)"
         >
           <div class="card-cover">
             <img
@@ -332,7 +338,8 @@ function stagger(index: number) {
 .lineup-count { padding: 5px 13px; color: var(--ink-400); font-size: 11px; border-left: 2px solid var(--cyan-400); background: rgba(255,255,255,.65); }
 
 .schedule-cards { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 18px; }
-.schedule-card { min-width: 0; animation: bp-rise .42s var(--ease-out) both; animation-delay: var(--stagger, 0s); }
+.schedule-card { min-width: 0; cursor: pointer; outline: 0; animation: bp-rise .42s var(--ease-out) both; animation-delay: var(--stagger, 0s); }
+.schedule-card:focus-visible .card-cover { box-shadow: 0 0 0 3px rgba(255,95,158,.24), 0 24px 48px rgba(255,95,158,.18); }
 .card-cover { position: relative; aspect-ratio: 2 / 3; overflow: hidden; background: var(--pink-50); border: 1px solid rgba(255,255,255,.9); box-shadow: 0 15px 32px rgba(85,119,217,.1); clip-path: polygon(0 0, calc(100% - 15px) 0, 100% 15px, 100% 100%, 15px 100%, 0 calc(100% - 15px)); transition: transform 220ms var(--ease-soft), box-shadow 220ms var(--ease-soft); }
 .schedule-card:hover .card-cover { transform: translateY(-6px); box-shadow: 0 24px 48px rgba(255,95,158,.18); }
 .card-cover img { width: 100%; height: 100%; object-fit: unset; }

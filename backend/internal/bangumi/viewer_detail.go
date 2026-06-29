@@ -1,0 +1,273 @@
+package bangumi
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+type ViewerAnimeDetail struct {
+	BangumiID     int64                 `json:"bangumiId"`
+	Title         string                `json:"title"`
+	OriginalTitle string                `json:"originalTitle"`
+	AirDate       string                `json:"airDate"`
+	AirWeekday    int                   `json:"airWeekday"`
+	Platform      string                `json:"platform"`
+	Summary       string                `json:"summary"`
+	TotalEpisodes int                   `json:"totalEpisodes"`
+	HasCover      bool                  `json:"hasCover"`
+	RatingScore   *float64              `json:"ratingScore"`
+	Infobox       []map[string]any      `json:"infobox"`
+	MetaTags      []string              `json:"metaTags"`
+	Tags          []AnimeTag            `json:"tags"`
+	Characters    []AnimeCharacter      `json:"characters"`
+	Episodes      []ViewerDetailEpisode `json:"episodes"`
+}
+
+type ViewerDetailEpisode struct {
+	Key           string  `json:"key"`
+	EpisodeID     int64   `json:"episodeId"`
+	MediaID       int64   `json:"mediaId"`
+	Label         string  `json:"label"`
+	Title         string  `json:"title"`
+	OriginalTitle string  `json:"originalTitle"`
+	Summary       string  `json:"summary"`
+	AirDate       string  `json:"airDate"`
+	Duration      string  `json:"duration"`
+	SortNumber    float64 `json:"sortNumber"`
+	Type          int     `json:"type"`
+	HasMedia      bool    `json:"hasMedia"`
+	HasCover      bool    `json:"hasCover"`
+}
+
+type viewerDetailMedia struct {
+	id            int64
+	season        int
+	episodeType   string
+	episodeNumber string
+	coverPath     string
+	coverStatus   string
+	updatedAt     int64
+}
+
+func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (ViewerAnimeDetail, error) {
+	detail, err := c.Detail(ctx, bangumiID)
+	if err != nil {
+		return ViewerAnimeDetail{}, err
+	}
+	result := ViewerAnimeDetail{
+		BangumiID:     detail.BangumiID,
+		Title:         displayAnimeTitle(detail.NameCN, detail.Name),
+		OriginalTitle: detail.Name,
+		AirDate:       detail.AirDate,
+		AirWeekday:    detail.AirWeekday,
+		Platform:      detail.Platform,
+		Summary:       detail.Summary,
+		TotalEpisodes: detail.TotalEpisodes,
+		HasCover:      detail.HasCover,
+		RatingScore:   mapRatingScore(detail.Rating),
+		Infobox:       detail.Infobox,
+		MetaTags:      detail.MetaTags,
+		Tags:          detail.Tags,
+		Characters:    detail.Characters,
+		Episodes:      make([]ViewerDetailEpisode, 0, len(detail.Episodes)),
+	}
+	if result.TotalEpisodes <= 0 {
+		result.TotalEpisodes = detail.Eps
+	}
+	sort.SliceStable(result.Characters, func(i, j int) bool {
+		return viewerCharacterRelationRank(result.Characters[i].Relation) < viewerCharacterRelationRank(result.Characters[j].Relation)
+	})
+
+	mediaItems, err := c.viewerDetailMedia(ctx, bangumiID)
+	if err != nil {
+		return ViewerAnimeDetail{}, err
+	}
+	mediaByKey := make(map[string]viewerDetailMedia, len(mediaItems))
+	canonicalMedia := make(map[int64]struct{}, len(mediaItems))
+	for _, media := range mediaItems {
+		key := viewerDetailEpisodeKey(media.episodeType, media.episodeNumber)
+		if _, exists := mediaByKey[key]; !exists {
+			mediaByKey[key] = media
+			canonicalMedia[media.id] = struct{}{}
+		}
+	}
+	usedMedia := make(map[int64]struct{}, len(mediaItems))
+	for _, episode := range detail.Episodes {
+		number := episode.SortNumber
+		if episode.Type == 0 && episode.EpNumber > 0 {
+			number = float64(episode.EpNumber)
+		}
+		category := "special"
+		if episode.Type == 0 {
+			category = "episode"
+		}
+		media, hasMedia := mediaByKey[viewerDetailEpisodeKey(category, strconv.FormatFloat(number, 'f', -1, 64))]
+		label := viewerMetadataEpisodeLabel(episode)
+		if hasMedia {
+			label = viewerEpisodeLabel(viewerEpisodeRef{
+				season: media.season, episodeType: media.episodeType, episodeNumber: media.episodeNumber,
+			})
+			usedMedia[media.id] = struct{}{}
+		}
+		result.Episodes = append(result.Episodes, ViewerDetailEpisode{
+			Key:           fmt.Sprintf("episode-%d", episode.EpisodeID),
+			EpisodeID:     episode.EpisodeID,
+			MediaID:       media.id,
+			Label:         label,
+			Title:         displayAnimeTitle(episode.NameCN, episode.Name),
+			OriginalTitle: episode.Name,
+			Summary:       episode.Description,
+			AirDate:       episode.Airdate,
+			Duration:      episode.Duration,
+			SortNumber:    episode.SortNumber,
+			Type:          episode.Type,
+			HasMedia:      hasMedia,
+			HasCover:      hasMedia && media.coverStatus == "completed" && strings.TrimSpace(media.coverPath) != "",
+		})
+	}
+
+	for _, media := range mediaItems {
+		if _, canonical := canonicalMedia[media.id]; !canonical {
+			continue
+		}
+		if _, used := usedMedia[media.id]; used {
+			continue
+		}
+		sortNumber, _ := strconv.ParseFloat(strings.TrimSpace(media.episodeNumber), 64)
+		episodeType := 1
+		if viewerEpisodeTypeRank(media.episodeType) == viewerEpisodeTypeRank("episode") {
+			episodeType = 0
+		}
+		label := viewerEpisodeLabel(viewerEpisodeRef{
+			season: media.season, episodeType: media.episodeType, episodeNumber: media.episodeNumber,
+		})
+		result.Episodes = append(result.Episodes, ViewerDetailEpisode{
+			Key:        fmt.Sprintf("media-%d", media.id),
+			MediaID:    media.id,
+			Label:      label,
+			Title:      label,
+			SortNumber: sortNumber,
+			Type:       episodeType,
+			HasMedia:   true,
+			HasCover:   media.coverStatus == "completed" && strings.TrimSpace(media.coverPath) != "",
+		})
+	}
+	sort.SliceStable(result.Episodes, func(i, j int) bool {
+		left, right := result.Episodes[i], result.Episodes[j]
+		if (left.Type == 0) != (right.Type == 0) {
+			return left.Type == 0
+		}
+		if left.SortNumber != right.SortNumber {
+			return left.SortNumber < right.SortNumber
+		}
+		return left.Key < right.Key
+	})
+	return result, nil
+}
+
+func (c *Catalog) ViewerMediaPath(ctx context.Context, bangumiID, mediaID int64) (string, error) {
+	return c.viewerMediaFilePath(ctx, `
+SELECT output_path
+FROM media_jobs
+WHERE id = ? AND bangumi_id = ? AND status = 'completed' AND output_path != ''`, mediaID, bangumiID)
+}
+
+func (c *Catalog) ViewerMediaCoverPath(ctx context.Context, bangumiID, mediaID int64) (string, error) {
+	return c.viewerMediaFilePath(ctx, `
+SELECT cover_path
+FROM media_jobs
+WHERE id = ? AND bangumi_id = ? AND status = 'completed'
+  AND cover_status = 'completed' AND cover_path != ''`, mediaID, bangumiID)
+}
+
+func (c *Catalog) viewerMediaFilePath(ctx context.Context, query string, args ...any) (string, error) {
+	var path string
+	err := c.db.QueryRowContext(ctx, query, args...).Scan(&path)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrAnimeNotFound
+	}
+	return path, err
+}
+
+func (c *Catalog) viewerDetailMedia(ctx context.Context, bangumiID int64) ([]viewerDetailMedia, error) {
+	rows, err := c.db.QueryContext(ctx, `
+SELECT id, season_number, COALESCE(NULLIF(episode_type, ''), 'episode'),
+       episode_number, cover_path, cover_status,
+       COALESCE(completed_at, updated_at, created_at, 0)
+FROM media_jobs
+WHERE bangumi_id = ? AND status = 'completed' AND output_path != ''
+ORDER BY COALESCE(completed_at, updated_at, created_at, 0) DESC, id DESC`, bangumiID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]viewerDetailMedia, 0)
+	for rows.Next() {
+		var item viewerDetailMedia
+		if err := rows.Scan(
+			&item.id, &item.season, &item.episodeType, &item.episodeNumber,
+			&item.coverPath, &item.coverStatus, &item.updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func viewerDetailEpisodeKey(episodeType, number string) string {
+	category := "special"
+	if viewerEpisodeTypeRank(episodeType) == viewerEpisodeTypeRank("episode") {
+		category = "episode"
+	}
+	number = strings.TrimSpace(number)
+	if parsed, err := strconv.ParseFloat(number, 64); err == nil {
+		number = strconv.FormatFloat(parsed, 'f', -1, 64)
+	}
+	return category + ":" + number
+}
+
+func viewerMetadataEpisodeLabel(episode AnimeEpisode) string {
+	number := episode.SortNumber
+	if episode.Type == 0 && episode.EpNumber > 0 {
+		number = float64(episode.EpNumber)
+	}
+	value := strconv.FormatFloat(number, 'f', -1, 64)
+	if episode.Type == 0 {
+		return fmt.Sprintf("第 %s 话", value)
+	}
+	return fmt.Sprintf("特别篇 %s", value)
+}
+
+func viewerCharacterRelationRank(relation string) int {
+	value := strings.ToLower(strings.TrimSpace(relation))
+	switch {
+	case strings.Contains(value, "主角"), strings.Contains(value, "main"):
+		return 0
+	case strings.Contains(value, "配角"), strings.Contains(value, "support"):
+		return 1
+	default:
+		return 2
+	}
+}
+
+func mapRatingScore(rating map[string]any) *float64 {
+	value, ok := rating["score"]
+	if !ok {
+		return nil
+	}
+	var score float64
+	switch typed := value.(type) {
+	case float64:
+		score = typed
+	}
+	if score <= 0 {
+		return nil
+	}
+	return &score
+}

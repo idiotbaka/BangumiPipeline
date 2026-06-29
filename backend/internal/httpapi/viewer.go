@@ -36,7 +36,12 @@ func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, log
 	mux.HandleFunc("GET /api/library/filters", api.libraryFilters)
 	mux.HandleFunc("GET /api/library", api.animeLibrary)
 	mux.HandleFunc("GET /api/carousels/{carouselID}/image", api.carouselImage)
+	mux.HandleFunc("GET /api/anime/{bangumiID}/detail", api.animeDetail)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/cover", api.animeCover)
+	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/stream", api.animeMediaStream)
+	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/cover", api.animeMediaCover)
+	mux.HandleFunc("GET /api/anime/{bangumiID}/characters/{characterID}/image", api.animeCharacterImage)
+	mux.HandleFunc("GET /api/actors/{actorID}/image", api.animeActorImage)
 	mux.HandleFunc("GET /favicon.png", api.favicon)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API endpoint not found")
@@ -259,6 +264,99 @@ func (a *ViewerAPI) animeCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.serveCatalogImage(w, r, func() (string, error) { return a.catalog.AnimeImagePath(r.Context(), id) })
+}
+
+func (a *ViewerAPI) animeDetail(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	detail, err := a.catalog.ViewerAnimeDetail(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, bangumi.ErrAnimeNotFound) {
+			writeError(w, http.StatusNotFound, "anime_not_found", "番剧不存在")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"anime": detail})
+}
+
+func (a *ViewerAPI) animeMediaStream(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	bangumiID, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	mediaID, ok := parsePathID(w, r.PathValue("mediaID"))
+	if !ok {
+		return
+	}
+	path, err := a.catalog.ViewerMediaPath(r.Context(), bangumiID, mediaID)
+	if err != nil {
+		if errors.Is(err, bangumi.ErrAnimeNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Content-Disposition", "inline")
+	http.ServeFile(w, r, path)
+}
+
+func (a *ViewerAPI) animeMediaCover(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	bangumiID, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	mediaID, ok := parsePathID(w, r.PathValue("mediaID"))
+	if !ok {
+		return
+	}
+	a.serveCatalogImage(w, r, func() (string, error) {
+		return a.catalog.ViewerMediaCoverPath(r.Context(), bangumiID, mediaID)
+	})
+}
+
+func (a *ViewerAPI) animeCharacterImage(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	bangumiID, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	characterID, ok := parsePathID(w, r.PathValue("characterID"))
+	if !ok {
+		return
+	}
+	a.serveCatalogImage(w, r, func() (string, error) {
+		return a.catalog.CharacterImagePath(r.Context(), bangumiID, characterID)
+	})
+}
+
+func (a *ViewerAPI) animeActorImage(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	actorID, ok := parsePathID(w, r.PathValue("actorID"))
+	if !ok {
+		return
+	}
+	a.serveCatalogImage(w, r, func() (string, error) {
+		return a.catalog.ActorImagePath(r.Context(), actorID)
+	})
 }
 
 func (a *ViewerAPI) logout(w http.ResponseWriter, r *http.Request) {

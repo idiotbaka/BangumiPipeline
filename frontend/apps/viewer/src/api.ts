@@ -77,6 +77,64 @@ export interface ViewerLibrary {
   total: number
 }
 
+export interface ViewerAnimeTag {
+  name: string
+  count: number
+}
+
+export interface ViewerAnimeActor {
+  actorId: number
+  name: string
+  summary: string
+  career: string[]
+  hasImage: boolean
+  imageStatus: string
+}
+
+export interface ViewerAnimeCharacter {
+  characterId: number
+  name: string
+  summary: string
+  relation: string
+  hasImage: boolean
+  imageStatus: string
+  actors: ViewerAnimeActor[]
+}
+
+export interface ViewerDetailEpisode {
+  key: string
+  episodeId: number
+  mediaId: number
+  label: string
+  title: string
+  originalTitle: string
+  summary: string
+  airDate: string
+  duration: string
+  sortNumber: number
+  type: number
+  hasMedia: boolean
+  hasCover: boolean
+}
+
+export interface ViewerAnimeDetail {
+  bangumiId: number
+  title: string
+  originalTitle: string
+  airDate: string
+  airWeekday: number
+  platform: string
+  summary: string
+  totalEpisodes: number
+  hasCover: boolean
+  ratingScore: number | null
+  infobox: Array<Record<string, unknown>>
+  metaTags: string[]
+  tags: ViewerAnimeTag[]
+  characters: ViewerAnimeCharacter[]
+  episodes: ViewerDetailEpisode[]
+}
+
 interface ErrorPayload {
   error?: {
     code?: string
@@ -140,4 +198,6 @@ export const api = {
     }
     return request<{ library: ViewerLibrary }>(`/api/library?${params}`)
   },
+  animeDetail: (bangumiId: number) =>
+    request<{ anime: ViewerAnimeDetail }>(`/api/anime/${bangumiId}/detail`),
 }
