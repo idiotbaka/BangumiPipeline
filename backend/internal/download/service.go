@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -518,7 +519,7 @@ func (s *Service) startCandidate(ctx context.Context, client *qBitClient, candid
 	if !isSupportedSourceURL(candidate.SourceURL) {
 		return s.markFailed(ctx, jobID, "下载链接不是 HTTP/HTTPS torrent 或 magnet URL")
 	}
-	if err := os.MkdirAll(savePath, 0o755); err != nil {
+	if err := prepareDownloadSavePath(savePath); err != nil {
 		_ = s.markFailed(ctx, jobID, err.Error())
 		return err
 	}
@@ -755,6 +756,18 @@ func folderNameFor(candidate pendingCandidate) string {
 	}
 	label := fmt.Sprintf("%s S%02d %s%s item-%d", anime, candidate.SeasonNumber, episodeType, candidate.EpisodeNumber, candidate.SubscriptionItemID)
 	return safePathSegment(label)
+}
+
+func prepareDownloadSavePath(path string) error {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	if runtime.GOOS == "linux" {
+		if err := os.Chmod(path, 0o777); err != nil {
+			return fmt.Errorf("设置下载任务目录权限失败: %w", err)
+		}
+	}
+	return nil
 }
 
 func safePathSegment(value string) string {
