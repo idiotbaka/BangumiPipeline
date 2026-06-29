@@ -102,6 +102,7 @@ type ViewerAnimeCard struct {
 	RatingScore        *float64 `json:"ratingScore"`
 	LatestEpisode      string   `json:"latestEpisode"`
 	LatestEpisodeLabel string   `json:"latestEpisodeLabel"`
+	LatestEpisodeTitle string   `json:"latestEpisodeTitle"`
 	UpdatedAt          *int64   `json:"updatedAt"`
 }
 
@@ -117,6 +118,7 @@ type viewerEpisodeRef struct {
 	season        int
 	episodeType   string
 	episodeNumber string
+	title         string
 	updatedAt     int64
 }
 
@@ -380,6 +382,7 @@ func (c *Catalog) ViewerHome(ctx context.Context) (ViewerHome, error) {
 			card := aggregate.card
 			card.LatestEpisode = aggregate.progressEpisode.episodeNumber
 			card.LatestEpisodeLabel = viewerEpisodeLabel(aggregate.progressEpisode)
+			card.LatestEpisodeTitle = aggregate.progressEpisode.title
 			if aggregate.hasRecent {
 				card.UpdatedAt = ptrInt64(aggregate.recentEpisode.updatedAt)
 			}
@@ -389,6 +392,7 @@ func (c *Catalog) ViewerHome(ctx context.Context) (ViewerHome, error) {
 			card := aggregate.card
 			card.LatestEpisode = aggregate.recentEpisode.episodeNumber
 			card.LatestEpisodeLabel = viewerEpisodeLabel(aggregate.recentEpisode)
+			card.LatestEpisodeTitle = aggregate.recentEpisode.title
 			card.UpdatedAt = ptrInt64(aggregate.recentEpisode.updatedAt)
 			recent = append(recent, card)
 		}
@@ -438,6 +442,19 @@ SELECT am.bangumi_id, am.name, am.name_cn, am.air_date,
        mj.season_number,
        COALESCE(NULLIF(mj.episode_type, ''), 'episode') AS episode_type,
        mj.episode_number,
+       COALESCE((
+           SELECT COALESCE(NULLIF(ae.name_cn, ''), ae.name)
+           FROM anime_episodes ae
+           WHERE ae.bangumi_id = mj.bangumi_id
+             AND ae.sort_number = CAST(mj.episode_number AS REAL)
+             AND (
+                 (LOWER(COALESCE(NULLIF(mj.episode_type, ''), 'episode')) = 'episode' AND ae.type = 0)
+                 OR
+                 (LOWER(COALESCE(NULLIF(mj.episode_type, ''), 'episode')) != 'episode' AND ae.type != 0)
+             )
+           ORDER BY ae.type, ae.episode_id
+           LIMIT 1
+       ), '') AS episode_title,
        COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0) AS media_updated_at
 FROM media_jobs mj
 JOIN anime_metadata am ON am.bangumi_id = mj.bangumi_id
@@ -459,7 +476,7 @@ ORDER BY am.bangumi_id, media_updated_at DESC, mj.id DESC`)
 		if err := rows.Scan(
 			&card.BangumiID, &card.Name, &card.NameCN, &card.AirDate,
 			&card.HasCover, &card.ImageStatus, &ratingJSON,
-			&episode.season, &episode.episodeType, &episode.episodeNumber, &episode.updatedAt,
+			&episode.season, &episode.episodeType, &episode.episodeNumber, &episode.title, &episode.updatedAt,
 		); err != nil {
 			return nil, err
 		}

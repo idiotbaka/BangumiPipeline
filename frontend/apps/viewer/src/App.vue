@@ -148,7 +148,6 @@ async function logout() {
   width: 76px;
   height: 76px;
   color: #ffffff;
-  font-weight: 900;
   font-size: 25px;
   letter-spacing: 1px;
   background: linear-gradient(135deg, var(--pink-500), var(--pink-600) 62%, var(--blue-500));
@@ -182,7 +181,6 @@ async function logout() {
   z-index: 2;
   color: var(--ink-400);
   font-size: 11px;
-  font-weight: 900;
   letter-spacing: 3px;
   animation: bp-halo 1.4s ease-in-out infinite;
 }

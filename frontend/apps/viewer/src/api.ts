@@ -24,6 +24,7 @@ export interface ViewerAnimeCard {
   ratingScore: number | null
   latestEpisode: string
   latestEpisodeLabel: string
+  latestEpisodeTitle: string
   updatedAt: number | null
 }
 

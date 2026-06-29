@@ -118,7 +118,7 @@ void APIError
         <span class="panel-tag">ACCESS</span>
         <form class="auth-panel" @submit.prevent="submit">
         <div class="panel-head">
-          <h1>{{ formTitle }}</h1>
+          <h1 :class="{ 'login-title': mode === 'login' }">{{ formTitle }}</h1>
           <p class="panel-sub">{{ mode === 'login' ? '请输入账号信息以继续' : '填写信息以创建新账号' }}</p>
         </div>
 
@@ -276,7 +276,6 @@ void APIError
 .brand-text p {
   color: var(--ink-400);
   font-size: 11px;
-  font-weight: 800;
   letter-spacing: 2px;
 }
 
@@ -286,7 +285,6 @@ void APIError
   overflow: hidden;
   max-width: 330px;
   font-size: 22px;
-  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -311,7 +309,6 @@ void APIError
   z-index: 2;
   height: 38px;
   color: var(--ink-600);
-  font-weight: 800;
   font-size: 14px;
   background: transparent;
   border-radius: 0;
@@ -379,7 +376,6 @@ void APIError
   padding: 0 12px;
   color: var(--ink-900);
   font-size: 12px;
-  font-weight: 900;
   letter-spacing: 1.5px;
   background: var(--yellow-300);
   box-shadow: 0 8px 18px rgba(255, 229, 122, 0.4);
@@ -405,9 +401,12 @@ void APIError
 
 .panel-head h1 {
   font-size: 32px;
-  font-weight: 700;
   line-height: 1.16;
   letter-spacing: 1px;
+}
+
+.panel-head h1.login-title {
+  font-weight: 700;
 }
 
 .panel-sub {
@@ -441,7 +440,6 @@ void APIError
   margin-bottom: 7px;
   color: var(--ink-600);
   font-size: 12px;
-  font-weight: 800;
   letter-spacing: 0.5px;
 }
 
@@ -477,7 +475,6 @@ void APIError
   margin: 14px 0 0;
   color: var(--pink-600);
   font-size: 13px;
-  font-weight: 700;
   line-height: 1.55;
 }
 
@@ -489,7 +486,6 @@ void APIError
   margin-top: 20px;
   overflow: hidden;
   color: #ffffff;
-  font-weight: 900;
   font-size: 15px;
   letter-spacing: 1px;
   background: linear-gradient(135deg, var(--pink-500), var(--pink-600) 58%, var(--blue-500));
@@ -540,7 +536,6 @@ void APIError
   margin-top: auto;
   color: rgba(82, 96, 120, 0.6);
   font-size: 11px;
-  font-weight: 900;
   letter-spacing: 1.5px;
   animation: bp-rise 0.5s var(--ease-out) 0.5s both;
 }
@@ -651,7 +646,6 @@ void APIError
   height: 36px;
   color: #ffffff;
   font-size: 13px;
-  font-weight: 900;
   background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
   clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%, 0 10px);
 }
@@ -659,7 +653,6 @@ void APIError
 .cap-text strong {
   display: block;
   font-size: 13px;
-  font-weight: 900;
   letter-spacing: 1px;
 }
 
@@ -667,6 +660,5 @@ void APIError
   margin-top: 2px;
   color: var(--ink-400);
   font-size: 11px;
-  font-weight: 700;
 }
 </style>

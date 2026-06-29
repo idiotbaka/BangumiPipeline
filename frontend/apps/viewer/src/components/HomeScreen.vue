@@ -26,6 +26,7 @@ const homeLoading = ref(false)
 const homeError = ref('')
 const hotPage = ref(0)
 const heroIndex = ref(0)
+const relativeTimeNow = ref(Date.now())
 const failedCovers = ref<Set<number>>(new Set())
 const home = ref<ViewerHome>({
   hotRecommendations: [],
@@ -33,6 +34,7 @@ const home = ref<ViewerHome>({
 })
 
 let heroTimer: ReturnType<typeof setInterval> | null = null
+let relativeTimeTimer: ReturnType<typeof setInterval> | null = null
 
 const heroSlides = computed(() => home.value.hotRecommendations.slice(0, heroSlideCount))
 const currentHero = computed(() => heroSlides.value[heroIndex.value] ?? null)
@@ -56,10 +58,16 @@ const pageIndicator = computed(() => {
 
 onMounted(() => {
   void loadHome()
+  relativeTimeTimer = setInterval(() => {
+    relativeTimeNow.value = Date.now()
+  }, 60_000)
 })
 
 onUnmounted(() => {
   stopHeroAutoplay()
+  if (relativeTimeTimer !== null) {
+    clearInterval(relativeTimeTimer)
+  }
 })
 
 // 列表变化时重置索引并重启轮播
@@ -155,19 +163,26 @@ function updateText(item: ViewerAnimeCard) {
 
 function formatUpdatedAt(value: number | null) {
   if (!value) {
-    return '--'
+    return '更新时间未知'
   }
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(value * 1000))
+  const elapsedSeconds = Math.max(Math.floor(relativeTimeNow.value / 1000) - value, 0)
+  const minutes = Math.max(Math.floor(elapsedSeconds / 60), 1)
+  if (minutes < 60) {
+    return `${minutes}分钟前更新`
+  }
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    return `${hours}小时前更新`
+  }
+  return `${Math.floor(hours / 24)}天前更新`
 }
 
 function formatAirDate(value: string) {
   return value ? value.split('-').join('.') : 'ON AIR'
+}
+
+function formatPremiereDate(value: string) {
+  return value ? `于 ${formatAirDate(value)} 首播` : '首播日期未定'
 }
 
 // Hero 番剧标题：优先展示标题，回退中文名与原名
@@ -276,18 +291,14 @@ function stagger(index: number, base = 0.04, step = 0.05) {
             type="button"
             aria-label="上一个"
             @click="turnHero(-1)"
-          >
-            ‹
-          </button>
+          />
           <button
             v-if="heroSlides.length > 1"
             class="hero-arrow arrow-next"
             type="button"
             aria-label="下一个"
             @click="turnHero(1)"
-          >
-            ›
-          </button>
+          />
 
           <!-- 指示器 -->
           <div v-if="heroSlides.length > 1" class="hero-dots" role="tablist" aria-label="切换轮播">
@@ -315,12 +326,20 @@ function stagger(index: number, base = 0.04, step = 0.05) {
             </div>
             <div class="section-controls">
               <span class="page-count">{{ pageIndicator }}</span>
-              <button class="arrow-button" :disabled="!canTurnHot" type="button" aria-label="上一页" @click="turnHotPage(-1)">
-                ‹
-              </button>
-              <button class="arrow-button" :disabled="!canTurnHot" type="button" aria-label="下一页" @click="turnHotPage(1)">
-                ›
-              </button>
+              <button
+                class="arrow-button page-arrow-prev"
+                :disabled="!canTurnHot"
+                type="button"
+                aria-label="上一页"
+                @click="turnHotPage(-1)"
+              />
+              <button
+                class="arrow-button page-arrow-next"
+                :disabled="!canTurnHot"
+                type="button"
+                aria-label="下一页"
+                @click="turnHotPage(1)"
+              />
             </div>
           </div>
 
@@ -345,7 +364,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
               :style="{ '--stagger': stagger(index) }"
             >
               <div class="poster-frame">
-                <span class="score-tag">{{ ratingText(item.ratingScore) }}</span>
                 <img
                   v-if="hasCover(item)"
                   :src="coverURL(item)"
@@ -356,10 +374,11 @@ function stagger(index: number, base = 0.04, step = 0.05) {
                 <div v-else class="cover-fallback">
                   <span>{{ item.title.slice(0, 2) }}</span>
                 </div>
-                <span class="episode-shadow">{{ updateText(item) }}</span>
+                <span class="score-overlay">{{ ratingText(item.ratingScore) }}</span>
               </div>
               <h3 class="poster-title">{{ item.title }}</h3>
-              <p class="poster-sub">{{ formatAirDate(item.airDate) }}</p>
+              <p class="poster-sub">{{ updateText(item) }}</p>
+              <p class="poster-sub">{{ formatPremiereDate(item.airDate) }}</p>
             </article>
           </div>
         </section>
@@ -406,6 +425,9 @@ function stagger(index: number, base = 0.04, step = 0.05) {
               </div>
               <h3 class="poster-title">{{ item.title }}</h3>
               <p class="poster-sub">{{ updateText(item) }}</p>
+              <p class="episode-title" :title="item.latestEpisodeTitle || '暂无分集标题'">
+                {{ item.latestEpisodeTitle || '暂无分集标题' }}
+              </p>
             </article>
           </div>
         </section>
@@ -456,7 +478,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
 .brand-text p {
   color: var(--ink-400);
   font-size: 11px;
-  font-weight: 900;
   letter-spacing: 2px;
 }
 
@@ -466,7 +487,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   margin-top: 2px;
   overflow: hidden;
   font-size: 20px;
-  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -488,7 +508,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   padding: 0 16px;
   color: var(--ink-600);
   font-size: 14px;
-  font-weight: 800;
   background: transparent;
   clip-path: polygon(var(--bevel-sm));
   transition: color 180ms var(--ease-soft), background 180ms var(--ease-soft);
@@ -554,7 +573,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   width: 100%;
   color: var(--ink-700);
   font-size: 14px;
-  font-weight: 700;
 }
 
 .search-box input::placeholder {
@@ -581,7 +599,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   height: 34px;
   color: #ffffff;
   font-size: 14px;
-  font-weight: 900;
   background: linear-gradient(135deg, var(--cyan-400), var(--blue-500));
   clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
@@ -591,7 +608,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   overflow: hidden;
   color: var(--ink-900);
   font-size: 14px;
-  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -604,7 +620,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   overflow: hidden;
   color: var(--pink-600);
   font-size: 13px;
-  font-weight: 900;
   letter-spacing: 1px;
   background: var(--glass-strong);
   border: 1px solid var(--pink-200);
@@ -793,7 +808,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   padding: 6px 12px;
   color: var(--ink-900);
   font-size: 12px;
-  font-weight: 900;
   letter-spacing: 1px;
   background: var(--yellow-300);
   box-shadow: 0 8px 18px rgba(255, 229, 122, 0.4);
@@ -813,7 +827,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
 .hero-kicker {
   color: var(--pink-600);
   font-size: 12px;
-  font-weight: 900;
   letter-spacing: 2px;
 }
 
@@ -823,7 +836,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   min-height: 100px; /* 固定两行高度，避免轮播切换时卡片跳动 */
   color: var(--ink-900);
   font-size: 42px;
-  font-weight: 900;
   line-height: 1.19;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -846,7 +858,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   padding: 0 12px;
   color: var(--ink-700);
   font-size: 13px;
-  font-weight: 800;
   background: rgba(255, 255, 255, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.9);
   box-shadow: 0 6px 16px rgba(255, 95, 158, 0.08);
@@ -872,7 +883,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   max-width: 540px;
   color: var(--ink-600);
   font-size: 15px;
-  font-weight: 600;
   line-height: 1.8;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -895,17 +905,32 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   width: 42px;
   height: 42px;
   color: var(--pink-600);
-  font-size: 26px;
-  font-weight: 900;
-  line-height: 1;
   background: rgba(255, 255, 255, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.9);
   box-shadow: 0 10px 22px rgba(255, 95, 158, 0.12);
   backdrop-filter: blur(8px);
   clip-path: polygon(var(--bevel-sm));
   transform: translateY(-50%);
-  padding-top: 2px; /* 字符 ‹› 视觉补偿，抵消 baseline 偏下 */
   transition: background 170ms var(--ease-soft), color 170ms var(--ease-soft), transform 170ms var(--ease-soft);
+}
+
+.hero-arrow::before,
+.arrow-button::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+}
+
+.arrow-prev::before,
+.page-arrow-prev::before {
+  transform: rotate(-135deg);
+}
+
+.arrow-next::before,
+.page-arrow-next::before {
+  transform: rotate(45deg);
 }
 
 .arrow-prev {
@@ -970,7 +995,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
 .section-kicker {
   color: var(--pink-500);
   font-size: 12px;
-  font-weight: 900;
   letter-spacing: 2px;
 }
 
@@ -999,7 +1023,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   min-width: 52px;
   color: var(--ink-400);
   font-size: 12px;
-  font-weight: 900;
   text-align: right;
 }
 
@@ -1009,14 +1032,10 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   width: 38px;
   height: 38px;
   color: var(--pink-600);
-  font-size: 25px;
-  font-weight: 900;
-  line-height: 1;
   background: #ffffff;
   border: 1px solid var(--line-soft);
   box-shadow: 0 8px 20px rgba(255, 95, 158, 0.1);
   clip-path: polygon(var(--bevel-sm));
-  padding-top: 2px; /* 字符 ‹› 视觉补偿，抵消 baseline 偏下 */
   transition: transform 170ms var(--ease-soft), background 170ms var(--ease-soft), color 170ms var(--ease-soft);
 }
 
@@ -1085,67 +1104,53 @@ function stagger(index: number, base = 0.04, step = 0.05) {
 .poster-frame img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: unset;
 }
 
-/* 热播海报左上角评分贴片（仿 NEW 样式，粉色背景） */
-.score-tag {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 2;
-  display: grid;
-  place-items: center;
-  min-width: 48px;
-  height: 24px;
-  padding: 0 10px;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 1px;
-  background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
-  box-shadow: 0 8px 18px rgba(238, 63, 134, 0.4);
-  clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
-  transform: rotate(-3deg);
-  animation: bp-tag-in 0.5s var(--ease-bounce) 0.3s both;
-}
-
-/* 热播海报底部「更新至」信息条 */
-.episode-shadow {
+/* 热播海报底部评分：使用渐变衬底保证浅色封面上的可读性 */
+.score-overlay {
   position: absolute;
   right: 0;
   bottom: 0;
   left: 0;
-  min-height: 46px;
+  z-index: 2;
   display: flex;
-  align-items: end;
-  padding: 18px 10px 9px;
+  align-items: flex-end;
+  justify-content: flex-end;
+  min-height: 58px;
+  padding: 20px 10px 8px;
   color: #ffffff;
-  font-size: 13px;
-  font-weight: 900;
-  line-height: 1.25;
-  background: linear-gradient(to top, rgba(32, 40, 62, 0.82), rgba(32, 40, 62, 0));
-  text-shadow: 0 1px 6px rgba(32, 40, 62, 0.6);
+  font-size: 23px;
+  font-style: italic;
+  line-height: 1;
+  background: linear-gradient(to top, rgba(32, 40, 62, 0.76), rgba(32, 40, 62, 0));
+  text-shadow: 0 2px 7px rgba(20, 25, 40, 0.85);
 }
 
 .poster-title {
-  min-height: 42px;
   margin-top: 11px;
   overflow: hidden;
   color: var(--ink-900);
   font-size: 14px;
-  font-weight: 900;
   line-height: 1.45;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .poster-sub {
   margin-top: 4px;
   color: var(--ink-400);
   font-size: 12px;
-  font-weight: 800;
+}
+
+.episode-title {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--ink-600);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 封面兜底 */
@@ -1157,7 +1162,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   padding: 16px;
   color: var(--pink-600);
   font-size: 22px;
-  font-weight: 900;
   text-align: center;
   background:
     linear-gradient(135deg, rgba(255, 244, 248, 0.92), rgba(236, 253, 255, 0.82)),
@@ -1177,7 +1181,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   padding: 0 10px;
   color: var(--ink-900);
   font-size: 12px;
-  font-weight: 900;
   letter-spacing: 1px;
   background: var(--yellow-300);
   box-shadow: 0 8px 18px rgba(255, 229, 122, 0.45);
@@ -1196,7 +1199,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   padding: 0 10px;
   color: #ffffff;
   font-size: 12px;
-  font-weight: 900;
   white-space: nowrap;
   background: rgba(32, 40, 62, 0.62);
   box-shadow: 0 6px 16px rgba(32, 40, 62, 0.28);
@@ -1224,7 +1226,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
 .state-panel strong {
   color: var(--ink-600);
   font-size: 15px;
-  font-weight: 900;
 }
 
 .state-panel button {
@@ -1232,7 +1233,6 @@ function stagger(index: number, base = 0.04, step = 0.05) {
   padding: 0 20px;
   color: #ffffff;
   font-size: 13px;
-  font-weight: 900;
   background: linear-gradient(135deg, var(--pink-500), var(--pink-600));
   clip-path: polygon(var(--bevel-sm));
 }
