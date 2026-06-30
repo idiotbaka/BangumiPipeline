@@ -118,7 +118,7 @@ void APIError
         <span class="panel-tag">ACCESS</span>
         <form class="auth-panel" @submit.prevent="submit">
         <div class="panel-head">
-          <h1 :class="{ 'login-title': mode === 'login' }">{{ formTitle }}</h1>
+          <h1>{{ formTitle }}</h1>
           <p class="panel-sub">{{ mode === 'login' ? '请输入账号信息以继续' : '填写信息以创建新账号' }}</p>
         </div>
 
@@ -403,10 +403,6 @@ void APIError
   font-size: 32px;
   line-height: 1.16;
   letter-spacing: 1px;
-}
-
-.panel-head h1.login-title {
-  font-weight: 700;
 }
 
 .panel-sub {
