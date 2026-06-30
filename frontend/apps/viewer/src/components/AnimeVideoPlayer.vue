@@ -27,6 +27,7 @@ const webFullscreen = ref(false)
 const controlsVisible = ref(true)
 const resumeApplied = ref(false)
 const hasPlayed = ref(false)
+const mediaReady = ref(false)
 const bufferEnd = ref(0)
 let previousBodyOverflow = ''
 let progressTimer: ReturnType<typeof setInterval> | null = null
@@ -42,6 +43,8 @@ const progressStyle = computed(() => {
     '--buffered': `${Math.max(progress, Math.min(100, buffered))}%`,
   }
 })
+const playerLoading = computed(() => Boolean(props.src) && !mediaReady.value && !errorMessage.value)
+const canControlPlayback = computed(() => mediaReady.value && !errorMessage.value)
 
 watch(
   () => props.src,
@@ -54,6 +57,7 @@ watch(
     errorMessage.value = ''
     resumeApplied.value = false
     hasPlayed.value = false
+    mediaReady.value = false
     stopProgressTimer()
     stopBufferTimer()
     showControls()
@@ -76,6 +80,10 @@ onBeforeUnmount(() => {
 async function togglePlay() {
   const element = video.value
   if (!element || !props.src) return
+  if (!canControlPlayback.value) {
+    showControls()
+    return
+  }
   if (element.paused) {
     try {
       await element.play()
@@ -88,7 +96,9 @@ async function togglePlay() {
 }
 
 function updateDuration() {
-  duration.value = Number.isFinite(video.value?.duration) ? video.value?.duration ?? 0 : 0
+  const nextDuration = Number.isFinite(video.value?.duration) ? video.value?.duration ?? 0 : 0
+  duration.value = nextDuration
+  mediaReady.value = nextDuration > 0
   applyResumePosition()
   updateBuffered()
 }
@@ -164,12 +174,17 @@ function handleEnded() {
 }
 
 function handleWaiting() {
+  if (!mediaReady.value) {
+    showControls()
+    return
+  }
   buffering.value = true
   updateBuffered()
   showControls()
 }
 
 function handlePlaying() {
+  if (!mediaReady.value) updateDuration()
   buffering.value = false
   startBufferTimer()
   updateBuffered()
@@ -177,6 +192,7 @@ function handlePlaying() {
 }
 
 function handleCanPlay() {
+  updateDuration()
   buffering.value = false
   updateBuffered()
   if (playing.value) scheduleControlsHide()
@@ -184,6 +200,7 @@ function handleCanPlay() {
 
 function handleError() {
   errorMessage.value = '视频加载失败，请稍后重试'
+  mediaReady.value = false
   stopBufferTimer()
   showControls()
 }
@@ -326,7 +343,7 @@ function formatTime(value: number) {
   <section
     ref="player"
     class="anime-player"
-    :class="{ 'web-fullscreen': webFullscreen, 'ui-hidden': !controlsVisible && playing }"
+    :class="{ 'web-fullscreen': webFullscreen, 'ui-hidden': !controlsVisible && playing, 'is-loading': playerLoading }"
     tabindex="0"
     :aria-label="`正在播放 ${title}`"
     @pointermove="handlePlayerInteraction"
@@ -361,9 +378,16 @@ function formatTime(value: number) {
     <div class="screen-shade" aria-hidden="true" />
     <div class="player-corners" aria-hidden="true"><i /><i /><i /><i /></div>
 
-    <button v-if="!playing && !buffering && !errorMessage" class="center-play" type="button" aria-label="播放" @click="togglePlay">
+    <button
+      v-if="canControlPlayback && !playing && !buffering && !errorMessage"
+      class="center-play"
+      type="button"
+      aria-label="播放"
+      @click="togglePlay"
+    >
       <i aria-hidden="true" />
     </button>
+    <div v-if="playerLoading" class="loading-mark" aria-live="polite"><i /><span>播放器加载中</span></div>
     <div v-if="buffering" class="buffering-mark" aria-label="正在缓冲"><i /><span>BUFFERING</span></div>
     <div v-if="errorMessage" class="player-error"><span>!</span><p>{{ errorMessage }}</p></div>
 
@@ -381,11 +405,18 @@ function formatTime(value: number) {
         step="0.1"
         :value="currentTime"
         :style="progressStyle"
+        :disabled="!canControlPlayback"
         aria-label="播放进度"
         @input="seek"
       />
       <div class="control-row">
-        <button class="play-control" type="button" :aria-label="playing ? '暂停' : '播放'" @click="togglePlay">
+        <button
+          class="play-control"
+          type="button"
+          :aria-label="playing ? '暂停' : '播放'"
+          :disabled="!canControlPlayback"
+          @click="togglePlay"
+        >
           <i :class="{ pause: playing }" aria-hidden="true" />
         </button>
         <span class="time-code">{{ formatTime(currentTime) }} <i>/</i> {{ formatTime(duration) }}</span>
@@ -421,6 +452,7 @@ function formatTime(value: number) {
 <style scoped>
 .anime-player { position: relative; width: 100%; height: 100%; min-height: 480px; overflow: hidden; color: #fff; background: #101522; outline: 0; clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 20px, 100% 100%, 20px 100%, 0 calc(100% - 20px)); }
 .anime-player video { width: 100%; height: 100%; object-fit: contain; background: #090d17; cursor: pointer; }
+.anime-player.is-loading video { cursor: progress; }
 .screen-shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(to bottom, rgba(8,12,22,.48), transparent 20%, transparent 68%, rgba(8,12,22,.86)); transition: opacity 180ms ease; }
 .player-corners { position: absolute; inset: 12px; pointer-events: none; transition: opacity 180ms ease; }
 .player-corners i { position: absolute; width: 18px; height: 18px; opacity: .72; }
@@ -436,9 +468,11 @@ function formatTime(value: number) {
 .player-heading p { margin-top: 3px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .player-controls { position: absolute; right: 24px; bottom: 20px; left: 24px; transition: opacity 180ms ease, transform 180ms ease; }
 .timeline { width: 100%; height: 4px; appearance: none; cursor: pointer; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(142,232,242,.58) var(--progress) var(--buffered), rgba(255,255,255,.28) var(--buffered) 100%); }
+.timeline:disabled { cursor: wait; opacity: .62; }
 .timeline::-webkit-slider-thumb { width: 13px; height: 13px; appearance: none; background: #fff; border: 3px solid var(--pink-400); transform: rotate(45deg); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
 .control-row { height: 46px; display: flex; align-items: flex-end; gap: 14px; }
 .play-control { width: 30px; height: 30px; display: grid; place-items: center; color: #fff; }
+.play-control:disabled { cursor: wait; opacity: .45; }
 .play-control i:not(.pause) { width: 0; height: 0; margin-left: 3px; border-top: 7px solid transparent; border-bottom: 7px solid transparent; border-left: 11px solid currentColor; }
 .play-control i.pause { width: 11px; height: 14px; border-right: 4px solid currentColor; border-left: 4px solid currentColor; }
 .time-code { margin-bottom: 5px; color: rgba(255,255,255,.82); font-family: var(--font-mono); font-size: 13px; }
@@ -454,7 +488,9 @@ function formatTime(value: number) {
 .web-fullscreen-control { height: 29px; display: inline-flex; align-items: center; gap: 7px; margin-bottom: -1px; padding: 0 9px; color: rgba(255,255,255,.78); font-size: 13px; white-space: nowrap; border: 1px solid rgba(255,255,255,.24); background: rgba(9,13,23,.38); clip-path: polygon(var(--bevel-sm)); }
 .web-fullscreen-control:hover, .web-fullscreen-control.active { color: #fff; border-color: rgba(142,232,242,.55); background: rgba(73,214,233,.18); }
 .web-fullscreen-control i { width: 12px; height: 9px; border: 1px solid currentColor; box-shadow: inset 0 2px 0 rgba(142,232,242,.45); }
-.buffering-mark, .player-error { position: absolute; top: 50%; left: 50%; display: grid; place-items: center; gap: 10px; transform: translate(-50%, -50%); }
+.loading-mark, .buffering-mark, .player-error { position: absolute; top: 50%; left: 50%; display: grid; place-items: center; gap: 10px; transform: translate(-50%, -50%); }
+.loading-mark i { width: 46px; height: 46px; border: 1px solid rgba(142,232,242,.35); box-shadow: inset 0 0 0 6px rgba(142,232,242,.08), 0 0 18px rgba(142,232,242,.22); clip-path: polygon(var(--bevel-sm)); animation: bp-player-pulse 1.1s ease-in-out infinite; }
+.loading-mark span { color: rgba(255,255,255,.86); font-size: 13px; letter-spacing: 1px; }
 .buffering-mark i { width: 38px; height: 38px; border: 2px solid rgba(255,255,255,.2); border-top-color: var(--cyan-300); border-radius: 50%; animation: bp-spin .8s linear infinite; }
 .buffering-mark span { font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; }
 .player-error span { width: 42px; height: 42px; display: grid; place-items: center; color: var(--pink-300); font-family: var(--font-mono); font-size: 22px; border: 1px solid var(--pink-300); transform: rotate(45deg); }
@@ -471,4 +507,5 @@ function formatTime(value: number) {
 .anime-player.ui-hidden .hidden-progress { opacity: 1; }
 .anime-player:fullscreen { clip-path: none; }
 .anime-player.web-fullscreen { position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh; height: 100dvh; min-height: 0; clip-path: none; }
+@keyframes bp-player-pulse { 0%, 100% { opacity: .52; transform: scale(.92); } 50% { opacity: 1; transform: scale(1); } }
 </style>

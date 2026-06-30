@@ -33,6 +33,7 @@ backend/
 frontend/apps/
   admin/                  Vue 3 + TypeScript + Element Plus 管理端
   viewer/                 观看端
+scripts/                  运维和一次性维护脚本
 compose.yaml              Linux/本地容器部署
 Dockerfile                多阶段生产构建
 ```
@@ -303,10 +304,12 @@ RSS 流程：
 - `failed`：创建失败、qBittorrent 状态异常或任务丢失。
 
 状态同步不要只依赖 qBittorrent tag。现有逻辑会通过 hash、tag、save_path 多条件匹配。
+qBittorrent `torrents/info` 响应可能很大；读取、JSON 解析和错误日志必须保留足够诊断信息，避免大队列时只报 `unexpected end of JSON input` 而无法定位响应截断、空响应或代理错误。
 
 完成清理：
 
 - 媒体产物完成后，`media.Service` 调用 `download.Service.CleanupCompletedQBitTask`。
+- 媒体任务也会兜底重试已完成产物但下载清理失败的历史任务，避免 qBittorrent 中长期堆积已完成 torrent。
 - 删除 qBittorrent torrent，`deleteFiles=true`。
 - 尽量删除 `bp-item-<subscription_item_id>` 标签。
 - 清理失败不回滚已完成媒体产物，只记录 warning。
@@ -331,8 +334,8 @@ RSS 流程：
 - 将 `download_jobs.status='completed'` 且尚无媒体任务的记录写入 `media_jobs(status='pending')`。
 - 恢复服务重启中断的 `transcoding` 为 `pending`。
 - 补齐已完成但封面图缺失、失败或文件被删除的历史产物封面。
-- 循环处理 pending 任务。
-- copy 任务可在同一轮连续处理。
+- 每轮先规划 pending 任务的处理方式，再拆成 copy 线路和 ffmpeg 线路。
+- copy 任务可在同一轮连续处理，并可与一个 ffmpeg 任务并行执行，避免长时间转码阻塞直接复制任务。
 - ffmpeg remux、转码、字幕压制等重型任务每轮只处理一个。
 - 探测阶段失败时本轮停止，避免环境错误批量打失败。
 
@@ -357,6 +360,11 @@ RSS 流程：
 - 视频编码 `h264`。
 - 音频为空或 `aac`。
 - 像素格式为空、`yuv420p` 或 `yuvj420p`。
+- 仅满足 MP4/H.264/AAC 不一定足够。MP4 还要检查顶层 box 结构和 ffprobe warning：
+  - `moov` 必须在 `mdat` 之前，否则 remux。
+  - 顶层存在多个 `mdat` box 时 remux；这类文件常见于 HLS/fMP4 片段拼装，可能导致浏览器无限 Range 请求。
+  - ffprobe warning 包含 edit list 缺关键帧或找不到索引项时 remux。
+- remux 使用 `ffmpeg -c copy -movflags +faststart`，不重新编码，不改变画质。
 
 最终命名：
 
@@ -397,6 +405,21 @@ RSS 流程：
 - `transcoding`：处理中，包含复制、探测、remux、转码、字幕压制。
 - `completed`：最终可播放产物已生成。
 - `failed`：探测、复制、ffmpeg 或文件操作失败。
+
+## 运维脚本
+
+相关代码：
+
+- `scripts/fix-mp4-remux.sh`
+
+视频修复脚本：
+
+- 默认扫描 `/opt/downloads/BangumiPipeline/data/bangumi`，可用 `--root` 覆盖。
+- 默认 dry-run，只输出候选文件；必须显式加 `--apply` 才会替换文件。
+- 只处理 MP4，检测 ffprobe edit-list/index warning、`moov` 在 `mdat` 后面、多个顶层 `mdat` box 三类问题。
+- 修复方式为同目录生成临时文件，执行 `ffmpeg -map 0 -c copy -movflags +faststart`，ffprobe 校验成功后替换原文件。
+- 默认不保留备份；`--keep-backup` 会保留隐藏 `.remux.bak` 文件。
+- 脚本保持成品视频路径不变，不需要同步修改 SQLite 中的 `media_jobs.output_path`。
 
 ## 系统概览和日志
 
@@ -504,6 +527,7 @@ RSS 流程：
 ### 首页、时间表与图书馆
 
 - 首页 `GET /api/home` 返回热播推荐、最近更新、已配置轮播和当前用户追番聚合。
+- 首页“最近更新”默认展示 24 个番剧卡片，对应 3 排。
 - 轮播图片保存在 SQLite，绑定有效番剧；观看端轮播可进入对应详情页。
 - 番剧时间表按日本动画季度 `1/4/7/10` 月切换，并用 `YYYY年M月` 精确匹配 `anime_tags`；周一到周日之外归入“其他”。
 - 时间表和图书馆卡片都可展示没有产物的番剧，并按首播日期区分“尚未开播”和“尚未放流”。
@@ -519,6 +543,7 @@ RSS 流程：
 - 默认选择请求指定的媒体，否则恢复最后观看媒体，再否则选择第一个可播放分集。已完播记录从 0 秒开始，未完播记录恢复位置。
 - 播放器每 10 秒以及暂停、结束、组件卸载时上报进度；实际播放不超过 15 秒不落库，达到时长 90% 记为完播。
 - 自定义播放器支持普通全屏和网页全屏；网页全屏期间隐藏顶部导航。播放中 3 秒无交互会隐藏 UI，暂停、缓冲或报错时保持显示，隐藏态底部保留粉色进度线。
+- 播放器进度条要展示浏览器实际 `video.buffered` 范围；活动 UI 的进度条和隐藏态底部进度条都要显示缓冲范围，不额外伪造或限制为固定 5 分钟。
 - 详情标签先显示蓝色 Meta Tags；粉色普通 Tags 中与 Meta Tags 重复的项不再显示。
 
 ### 观看历史与追番
@@ -635,9 +660,11 @@ Viewer API 在 `backend/internal/httpapi/viewer.go`。
 - 只有 `binding_status='bound'` 的订阅条目才能进入下载和媒体处理链路；时间表和图书馆允许展示尚无绑定或成品的元数据番剧。
 - 下载任务创建前检查并发上限和 10GB 剩余磁盘空间。
 - 下载失败不自动重试。
+- qBittorrent 大队列状态同步必须保留完整读取上限和可诊断 JSON 错误信息。
 - 媒体最终产物完成后再清理 qBittorrent 原下载任务和文件。
 - ffmpeg 转码/压制保持单任务执行。
-- 轻量 copy 任务可以在同一计划任务内连续处理。
+- 轻量 copy 任务可以在同一计划任务内连续处理，并允许与一个 ffmpeg 任务并行。
+- MP4/H.264/AAC 不能直接等同于浏览器可播；slowstart、多个顶层 `mdat`、problematic edit list 必须 remux。
 - 最终媒体产物必须使用番剧当前 `anime_metadata.media_storage_root`。
 - 移动番剧存储路径必须拒绝转码中的番剧。
 - 封面图生成失败不得让已完成的视频产物失败。
@@ -648,6 +675,7 @@ Viewer API 在 `backend/internal/httpapi/viewer.go`。
 - 观看端和普通媒体接口不向前端暴露本地绝对路径。
 - 观看端媒体流、媒体封面和进度写入必须同时校验番剧 ID 与媒体 ID，且只接受已完成产物。
 - 播放进度不超过 15 秒不记录，达到 90% 才标记完播；不得仅由前端决定完播状态。
+- 播放器缓冲条必须基于浏览器实际 buffered range，同时覆盖活动 UI 和隐藏态底部进度条。
 - 观看历史和追番数据必须按当前 viewer 用户隔离，不能使用客户端传入的用户 ID。
 
 ## 命名约定
@@ -667,6 +695,7 @@ Viewer API 在 `backend/internal/httpapi/viewer.go`。
 - 手工编辑文件优先使用补丁方式。
 - 不要顺手重写无关内容。
 - 不要回滚用户或其他 Agent 已做出的无关改动。
+- `.codex/` 和 `.codex-tmp/` 是本地 Codex 配置/临时文件目录，保持在 `.gitignore` 中，不提交。
 - PowerShell 命令按当前 Windows 开发环境和工具权限策略执行。
 - Go 文件变更后执行 `gofmt -w <修改过的 Go 文件>`。
 - 除非当前任务明确要求，不要主动执行 `go test`、`npm run build:ui` 或 `npm test`。
