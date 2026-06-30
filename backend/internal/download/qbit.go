@@ -18,9 +18,13 @@ import (
 )
 
 const (
-	commonQBitTag = "bangumi-pipeline"
-	qBitTimeout   = 20 * time.Second
+	commonQBitTag              = "bangumi-pipeline"
+	qBitTimeout                = 20 * time.Second
+	qBitTorrentsInfoMaxBytes   = 64 << 20
+	qBitResponseSnippetMaxByte = 512
 )
+
+var errQBitResponseTooLarge = errors.New("qBittorrent response exceeds maximum size")
 
 type qBitClient struct {
 	baseURL string
@@ -211,15 +215,80 @@ func (c *qBitClient) fetchTorrents(ctx context.Context, endpoint string) ([]qBit
 		return nil, err
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	body, readErr := readQBitResponseBody(response.Body, qBitTorrentsInfoMaxBytes)
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("qBittorrent torrents info failed: HTTP %d %s", response.StatusCode, strings.TrimSpace(string(body)))
+		message := qBitResponseMessage(body)
+		if readErr != nil {
+			return nil, fmt.Errorf("qBittorrent torrents info failed: HTTP %d %s; response read error: %w", response.StatusCode, message, readErr)
+		}
+		return nil, fmt.Errorf("qBittorrent torrents info failed: HTTP %d %s", response.StatusCode, message)
+	}
+	if readErr != nil {
+		return nil, qBitTorrentsInfoReadError(endpoint, response, len(body), readErr)
 	}
 	var torrents []qBitTorrent
 	if err := json.Unmarshal(body, &torrents); err != nil {
-		return nil, err
+		return nil, qBitTorrentsInfoJSONError(endpoint, response, body, err)
 	}
 	return torrents, nil
+}
+
+func readQBitResponseBody(body io.Reader, maxBytes int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
+	if err != nil {
+		return data, err
+	}
+	if int64(len(data)) > maxBytes {
+		return data[:maxBytes], errQBitResponseTooLarge
+	}
+	return data, nil
+}
+
+func qBitTorrentsInfoReadError(endpoint string, response *http.Response, bytesRead int, err error) error {
+	if errors.Is(err, errQBitResponseTooLarge) {
+		return fmt.Errorf("qBittorrent torrents info response too large: endpoint=%s status=%d content_length=%d bytes_read=%d max_bytes=%d",
+			endpoint, response.StatusCode, response.ContentLength, bytesRead, qBitTorrentsInfoMaxBytes)
+	}
+	return fmt.Errorf("qBittorrent torrents info response read failed: %w (endpoint=%s status=%d content_length=%d bytes_read=%d)",
+		err, endpoint, response.StatusCode, response.ContentLength, bytesRead)
+}
+
+func qBitTorrentsInfoJSONError(endpoint string, response *http.Response, body []byte, err error) error {
+	return fmt.Errorf("qBittorrent torrents info JSON decode failed: %w (endpoint=%s status=%d content_length=%d bytes_read=%d content_type=%q body_start=%q body_end=%q)",
+		err, endpoint, response.StatusCode, response.ContentLength, len(body), response.Header.Get("Content-Type"),
+		qBitResponseSnippet(body, false), qBitResponseSnippet(body, true))
+}
+
+func qBitResponseSnippet(body []byte, tail bool) string {
+	if len(body) == 0 {
+		return ""
+	}
+	if len(body) > qBitResponseSnippetMaxByte {
+		if tail {
+			body = body[len(body)-qBitResponseSnippetMaxByte:]
+		} else {
+			body = body[:qBitResponseSnippetMaxByte]
+		}
+	}
+	text := strings.TrimSpace(string(body))
+	text = strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\r', '\t':
+			return ' '
+		}
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, text)
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func qBitResponseMessage(body []byte) string {
+	if len(body) <= qBitResponseSnippetMaxByte {
+		return strings.TrimSpace(string(body))
+	}
+	return qBitResponseSnippet(body, false)
 }
 
 func tagForItem(itemID int64) string {

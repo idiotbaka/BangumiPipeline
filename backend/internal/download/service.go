@@ -417,6 +417,7 @@ func (s *Service) syncActiveJobs(ctx context.Context, client *qBitClient, settin
 	}
 	torrents, err := client.torrents(ctx)
 	if err != nil {
+		s.logger.Warn("qBittorrent 下载状态读取失败", "source", "download", "syncable_jobs", len(jobs), "error", err)
 		return 0, err
 	}
 	byHash := torrentsByHash(torrents)
