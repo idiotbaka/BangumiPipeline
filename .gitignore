@@ -21,4 +21,5 @@ data/
 Thumbs.db
 
 # Codex scratch files
+.codex/
 .codex-tmp/
