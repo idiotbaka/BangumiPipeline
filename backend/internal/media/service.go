@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1645,6 +1647,23 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 	subtitlePath := findExternalSubtitle(video.Path)
 	outputPath := finalOutputPath(job.StorageRoot, job)
 	webPlayable := isBrowserPlayable(video.Path, videoStream, audioStream)
+	fastStart := false
+	problematicEditList := false
+	if webPlayable {
+		var fastStartErr error
+		fastStart, fastStartErr = mp4MoovBeforeMdat(video.Path)
+		if fastStartErr != nil {
+			s.logger.Warn("检查 MP4 faststart 失败，将通过 remux 重写容器", "source", "media", "media_job_id", job.ID, "source_file", filepath.Base(video.Path), "error", fastStartErr)
+		}
+		if fastStart {
+			var editListErr error
+			problematicEditList, editListErr = s.hasProblematicEditList(ctx, video.Path)
+			if editListErr != nil {
+				s.logger.Warn("检查 MP4 edit list 失败，将通过 remux 重写容器", "source", "media", "media_job_id", job.ID, "source_file", filepath.Base(video.Path), "error", editListErr)
+				problematicEditList = true
+			}
+		}
+	}
 	hasInternal := len(subtitleStreams) > 0
 	hasExternal := subtitlePath != ""
 
@@ -1653,6 +1672,9 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 	switch {
 	case hasInternal || hasExternal:
 		action = "burn_subtitles"
+		needsTranscode = true
+	case webPlayable && (!fastStart || problematicEditList):
+		action = "remux"
 		needsTranscode = true
 	case !webPlayable && videoStream.CodecName == "h264" && (audioStream.CodecName == "" || audioStream.CodecName == "aac"):
 		action = "remux"
@@ -1685,6 +1707,21 @@ func (s *Service) probe(ctx context.Context, path string) (probeResult, error) {
 		return probeResult{}, fmt.Errorf("解析 ffprobe 输出失败: %w", err)
 	}
 	return result, nil
+}
+
+func (s *Service) hasProblematicEditList(ctx context.Context, path string) (bool, error) {
+	command := exec.CommandContext(ctx, s.ffprobePath, "-v", "warning", "-i", path)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("ffprobe warning 检查失败: %w", err)
+	}
+	return hasProblematicEditListWarning(string(output)), nil
+}
+
+func hasProblematicEditListWarning(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "edit list") &&
+		(strings.Contains(message, "missing key frame") || strings.Contains(message, "cannot find an index entry"))
 }
 
 func (s *Service) backfillMissingCovers(ctx context.Context) (int, error) {
@@ -2202,6 +2239,76 @@ func isBrowserPlayable(path string, video, audio probeStream) bool {
 		return false
 	}
 	return true
+}
+
+func mp4MoovBeforeMdat(path string) (bool, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != ".mp4" && ext != ".m4v" {
+		return false, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	size := info.Size()
+	var offset int64
+	for offset < size {
+		boxSize, boxType, headerSize, err := readMP4BoxHeader(file)
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return false, nil
+			}
+			return false, err
+		}
+		if boxSize == 0 {
+			boxSize = size - offset
+		}
+		if boxSize < headerSize {
+			return false, fmt.Errorf("invalid MP4 box %q size %d", boxType, boxSize)
+		}
+		switch boxType {
+		case "moov":
+			return true, nil
+		case "mdat":
+			return false, nil
+		}
+		offset += boxSize
+		if offset >= size {
+			break
+		}
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+func readMP4BoxHeader(reader io.Reader) (size int64, boxType string, headerSize int64, err error) {
+	var header [8]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		return 0, "", 0, err
+	}
+	size = int64(binary.BigEndian.Uint32(header[0:4]))
+	boxType = string(header[4:8])
+	headerSize = 8
+	if size == 1 {
+		var extended [8]byte
+		if _, err := io.ReadFull(reader, extended[:]); err != nil {
+			return 0, "", 0, err
+		}
+		extendedSize := binary.BigEndian.Uint64(extended[:])
+		if extendedSize > uint64(math.MaxInt64) {
+			return 0, "", 0, errors.New("MP4 box size is too large")
+		}
+		size = int64(extendedSize)
+		headerSize = 16
+	}
+	return size, boxType, headerSize, nil
 }
 
 func finalOutputPath(mediaDir string, job pendingJob) string {

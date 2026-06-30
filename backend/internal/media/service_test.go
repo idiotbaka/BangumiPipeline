@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log/slog"
@@ -184,6 +185,37 @@ func TestCleanupCompletedDownloadsRetriesFailedQBitCleanup(t *testing.T) {
 	}
 }
 
+func TestMP4MoovBeforeMdat(t *testing.T) {
+	fastStartPath := writeMP4Boxes(t, []string{"ftyp", "moov", "mdat"})
+	fastStart, err := mp4MoovBeforeMdat(fastStartPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fastStart {
+		t.Fatal("expected moov-before-mdat MP4 to be detected as faststart")
+	}
+
+	slowStartPath := writeMP4Boxes(t, []string{"ftyp", "mdat", "moov"})
+	fastStart, err = mp4MoovBeforeMdat(slowStartPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fastStart {
+		t.Fatal("expected mdat-before-moov MP4 to require remux")
+	}
+}
+
+func TestProblematicEditListWarning(t *testing.T) {
+	message := `[mov,mp4,m4a,3gp,3g2,mj2 @ 00000191dd9b38c0] st: 0 edit list: 1 Missing key frame while searching for timestamp: 5999
+[mov,mp4,m4a,3gp,3g2,mj2 @ 00000191dd9b38c0] st: 0 edit list 1 Cannot find an index entry before timestamp: 5999.`
+	if !hasProblematicEditListWarning(message) {
+		t.Fatal("expected problematic edit list warning to be detected")
+	}
+	if hasProblematicEditListWarning("some unrelated warning") {
+		t.Fatal("unexpected unrelated warning match")
+	}
+}
+
 type metadataRefreshRecorder struct {
 	ids []int64
 }
@@ -205,6 +237,31 @@ func (r *batchDownloadCleanerRecorder) CleanupCompletedQBitTask(_ context.Contex
 func (r *batchDownloadCleanerRecorder) CleanupCompletedQBitTasks(_ context.Context, jobIDs []int64) ([]int64, error) {
 	r.batchIDs = append(r.batchIDs, jobIDs...)
 	return append([]int64(nil), jobIDs...), nil
+}
+
+func writeMP4Boxes(t *testing.T, boxTypes []string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "sample.mp4")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	for _, boxType := range boxTypes {
+		if len(boxType) != 4 {
+			t.Fatalf("invalid box type %q", boxType)
+		}
+		var header [8]byte
+		binary.BigEndian.PutUint32(header[0:4], 12)
+		copy(header[4:8], boxType)
+		if _, err := file.Write(header[:]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write([]byte{0, 0, 0, 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return path
 }
 
 func assertMediaJobStatus(t *testing.T, ctx context.Context, db *sql.DB, jobID int64, want string) {
