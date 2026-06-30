@@ -304,54 +304,101 @@ func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (RetryResult,
 }
 
 func (s *Service) CleanupCompletedQBitTask(ctx context.Context, jobID int64) error {
-	job, err := s.downloadJobForCleanup(ctx, jobID)
+	cleaned, err := s.CleanupCompletedQBitTasks(ctx, []int64{jobID})
 	if err != nil {
 		return err
 	}
+	for _, cleanedJobID := range cleaned {
+		if cleanedJobID == jobID {
+			return nil
+		}
+	}
+	return ErrDownloadJobNotFound
+}
 
+func (s *Service) CleanupCompletedQBitTasks(ctx context.Context, jobIDs []int64) ([]int64, error) {
+	normalized := uniquePositiveInt64s(jobIDs)
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	jobs, err := s.downloadJobsForCleanup(ctx, normalized)
+	if err != nil {
+		return nil, err
+	}
+	if len(jobs) == 0 {
+		return nil, nil
+	}
 	settings, err := s.settings.GetDownloadSettings(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	client, err := newQBitClient(settings)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := client.login(ctx, settings.Username, settings.Password); err != nil {
-		return fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
 	}
 	torrents, err := client.torrents(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
 	}
 
-	tag := tagForItem(job.SubscriptionItemID)
-	job.QBitSavePath = s.qBitSavePath(job.SavePath, settings.QBitDownloadDir)
-	torrent, ok := matchTorrent(job, torrents, torrentsByHash(torrents))
-	if ok {
-		if err := client.deleteTorrents(ctx, []string{torrent.Hash}, true); err != nil {
-			return fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
+	byHash := torrentsByHash(torrents)
+	cleaned := make([]int64, 0, len(jobs))
+	failed := 0
+	for _, job := range jobs {
+		tag := tagForItem(job.SubscriptionItemID)
+		job.QBitSavePath = s.qBitSavePath(job.SavePath, settings.QBitDownloadDir)
+		torrent, ok := matchTorrent(job, torrents, byHash)
+		if ok {
+			if err := client.deleteTorrents(ctx, []string{torrent.Hash}, true); err != nil {
+				failed++
+				s.logger.Warn("qBittorrent 下载任务和文件清理失败", "source", "download", "job_id", job.ID, "qbit_hash", torrent.Hash, "error", err)
+				continue
+			}
+			s.logger.Info("qBittorrent 下载任务和文件已清理", "source", "download", "job_id", job.ID, "qbit_hash", torrent.Hash)
+		} else {
+			s.logger.Info("qBittorrent 下载任务已不存在，跳过任务删除", "source", "download", "job_id", job.ID)
 		}
-		s.logger.Info("qBittorrent 下载任务和文件已清理", "source", "download", "job_id", jobID, "qbit_hash", torrent.Hash)
-	} else {
-		s.logger.Info("qBittorrent 下载任务已不存在，跳过任务删除", "source", "download", "job_id", jobID)
+		if err := client.deleteTags(ctx, []string{tag}); err != nil {
+			s.logger.Warn("qBittorrent 单集标签清理失败", "source", "download", "job_id", job.ID, "tag", tag, "error", err)
+		}
+		cleaned = append(cleaned, job.ID)
 	}
-	if err := client.deleteTags(ctx, []string{tag}); err != nil {
-		s.logger.Warn("qBittorrent 单集标签清理失败", "source", "download", "job_id", jobID, "tag", tag, "error", err)
+	if failed > 0 {
+		return cleaned, fmt.Errorf("%w: %d qBittorrent cleanup operations failed", ErrQBitUnavailable, failed)
 	}
-	return nil
+	return cleaned, nil
 }
 
-func (s *Service) downloadJobForCleanup(ctx context.Context, jobID int64) (activeJob, error) {
-	var job activeJob
-	err := s.db.QueryRowContext(ctx, `
+func (s *Service) downloadJobsForCleanup(ctx context.Context, jobIDs []int64) ([]activeJob, error) {
+	if len(jobIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(jobIDs))
+	args := make([]any, len(jobIDs))
+	for index, jobID := range jobIDs {
+		placeholders[index] = "?"
+		args[index] = jobID
+	}
+	rows, err := s.db.QueryContext(ctx, `
 SELECT id, subscription_item_id, qbit_hash, save_path, status
 FROM download_jobs
-WHERE id = ?`, jobID).Scan(&job.ID, &job.SubscriptionItemID, &job.QBitHash, &job.SavePath, &job.Status)
-	if errors.Is(err, sql.ErrNoRows) {
-		return activeJob{}, ErrDownloadJobNotFound
+WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
 	}
-	return job, err
+	defer rows.Close()
+	jobs := make([]activeJob, 0, len(jobIDs))
+	for rows.Next() {
+		var job activeJob
+		if err := rows.Scan(&job.ID, &job.SubscriptionItemID, &job.QBitHash, &job.SavePath, &job.Status); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
 }
 
 func (s *Service) failedJob(ctx context.Context, jobID int64) (activeJob, error) {
@@ -855,4 +902,20 @@ func nullableInt64(value sql.NullInt64) *int64 {
 	}
 	result := value.Int64
 	return &result
+}
+
+func uniquePositiveInt64s(values []int64) []int64 {
+	seen := make(map[int64]struct{}, len(values))
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

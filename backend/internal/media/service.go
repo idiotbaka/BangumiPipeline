@@ -36,6 +36,9 @@ const (
 	CoverStatusPending   = "pending"
 	CoverStatusCompleted = "completed"
 	CoverStatusFailed    = "failed"
+
+	completionCleanupWarningPrefix = "最终产物已完成，但 qBittorrent 下载清理失败:"
+	completedDownloadCleanupLimit  = 50
 )
 
 var (
@@ -61,6 +64,10 @@ type Config struct {
 
 type DownloadCleaner interface {
 	CleanupCompletedQBitTask(context.Context, int64) error
+}
+
+type BatchDownloadCleaner interface {
+	CleanupCompletedQBitTasks(context.Context, []int64) ([]int64, error)
 }
 
 type MetadataRefresher interface {
@@ -264,6 +271,12 @@ type coverCandidate struct {
 	CoverStatus string
 }
 
+type completedDownloadCleanupCandidate struct {
+	MediaJobID    int64
+	DownloadJobID int64
+	OutputPath    string
+}
+
 type episodeReplacementJob struct {
 	ID         int64
 	Status     string
@@ -310,6 +323,10 @@ func (s *Service) Execute(ctx context.Context) error {
 	coverBackfilled, err := s.backfillMissingCovers(ctx)
 	if err != nil {
 		return fmt.Errorf("补齐视频封面图: %w", err)
+	}
+	qbitCleaned, err := s.cleanupCompletedDownloads(ctx)
+	if err != nil {
+		s.logger.Warn("历史已完成 qBittorrent 下载清理失败", "source", "media", "cleaned", qbitCleaned, "error", err)
 	}
 
 	planning, err := s.planPendingJobs(ctx)
@@ -360,14 +377,15 @@ func (s *Service) Execute(ctx context.Context) error {
 	if processed == 0 {
 		s.logger.Info("媒体处理任务完成：没有可执行视频", "source", "media",
 			"enqueued", enqueued, "planned", planning.planned, "plan_failed", planning.planFailed,
-			"ffmpeg_deferred", planning.deferredFFmpeg, "cover_backfilled", coverBackfilled)
+			"ffmpeg_deferred", planning.deferredFFmpeg, "cover_backfilled", coverBackfilled,
+			"qbit_cleaned", qbitCleaned)
 		return nil
 	}
 	s.logger.Info("媒体处理任务完成", "source", "media",
 		"enqueued", enqueued, "planned", planning.planned, "plan_failed", planning.planFailed,
 		"processed", processed, "copied", copied, "ffmpeg_jobs", ffmpegJobs,
 		"copy_queue", len(planning.copyJobs), "ffmpeg_deferred", planning.deferredFFmpeg,
-		"cover_backfilled", coverBackfilled)
+		"cover_backfilled", coverBackfilled, "qbit_cleaned", qbitCleaned)
 	return nil
 }
 
@@ -1455,7 +1473,7 @@ func (s *Service) processPlannedJob(ctx context.Context, job plannedJob) (proces
 		return result, err
 	}
 	if err := s.cleanupDownload(ctx, job.pendingJob); err != nil {
-		message := "最终产物已完成，但 qBittorrent 下载清理失败: " + err.Error()
+		message := completionCleanupWarningPrefix + " " + err.Error()
 		_ = s.recordCompletionWarning(ctx, job.ID, message)
 		s.logger.Warn("媒体处理完成后清理 qBittorrent 下载失败", "source", "media", "media_job_id", job.ID, "download_job_id", job.DownloadJobID, "error", err)
 	} else {
@@ -1471,6 +1489,111 @@ func (s *Service) cleanupDownload(ctx context.Context, job pendingJob) error {
 		return nil
 	}
 	return s.cleaner.CleanupCompletedQBitTask(ctx, job.DownloadJobID)
+}
+
+func (s *Service) cleanupCompletedDownloads(ctx context.Context) (int, error) {
+	if s.cleaner == nil {
+		return 0, nil
+	}
+	candidates, err := s.completedDownloadCleanupCandidates(ctx, completedDownloadCleanupLimit)
+	if err != nil {
+		return 0, err
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	downloadJobIDs := make([]int64, 0, len(candidates))
+	for _, candidate := range candidates {
+		exists, err := fileExists(candidate.OutputPath)
+		if err != nil {
+			s.logger.Warn("检查已完成媒体产物失败，跳过 qBittorrent 清理兜底", "source", "media",
+				"media_job_id", candidate.MediaJobID, "download_job_id", candidate.DownloadJobID, "error", err)
+			continue
+		}
+		if !exists {
+			s.logger.Warn("已完成媒体产物不存在，跳过 qBittorrent 清理兜底", "source", "media",
+				"media_job_id", candidate.MediaJobID, "download_job_id", candidate.DownloadJobID, "output_file", filepath.Base(candidate.OutputPath))
+			continue
+		}
+		downloadJobIDs = append(downloadJobIDs, candidate.DownloadJobID)
+	}
+	if len(downloadJobIDs) == 0 {
+		return 0, nil
+	}
+
+	cleanedDownloadJobIDs := make([]int64, 0, len(downloadJobIDs))
+	if batchCleaner, ok := s.cleaner.(BatchDownloadCleaner); ok {
+		cleaned, err := batchCleaner.CleanupCompletedQBitTasks(ctx, downloadJobIDs)
+		cleanedDownloadJobIDs = append(cleanedDownloadJobIDs, cleaned...)
+		if clearErr := s.clearCompletionCleanupWarnings(ctx, cleanedDownloadJobIDs); clearErr != nil {
+			return len(cleanedDownloadJobIDs), clearErr
+		}
+		return len(cleanedDownloadJobIDs), err
+	}
+
+	var firstErr error
+	for _, downloadJobID := range downloadJobIDs {
+		if err := s.cleaner.CleanupCompletedQBitTask(ctx, downloadJobID); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			s.logger.Warn("历史已完成 qBittorrent 下载清理失败", "source", "media", "download_job_id", downloadJobID, "error", err)
+			continue
+		}
+		cleanedDownloadJobIDs = append(cleanedDownloadJobIDs, downloadJobID)
+	}
+	if err := s.clearCompletionCleanupWarnings(ctx, cleanedDownloadJobIDs); err != nil {
+		return len(cleanedDownloadJobIDs), err
+	}
+	return len(cleanedDownloadJobIDs), firstErr
+}
+
+func (s *Service) completedDownloadCleanupCandidates(ctx context.Context, limit int) ([]completedDownloadCleanupCandidate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT mj.id, mj.download_job_id, mj.output_path
+FROM media_jobs mj
+JOIN download_jobs dj ON dj.id = mj.download_job_id
+WHERE mj.status = ?
+  AND mj.output_path != ''
+  AND dj.status = ?
+  AND mj.error_message LIKE ?
+ORDER BY COALESCE(mj.completed_at, mj.updated_at), mj.id
+LIMIT ?`, StatusCompleted, downloadStatusCompleted, completionCleanupWarningPrefix+"%", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	candidates := make([]completedDownloadCleanupCandidate, 0)
+	for rows.Next() {
+		var candidate completedDownloadCleanupCandidate
+		if err := rows.Scan(&candidate.MediaJobID, &candidate.DownloadJobID, &candidate.OutputPath); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, rows.Err()
+}
+
+func (s *Service) clearCompletionCleanupWarnings(ctx context.Context, downloadJobIDs []int64) error {
+	downloadJobIDs = uniquePositiveInt64s(downloadJobIDs)
+	if len(downloadJobIDs) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(downloadJobIDs))
+	args := make([]any, 0, len(downloadJobIDs)+3)
+	args = append(args, "", StatusCompleted, completionCleanupWarningPrefix+"%")
+	for index, downloadJobID := range downloadJobIDs {
+		placeholders[index] = "?"
+		args = append(args, downloadJobID)
+	}
+	_, err := s.db.ExecContext(ctx, `
+UPDATE media_jobs
+SET error_message = ?
+WHERE status = ?
+  AND error_message LIKE ?
+  AND download_job_id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	return err
 }
 
 func (s *Service) refreshAnimeMetadataOncePerDay(ctx context.Context, bangumiID int64) {
@@ -2503,4 +2626,20 @@ func nullableInt64(value sql.NullInt64) *int64 {
 	}
 	result := value.Int64
 	return &result
+}
+
+func uniquePositiveInt64s(values []int64) []int64 {
+	seen := make(map[int64]struct{}, len(values))
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

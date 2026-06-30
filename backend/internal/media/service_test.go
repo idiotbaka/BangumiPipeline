@@ -142,6 +142,48 @@ func TestPlanPendingJobsSplitsCopyAndSingleFFmpegLine(t *testing.T) {
 	assertMediaJobStatus(t, ctx, db, deferredID, StatusPending)
 }
 
+func TestCleanupCompletedDownloadsRetriesFailedQBitCleanup(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	insertCompletedMediaJob(t, ctx, db, 1001, 1, "episode", "03", now)
+	var mediaJobID, downloadJobID int64
+	if err := db.QueryRowContext(ctx, "SELECT id, download_job_id FROM media_jobs LIMIT 1").Scan(&mediaJobID, &downloadJobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "UPDATE media_jobs SET error_message = ? WHERE id = ?", completionCleanupWarningPrefix+" old error", mediaJobID); err != nil {
+		t.Fatal(err)
+	}
+
+	cleaner := &batchDownloadCleanerRecorder{}
+	service := NewService(db, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{
+		MediaDir:        t.TempDir(),
+		DownloadCleaner: cleaner,
+	})
+	cleaned, err := service.cleanupCompletedDownloads(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleaned != 1 {
+		t.Fatalf("expected one cleaned download, got %d", cleaned)
+	}
+	if len(cleaner.batchIDs) != 1 || cleaner.batchIDs[0] != downloadJobID {
+		t.Fatalf("unexpected cleaned ids: %+v, want %d", cleaner.batchIDs, downloadJobID)
+	}
+	var message string
+	if err := db.QueryRowContext(ctx, "SELECT error_message FROM media_jobs WHERE id = ?", mediaJobID).Scan(&message); err != nil {
+		t.Fatal(err)
+	}
+	if message != "" {
+		t.Fatalf("expected cleanup warning to be cleared, got %q", message)
+	}
+}
+
 type metadataRefreshRecorder struct {
 	ids []int64
 }
@@ -149,6 +191,20 @@ type metadataRefreshRecorder struct {
 func (r *metadataRefreshRecorder) RefreshSubject(_ context.Context, bangumiID int64) error {
 	r.ids = append(r.ids, bangumiID)
 	return nil
+}
+
+type batchDownloadCleanerRecorder struct {
+	batchIDs []int64
+}
+
+func (r *batchDownloadCleanerRecorder) CleanupCompletedQBitTask(_ context.Context, jobID int64) error {
+	r.batchIDs = append(r.batchIDs, jobID)
+	return nil
+}
+
+func (r *batchDownloadCleanerRecorder) CleanupCompletedQBitTasks(_ context.Context, jobIDs []int64) ([]int64, error) {
+	r.batchIDs = append(r.batchIDs, jobIDs...)
+	return append([]int64(nil), jobIDs...), nil
 }
 
 func assertMediaJobStatus(t *testing.T, ctx context.Context, db *sql.DB, jobID int64, want string) {
