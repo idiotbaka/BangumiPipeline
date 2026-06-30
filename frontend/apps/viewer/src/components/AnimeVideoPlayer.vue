@@ -31,6 +31,8 @@ const bufferEnd = ref(0)
 let previousBodyOverflow = ''
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
+let bufferTimer: ReturnType<typeof setInterval> | null = null
+const bufferRangeToleranceSeconds = 0.5
 
 const progressStyle = computed(() => {
   const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
@@ -53,6 +55,7 @@ watch(
     resumeApplied.value = false
     hasPlayed.value = false
     stopProgressTimer()
+    stopBufferTimer()
     showControls()
     await nextTick()
     video.value?.load()
@@ -65,6 +68,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleWindowKeydown)
   reportProgress()
   stopProgressTimer()
+  stopBufferTimer()
   stopControlsTimer()
   exitWebFullscreen()
 })
@@ -105,15 +109,15 @@ function updateBuffered() {
   for (let index = 0; index < element.buffered.length; index++) {
     const start = element.buffered.start(index)
     const rangeEnd = element.buffered.end(index)
-    if (time >= start && time <= rangeEnd) {
-      end = rangeEnd
-      break
-    }
-    if (rangeEnd < time) {
+    if (time + bufferRangeToleranceSeconds >= start && time - bufferRangeToleranceSeconds <= rangeEnd) {
       end = Math.max(end, rangeEnd)
       continue
     }
+    if (rangeEnd < time) {
+      continue
+    }
     if (start > time) {
+      end = Math.max(end, rangeEnd)
       break
     }
   }
@@ -137,6 +141,8 @@ function handlePlay() {
   playing.value = true
   hasPlayed.value = true
   startProgressTimer()
+  startBufferTimer()
+  updateBuffered()
   scheduleControlsHide()
 }
 
@@ -145,6 +151,7 @@ function handlePause() {
   showControls()
   reportProgress()
   stopProgressTimer()
+  stopBufferTimer()
 }
 
 function handleEnded() {
@@ -153,15 +160,19 @@ function handleEnded() {
   currentTime.value = duration.value
   reportProgress()
   stopProgressTimer()
+  stopBufferTimer()
 }
 
 function handleWaiting() {
   buffering.value = true
+  updateBuffered()
   showControls()
 }
 
 function handlePlaying() {
   buffering.value = false
+  startBufferTimer()
+  updateBuffered()
   scheduleControlsHide()
 }
 
@@ -173,6 +184,7 @@ function handleCanPlay() {
 
 function handleError() {
   errorMessage.value = '视频加载失败，请稍后重试'
+  stopBufferTimer()
   showControls()
 }
 
@@ -211,6 +223,19 @@ function stopProgressTimer() {
   if (progressTimer !== null) {
     clearInterval(progressTimer)
     progressTimer = null
+  }
+}
+
+function startBufferTimer() {
+  stopBufferTimer()
+  updateBuffered()
+  bufferTimer = setInterval(updateBuffered, 1_000)
+}
+
+function stopBufferTimer() {
+  if (bufferTimer !== null) {
+    clearInterval(bufferTimer)
+    bufferTimer = null
   }
 }
 
