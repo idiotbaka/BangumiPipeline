@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -107,6 +108,40 @@ VALUES (?, ?, ?, ?, ?)`, 1001, "https://bgm.tv/subject/1001", "Original Anime", 
 	}
 }
 
+func TestPlanPendingJobsSplitsCopyAndSingleFFmpegLine(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	service := NewService(db, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{MediaDir: t.TempDir()})
+	service.now = func() time.Time { return now }
+
+	copyID := insertPlannedPendingMediaJob(t, ctx, db, 1001, "01", "copy", false, now)
+	ffmpegID := insertPlannedPendingMediaJob(t, ctx, db, 1001, "02", "burn_subtitles", true, now.Add(time.Second))
+	deferredID := insertPlannedPendingMediaJob(t, ctx, db, 1001, "03", "transcode", true, now.Add(2*time.Second))
+
+	result, err := service.planPendingJobs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.planned != 3 || result.planFailed != 0 || result.deferredFFmpeg != 1 {
+		t.Fatalf("unexpected planning counts: %+v", result)
+	}
+	if len(result.copyJobs) != 1 || result.copyJobs[0].ID != copyID {
+		t.Fatalf("expected one copy job %d, got %+v", copyID, result.copyJobs)
+	}
+	if result.ffmpegJob == nil || result.ffmpegJob.ID != ffmpegID {
+		t.Fatalf("expected ffmpeg job %d, got %+v", ffmpegID, result.ffmpegJob)
+	}
+	assertMediaJobStatus(t, ctx, db, copyID, StatusTranscoding)
+	assertMediaJobStatus(t, ctx, db, ffmpegID, StatusTranscoding)
+	assertMediaJobStatus(t, ctx, db, deferredID, StatusPending)
+}
+
 type metadataRefreshRecorder struct {
 	ids []int64
 }
@@ -114,6 +149,80 @@ type metadataRefreshRecorder struct {
 func (r *metadataRefreshRecorder) RefreshSubject(_ context.Context, bangumiID int64) error {
 	r.ids = append(r.ids, bangumiID)
 	return nil
+}
+
+func assertMediaJobStatus(t *testing.T, ctx context.Context, db *sql.DB, jobID int64, want string) {
+	t.Helper()
+	var got string
+	if err := db.QueryRowContext(ctx, "SELECT status FROM media_jobs WHERE id = ?", jobID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("media job %d status = %q, want %q", jobID, got, want)
+	}
+}
+
+func insertPlannedPendingMediaJob(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64, episodeNumber, action string, needsTranscode bool, now time.Time) int64 {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `
+INSERT OR IGNORE INTO anime_metadata(bangumi_id, url, name, name_cn, created_at)
+VALUES (?, ?, ?, ?, ?)`, bangumiID, fmt.Sprintf("https://bgm.tv/subject/%d", bangumiID), "Original Anime", "原作标题", now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	key := fmt.Sprintf("planned-%s", episodeNumber)
+	_, err := db.ExecContext(ctx, `
+INSERT INTO subscription_items(
+    item_key, guid, title, match_status, bangumi_id, matched_name, parsed_name,
+    season_number, episode_type, episode_number, binding_status, bound_bangumi_id,
+    bound_anime_name, bound_season_number, bound_episode_type, bound_episode_number,
+    binding_note, bound_at, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key, key, key, "matched", bangumiID, "原作标题", "原作标题",
+		1, "episode", episodeNumber, "bound", bangumiID,
+		"原作标题", 1, "episode", episodeNumber,
+		"手动绑定", now.Unix(), now.Unix(), now.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var itemID int64
+	if err := db.QueryRowContext(ctx, "SELECT id FROM subscription_items WHERE item_key = ?", key).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.ExecContext(ctx, `
+INSERT INTO download_jobs(subscription_item_id, status, source_url, save_path, created_at, updated_at)
+VALUES (?, 'completed', 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567', ?, ?, ?)`,
+		itemID, filepath.Join(t.TempDir(), "download-"+episodeNumber), now.Unix(), now.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloadJobID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	needs := 0
+	if needsTranscode {
+		needs = 1
+	}
+	result, err = db.ExecContext(ctx, `
+INSERT INTO media_jobs(
+    download_job_id, subscription_item_id, bangumi_id, anime_name, season_number,
+    episode_type, episode_number, status, source_path, output_path,
+    video_codec, audio_codec, has_internal_subtitles, has_external_subtitles,
+    needs_transcode, action, total_duration_ms, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		downloadJobID, itemID, bangumiID, "原作标题", 1,
+		"episode", episodeNumber, StatusPending,
+		filepath.Join(t.TempDir(), "source-"+episodeNumber+".mp4"),
+		filepath.Join(t.TempDir(), "output-"+episodeNumber+".mp4"),
+		"h264", "aac", 0, 0, needs, action, int64(90_000), now.Unix(), now.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jobID
 }
 
 func insertCompletedMediaJob(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64, seasonNumber int, episodeType, episodeNumber string, now time.Time) (string, string) {

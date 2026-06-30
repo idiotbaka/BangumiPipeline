@@ -122,16 +122,26 @@ type Job struct {
 }
 
 type pendingJob struct {
-	ID                 int64
-	DownloadJobID      int64
-	SubscriptionItemID int64
-	BangumiID          int64
-	AnimeName          string
-	SeasonNumber       int
-	EpisodeType        string
-	EpisodeNumber      string
-	SavePath           string
-	StorageRoot        string
+	ID                   int64
+	DownloadJobID        int64
+	SubscriptionItemID   int64
+	BangumiID            int64
+	AnimeName            string
+	SeasonNumber         int
+	EpisodeType          string
+	EpisodeNumber        string
+	SavePath             string
+	StorageRoot          string
+	SourcePath           string
+	SubtitlePath         string
+	OutputPath           string
+	VideoCodec           string
+	AudioCodec           string
+	HasInternalSubtitles bool
+	HasExternalSubtitles bool
+	NeedsTranscode       bool
+	Action               string
+	TotalDurationMS      int64
 }
 
 type mediaFile struct {
@@ -174,7 +184,27 @@ type mediaPlan struct {
 type processResult struct {
 	action         string
 	needsTranscode bool
-	planned        bool
+}
+
+type plannedJob struct {
+	pendingJob
+	plan mediaPlan
+}
+
+type pendingPlanningResult struct {
+	planned        int
+	planFailed     int
+	copyJobs       []plannedJob
+	ffmpegJob      *plannedJob
+	deferredFFmpeg int
+	stoppedOnError bool
+}
+
+type processLineResult struct {
+	processed  int
+	copied     int
+	ffmpegJobs int
+	err        error
 }
 
 type StorageMoveResult struct {
@@ -282,70 +312,251 @@ func (s *Service) Execute(ctx context.Context) error {
 		return fmt.Errorf("补齐视频封面图: %w", err)
 	}
 
+	planning, err := s.planPendingJobs(ctx)
+	if err != nil {
+		return err
+	}
+	if planning.planned > 0 || planning.planFailed > 0 || planning.deferredFFmpeg > 0 {
+		s.logger.Info("媒体处理规划完成", "source", "media",
+			"planned", planning.planned, "copy_queue", len(planning.copyJobs),
+			"ffmpeg_selected", planning.ffmpegJob != nil, "ffmpeg_deferred", planning.deferredFFmpeg,
+			"plan_failed", planning.planFailed)
+	}
+
 	processed := 0
 	copied := 0
 	ffmpegJobs := 0
-	for {
-		job, ok, err := s.reserveNextPendingJob(ctx)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			break
-		}
-		result, err := s.processJob(ctx, job)
-		if err != nil {
-			return err
-		}
-		processed++
-		if result.action == "copy" {
-			copied++
-		}
-		if !result.planned || result.needsTranscode {
-			if result.needsTranscode {
-				ffmpegJobs++
-			}
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	resultCh := make(chan processLineResult, 2)
+	lines := 0
+	if len(planning.copyJobs) > 0 {
+		lines++
+		go func() {
+			resultCh <- s.processCopyLine(runCtx, planning.copyJobs)
+		}()
+	}
+	if planning.ffmpegJob != nil {
+		lines++
+		go func() {
+			resultCh <- s.processFFmpegLine(runCtx, *planning.ffmpegJob)
+		}()
+	}
+	var firstErr error
+	for i := 0; i < lines; i++ {
+		result := <-resultCh
+		processed += result.processed
+		copied += result.copied
+		ffmpegJobs += result.ffmpegJobs
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+			cancel()
 		}
 	}
+	if firstErr != nil {
+		return firstErr
+	}
+
 	if processed == 0 {
-		s.logger.Info("媒体处理任务完成：没有待处理视频", "source", "media", "enqueued", enqueued, "cover_backfilled", coverBackfilled)
+		s.logger.Info("媒体处理任务完成：没有可执行视频", "source", "media",
+			"enqueued", enqueued, "planned", planning.planned, "plan_failed", planning.planFailed,
+			"ffmpeg_deferred", planning.deferredFFmpeg, "cover_backfilled", coverBackfilled)
 		return nil
 	}
-	s.logger.Info("媒体处理任务完成", "source", "media", "enqueued", enqueued, "processed", processed, "copied", copied, "ffmpeg_jobs", ffmpegJobs, "cover_backfilled", coverBackfilled)
+	s.logger.Info("媒体处理任务完成", "source", "media",
+		"enqueued", enqueued, "planned", planning.planned, "plan_failed", planning.planFailed,
+		"processed", processed, "copied", copied, "ffmpeg_jobs", ffmpegJobs,
+		"copy_queue", len(planning.copyJobs), "ffmpeg_deferred", planning.deferredFFmpeg,
+		"cover_backfilled", coverBackfilled)
 	return nil
 }
 
-func (s *Service) reserveNextPendingJob(ctx context.Context) (pendingJob, bool, error) {
-	s.storageMu.Lock()
-	defer s.storageMu.Unlock()
-	job, ok, err := s.nextPendingJob(ctx)
-	if err != nil || !ok {
-		return job, ok, err
+func (s *Service) planPendingJobs(ctx context.Context) (pendingPlanningResult, error) {
+	jobs, err := s.pendingJobs(ctx)
+	if err != nil {
+		return pendingPlanningResult{}, err
 	}
+	result := pendingPlanningResult{copyJobs: make([]plannedJob, 0)}
+	for _, candidate := range jobs {
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		default:
+		}
+
+		var (
+			planned plannedJob
+			reserve bool
+		)
+		s.storageMu.Lock()
+		job, ok, err := s.pendingJobByID(ctx, candidate.ID)
+		if err == nil && ok {
+			plan, planErr := s.planForPendingJob(ctx, job)
+			if planErr != nil {
+				if markErr := s.markFailed(ctx, job.ID, planErr.Error()); markErr != nil {
+					err = markErr
+				} else {
+					result.planFailed++
+					result.stoppedOnError = true
+					s.logger.Error("媒体处理规划失败", "source", "media", "media_job_id", job.ID, "error", planErr)
+				}
+			} else {
+				result.planned++
+				planned = plannedJob{pendingJob: job, plan: plan}
+				if !plan.needsTranscode {
+					reserve = true
+				} else if result.ffmpegJob == nil {
+					reserve = true
+				} else {
+					result.deferredFFmpeg++
+				}
+				if reserve {
+					reserved, reserveErr := s.reservePendingJob(ctx, job.ID)
+					if reserveErr != nil {
+						err = reserveErr
+					} else if reserved {
+						if plan.needsTranscode {
+							copy := planned
+							result.ffmpegJob = &copy
+						} else {
+							result.copyJobs = append(result.copyJobs, planned)
+						}
+					}
+				}
+			}
+		}
+		s.storageMu.Unlock()
+
+		if err != nil {
+			return result, err
+		}
+		if result.stoppedOnError {
+			break
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) pendingJobs(ctx context.Context) ([]pendingJob, error) {
+	rows, err := s.db.QueryContext(ctx, pendingJobSelect+`
+FROM media_jobs mj
+JOIN download_jobs dj ON dj.id = mj.download_job_id
+JOIN anime_metadata am ON am.bangumi_id = mj.bangumi_id
+WHERE mj.status = ?
+ORDER BY mj.created_at, mj.id`, s.mediaDir, StatusPending)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := make([]pendingJob, 0)
+	for rows.Next() {
+		job, err := scanPendingJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func (s *Service) pendingJobByID(ctx context.Context, jobID int64) (pendingJob, bool, error) {
+	job, err := scanPendingJob(s.db.QueryRowContext(ctx, pendingJobSelect+`
+FROM media_jobs mj
+JOIN download_jobs dj ON dj.id = mj.download_job_id
+JOIN anime_metadata am ON am.bangumi_id = mj.bangumi_id
+WHERE mj.id = ? AND mj.status = ?`, s.mediaDir, jobID, StatusPending))
+	if errors.Is(err, sql.ErrNoRows) {
+		return pendingJob{}, false, nil
+	}
+	if err != nil {
+		return pendingJob{}, false, err
+	}
+	return job, true, nil
+}
+
+func (s *Service) planForPendingJob(ctx context.Context, job pendingJob) (mediaPlan, error) {
+	if plan, ok := persistedPlan(job); ok {
+		return plan, nil
+	}
+	plan, err := s.planJob(ctx, job)
+	if err != nil {
+		return mediaPlan{}, err
+	}
+	if err := s.persistPlan(ctx, job.ID, plan); err != nil {
+		return mediaPlan{}, err
+	}
+	return plan, nil
+}
+
+func persistedPlan(job pendingJob) (mediaPlan, bool) {
+	if strings.TrimSpace(job.Action) == "" || strings.TrimSpace(job.SourcePath) == "" || strings.TrimSpace(job.OutputPath) == "" {
+		return mediaPlan{}, false
+	}
+	return mediaPlan{
+		sourcePath:           job.SourcePath,
+		subtitlePath:         job.SubtitlePath,
+		outputPath:           job.OutputPath,
+		videoCodec:           job.VideoCodec,
+		audioCodec:           job.AudioCodec,
+		hasInternalSubtitles: job.HasInternalSubtitles,
+		hasExternalSubtitles: job.HasExternalSubtitles,
+		needsTranscode:       job.NeedsTranscode,
+		action:               job.Action,
+		totalDurationMS:      job.TotalDurationMS,
+	}, true
+}
+
+func (s *Service) reservePendingJob(ctx context.Context, jobID int64) (bool, error) {
 	now := s.now().UTC().Unix()
 	result, err := s.db.ExecContext(ctx, `
 UPDATE media_jobs
 SET status = ?, error_message = '', progress = 0, processed_duration_ms = 0,
-    total_duration_ms = 0, progress_updated_at = NULL, started_at = COALESCE(started_at, ?),
+    progress_updated_at = NULL, started_at = COALESCE(started_at, ?),
     failed_at = NULL, updated_at = ?
-WHERE id = ? AND status = ?`, StatusTranscoding, now, now, job.ID, StatusPending)
+WHERE id = ? AND status = ?`, StatusTranscoding, now, now, jobID, StatusPending)
 	if err != nil {
-		return pendingJob{}, false, err
+		return false, err
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return pendingJob{}, false, err
+		return false, err
 	}
-	if affected == 0 {
-		return pendingJob{}, false, nil
+	return affected > 0, nil
+}
+
+func (s *Service) processCopyLine(ctx context.Context, jobs []plannedJob) processLineResult {
+	var result processLineResult
+	for _, job := range jobs {
+		select {
+		case <-ctx.Done():
+			result.err = ctx.Err()
+			return result
+		default:
+		}
+		processed, err := s.processPlannedJob(ctx, job)
+		if err != nil {
+			result.err = err
+			return result
+		}
+		result.processed++
+		if processed.action == "copy" {
+			result.copied++
+		}
 	}
-	return job, true, nil
+	return result
+}
+
+func (s *Service) processFFmpegLine(ctx context.Context, job plannedJob) processLineResult {
+	processed, err := s.processPlannedJob(ctx, job)
+	result := processLineResult{err: err}
+	if err != nil {
+		return result
+	}
+	result.processed = 1
+	if processed.needsTranscode {
+		result.ffmpegJobs = 1
+	}
+	return result
 }
 
 func (s *Service) ListJobs(ctx context.Context, page, pageSize int, status string) (JobPage, error) {
@@ -1219,46 +1430,14 @@ WHERE status = ?`, StatusPending, now, StatusTranscoding)
 	return nil
 }
 
-func (s *Service) nextPendingJob(ctx context.Context) (pendingJob, bool, error) {
-	var job pendingJob
-	err := s.db.QueryRowContext(ctx, `
-SELECT mj.id, mj.download_job_id, mj.subscription_item_id, mj.bangumi_id, mj.anime_name,
-       mj.season_number, mj.episode_type, mj.episode_number, dj.save_path,
-       COALESCE(NULLIF(am.media_storage_root, ''), ?)
-FROM media_jobs mj
-JOIN download_jobs dj ON dj.id = mj.download_job_id
-JOIN anime_metadata am ON am.bangumi_id = mj.bangumi_id
-WHERE mj.status = ?
-ORDER BY mj.created_at, mj.id
-LIMIT 1`, s.mediaDir, StatusPending).Scan(
-		&job.ID, &job.DownloadJobID, &job.SubscriptionItemID, &job.BangumiID,
-		&job.AnimeName, &job.SeasonNumber, &job.EpisodeType, &job.EpisodeNumber, &job.SavePath,
-		&job.StorageRoot,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return pendingJob{}, false, nil
+func (s *Service) processPlannedJob(ctx context.Context, job plannedJob) (processResult, error) {
+	plan := job.plan
+	result := processResult{
+		action:         plan.action,
+		needsTranscode: plan.needsTranscode,
 	}
-	if err != nil {
-		return pendingJob{}, false, err
-	}
-	return job, true, nil
-}
-
-func (s *Service) processJob(ctx context.Context, job pendingJob) (processResult, error) {
-	var result processResult
-	plan, err := s.planJob(ctx, job)
-	if err != nil {
-		_ = s.markFailed(ctx, job.ID, err.Error())
-		return result, nil
-	}
-	result.planned = true
-	result.action = plan.action
-	result.needsTranscode = plan.needsTranscode
-	if err := s.persistPlan(ctx, job.ID, plan); err != nil {
-		return result, err
-	}
-
 	s.logger.Info("媒体处理开始", "source", "media", "media_job_id", job.ID, "action", plan.action, "source_file", filepath.Base(plan.sourcePath))
+	var err error
 	if plan.action == "copy" {
 		err = copyToFinal(plan.sourcePath, plan.outputPath)
 	} else {
@@ -1275,7 +1454,7 @@ func (s *Service) processJob(ctx context.Context, job pendingJob) (processResult
 	if err := s.markCompleted(ctx, job.ID); err != nil {
 		return result, err
 	}
-	if err := s.cleanupDownload(ctx, job); err != nil {
+	if err := s.cleanupDownload(ctx, job.pendingJob); err != nil {
 		message := "最终产物已完成，但 qBittorrent 下载清理失败: " + err.Error()
 		_ = s.recordCompletionWarning(ctx, job.ID, message)
 		s.logger.Warn("媒体处理完成后清理 qBittorrent 下载失败", "source", "media", "media_job_id", job.ID, "download_job_id", job.DownloadJobID, "error", err)
@@ -2262,6 +2441,15 @@ SELECT mj.id, mj.download_job_id, mj.subscription_item_id, si.title, mj.bangumi_
        mj.created_at, mj.updated_at
 `
 
+const pendingJobSelect = `
+SELECT mj.id, mj.download_job_id, mj.subscription_item_id, mj.bangumi_id,
+       mj.anime_name, mj.season_number, mj.episode_type, mj.episode_number, dj.save_path,
+       COALESCE(NULLIF(am.media_storage_root, ''), ?),
+       mj.source_path, mj.subtitle_path, mj.output_path, mj.video_codec, mj.audio_codec,
+       mj.has_internal_subtitles, mj.has_external_subtitles, mj.needs_transcode,
+       mj.action, mj.total_duration_ms
+`
+
 func scanJob(row interface{ Scan(dest ...any) error }) (Job, error) {
 	var job Job
 	var progressUpdatedAt, startedAt, completedAt, failedAt sql.NullInt64
@@ -2285,6 +2473,20 @@ func scanJob(row interface{ Scan(dest ...any) error }) (Job, error) {
 	job.StartedAt = nullableInt64(startedAt)
 	job.CompletedAt = nullableInt64(completedAt)
 	job.FailedAt = nullableInt64(failedAt)
+	return job, nil
+}
+
+func scanPendingJob(row interface{ Scan(dest ...any) error }) (pendingJob, error) {
+	var job pendingJob
+	if err := row.Scan(
+		&job.ID, &job.DownloadJobID, &job.SubscriptionItemID, &job.BangumiID,
+		&job.AnimeName, &job.SeasonNumber, &job.EpisodeType, &job.EpisodeNumber,
+		&job.SavePath, &job.StorageRoot, &job.SourcePath, &job.SubtitlePath,
+		&job.OutputPath, &job.VideoCodec, &job.AudioCodec, &job.HasInternalSubtitles,
+		&job.HasExternalSubtitles, &job.NeedsTranscode, &job.Action, &job.TotalDurationMS,
+	); err != nil {
+		return pendingJob{}, err
+	}
 	return job, nil
 }
 
