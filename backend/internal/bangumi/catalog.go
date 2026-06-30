@@ -366,7 +366,7 @@ LIMIT ?`, where), args...)
 
 func (c *Catalog) ViewerHome(ctx context.Context) (ViewerHome, error) {
 	const hotLimit = 32
-	const recentLimit = 12
+	const recentLimit = 24
 
 	aggregates, err := c.viewerAnimeAggregates(ctx)
 	if err != nil {

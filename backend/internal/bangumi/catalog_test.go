@@ -2,6 +2,7 @@ package bangumi_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"bangumipipeline.local/server/internal/bangumi"
@@ -133,5 +134,68 @@ VALUES
 	}
 	if page.Items[0].BangumiID != 1003 || page.Items[1].BangumiID != 1002 {
 		t.Fatalf("anime were not sorted by air date desc: %+v", page.Items)
+	}
+}
+
+func TestViewerHomeRecentUpdatesReturnsTwentyFourCards(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openDatabase(t, ctx)
+	for index := 0; index < 30; index++ {
+		bangumiID := int64(5000 + index)
+		itemKey := fmt.Sprintf("recent-%02d", index)
+		updatedAt := int64(1_800_000_000 - index)
+		_, err := db.ExecContext(ctx, `
+INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, air_date, image_status, created_at)
+VALUES (?, ?, ?, ?, '2026-07-01', 'not_found', ?)`,
+			bangumiID, fmt.Sprintf("https://bgm.tv/subject/%d", bangumiID), fmt.Sprintf("Anime %02d", index), fmt.Sprintf("番剧 %02d", index), updatedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := db.ExecContext(ctx, `
+INSERT INTO subscription_items(
+    item_key, title, match_status, bangumi_id, season_number, episode_type, episode_number,
+    binding_status, bound_bangumi_id, bound_anime_name, bound_season_number,
+    bound_episode_type, bound_episode_number, created_at, updated_at
+) VALUES (?, ?, 'matched', ?, 1, 'episode', '1', 'bound', ?, ?, 1, 'episode', '1', ?, ?)`,
+			itemKey, itemKey, bangumiID, bangumiID, fmt.Sprintf("番剧 %02d", index), updatedAt, updatedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		itemID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err = db.ExecContext(ctx, `
+INSERT INTO download_jobs(subscription_item_id, status, source_url, created_at, updated_at)
+VALUES (?, 'completed', 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567', ?, ?)`,
+			itemID, updatedAt, updatedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		downloadJobID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = db.ExecContext(ctx, `
+INSERT INTO media_jobs(
+    download_job_id, subscription_item_id, bangumi_id, anime_name, season_number,
+    episode_type, episode_number, status, output_path, created_at, updated_at, completed_at
+) VALUES (?, ?, ?, ?, 1, 'episode', '1', 'completed', ?, ?, ?, ?)`,
+			downloadJobID, itemID, bangumiID, fmt.Sprintf("番剧 %02d", index), fmt.Sprintf("/media/%02d.mp4", index), updatedAt, updatedAt, updatedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	home, err := bangumi.NewCatalog(db).ViewerHome(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(home.RecentUpdates) != 24 {
+		t.Fatalf("expected 24 recent updates, got %d", len(home.RecentUpdates))
+	}
+	if home.RecentUpdates[0].BangumiID != 5000 || home.RecentUpdates[23].BangumiID != 5023 {
+		t.Fatalf("recent updates were not sorted and limited as expected: first=%+v last=%+v", home.RecentUpdates[0], home.RecentUpdates[23])
 	}
 }
