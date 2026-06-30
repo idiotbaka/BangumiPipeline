@@ -27,13 +27,18 @@ const webFullscreen = ref(false)
 const controlsVisible = ref(true)
 const resumeApplied = ref(false)
 const hasPlayed = ref(false)
+const bufferEnd = ref(0)
 let previousBodyOverflow = ''
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
 
 const progressStyle = computed(() => {
   const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
-  return { '--progress': `${progress}%` }
+  const buffered = duration.value > 0 ? (bufferEnd.value / duration.value) * 100 : progress
+  return {
+    '--progress': `${Math.max(0, Math.min(100, progress))}%`,
+    '--buffered': `${Math.max(progress, Math.min(100, buffered))}%`,
+  }
 })
 
 watch(
@@ -43,6 +48,7 @@ watch(
     buffering.value = false
     currentTime.value = 0
     duration.value = 0
+    bufferEnd.value = 0
     errorMessage.value = ''
     resumeApplied.value = false
     hasPlayed.value = false
@@ -80,10 +86,38 @@ async function togglePlay() {
 function updateDuration() {
   duration.value = Number.isFinite(video.value?.duration) ? video.value?.duration ?? 0 : 0
   applyResumePosition()
+  updateBuffered()
 }
 
 function updateTime() {
   currentTime.value = video.value?.currentTime ?? 0
+  updateBuffered()
+}
+
+function updateBuffered() {
+  const element = video.value
+  if (!element || duration.value <= 0 || element.buffered.length === 0) {
+    bufferEnd.value = currentTime.value
+    return
+  }
+  const time = element.currentTime
+  let end = time
+  for (let index = 0; index < element.buffered.length; index++) {
+    const start = element.buffered.start(index)
+    const rangeEnd = element.buffered.end(index)
+    if (time >= start && time <= rangeEnd) {
+      end = rangeEnd
+      break
+    }
+    if (rangeEnd < time) {
+      end = Math.max(end, rangeEnd)
+      continue
+    }
+    if (start > time) {
+      break
+    }
+  }
+  bufferEnd.value = Math.max(time, Math.min(duration.value, end))
 }
 
 function applyResumePosition() {
@@ -95,6 +129,7 @@ function applyResumePosition() {
   if (target > 0) {
     element.currentTime = target
     currentTime.value = target
+    updateBuffered()
   }
 }
 
@@ -132,6 +167,7 @@ function handlePlaying() {
 
 function handleCanPlay() {
   buffering.value = false
+  updateBuffered()
   if (playing.value) scheduleControlsHide()
 }
 
@@ -192,6 +228,7 @@ function seek(event: Event) {
   if (!video.value || !Number.isFinite(value)) return
   video.value.currentTime = value
   currentTime.value = value
+  updateBuffered()
 }
 
 function changeVolume(event: Event) {
@@ -277,7 +314,7 @@ function formatTime(value: number) {
       ref="video"
       :src="src"
       :poster="poster || undefined"
-      preload="metadata"
+      preload="auto"
       playsinline
       @click="togglePlay"
       @play="handlePlay"
@@ -286,9 +323,13 @@ function formatTime(value: number) {
       @waiting="handleWaiting"
       @playing="handlePlaying"
       @canplay="handleCanPlay"
+      @canplaythrough="updateBuffered"
       @loadedmetadata="updateDuration"
       @durationchange="updateDuration"
       @timeupdate="updateTime"
+      @progress="updateBuffered"
+      @seeking="updateBuffered"
+      @seeked="updateBuffered"
       @error="handleError"
     />
 
@@ -369,7 +410,7 @@ function formatTime(value: number) {
 .player-heading span { color: var(--cyan-300); font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; }
 .player-heading p { margin-top: 3px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .player-controls { position: absolute; right: 24px; bottom: 20px; left: 24px; transition: opacity 180ms ease, transform 180ms ease; }
-.timeline { width: 100%; height: 4px; appearance: none; cursor: pointer; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(255,255,255,.28) var(--progress) 100%); }
+.timeline { width: 100%; height: 4px; appearance: none; cursor: pointer; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(142,232,242,.58) var(--progress) var(--buffered), rgba(255,255,255,.28) var(--buffered) 100%); }
 .timeline::-webkit-slider-thumb { width: 13px; height: 13px; appearance: none; background: #fff; border: 3px solid var(--pink-400); transform: rotate(45deg); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
 .control-row { height: 46px; display: flex; align-items: flex-end; gap: 14px; }
 .play-control { width: 30px; height: 30px; display: grid; place-items: center; color: #fff; }
@@ -393,7 +434,7 @@ function formatTime(value: number) {
 .buffering-mark span { font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; }
 .player-error span { width: 42px; height: 42px; display: grid; place-items: center; color: var(--pink-300); font-family: var(--font-mono); font-size: 22px; border: 1px solid var(--pink-300); transform: rotate(45deg); }
 .player-error p { font-size: 13px; }
-.hidden-progress { position: absolute; right: 0; bottom: 0; left: 0; z-index: 2; height: 3px; pointer-events: none; opacity: 0; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), transparent var(--progress) 100%); filter: drop-shadow(0 -1px 3px rgba(255,95,158,.42)); transition: opacity 180ms ease; }
+.hidden-progress { position: absolute; right: 0; bottom: 0; left: 0; z-index: 2; height: 3px; pointer-events: none; opacity: 0; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(142,232,242,.5) var(--progress) var(--buffered), transparent var(--buffered) 100%); filter: drop-shadow(0 -1px 3px rgba(255,95,158,.42)) drop-shadow(0 -1px 4px rgba(142,232,242,.26)); transition: opacity 180ms ease; }
 .anime-player.ui-hidden { cursor: none; }
 .anime-player.ui-hidden video { cursor: none; }
 .anime-player.ui-hidden .screen-shade,
