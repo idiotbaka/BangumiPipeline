@@ -203,6 +203,17 @@ func TestMP4MoovBeforeMdat(t *testing.T) {
 	if fastStart {
 		t.Fatal("expected mdat-before-moov MP4 to require remux")
 	}
+
+	structure, err := inspectMP4TopLevelStructure(writeMP4Boxes(t, []string{"ftyp", "moov", "mdat", "mdat"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !structure.MoovBeforeMdat {
+		t.Fatal("expected multi-mdat fixture to still be faststart")
+	}
+	if structure.MdatCount != 2 {
+		t.Fatalf("expected two mdat boxes, got %d", structure.MdatCount)
+	}
 }
 
 func TestProblematicEditListWarning(t *testing.T) {

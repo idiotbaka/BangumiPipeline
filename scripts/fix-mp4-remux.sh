@@ -32,6 +32,7 @@ Options:
 The normal detection fixes:
   1. ffprobe edit-list/index warnings known to break browser playback.
   2. MP4 files whose moov box is after mdat, unless --warnings-only is used.
+  3. MP4 files with multiple top-level mdat boxes, unless --warnings-only is used.
 USAGE
 }
 
@@ -125,11 +126,10 @@ has_edit_list_warning() {
 	return 0
 }
 
-mp4_faststart_state() {
+mp4_structure_reason() {
 	local file="$1"
 	if [[ "$HAS_PYTHON" -ne 1 ]]; then
-		printf 'unknown\n'
-		return 2
+		return 1
 	fi
 	python3 - "$file" <<'PY'
 import os
@@ -141,6 +141,7 @@ try:
     size_total = os.path.getsize(path)
     first_moov = None
     first_mdat = None
+    mdat_count = 0
     offset = 0
     with open(path, "rb") as f:
         while offset < size_total:
@@ -164,25 +165,29 @@ try:
             box_name = box_type.decode("latin1", "replace")
             if box_name == "moov" and first_moov is None:
                 first_moov = offset
-            elif box_name == "mdat" and first_mdat is None:
-                first_mdat = offset
-            if first_moov is not None and first_mdat is not None:
-                break
+            elif box_name == "mdat":
+                if first_mdat is None:
+                    first_mdat = offset
+                mdat_count += 1
             offset += box_size
     if first_moov is None or first_mdat is None:
-        print("unknown")
-        sys.exit(2)
-    print("faststart" if first_moov < first_mdat else "slowstart")
+        sys.exit(1)
+    if first_moov > first_mdat:
+        print("moov box is after mdat")
+        sys.exit(0)
+    if mdat_count > 1:
+        print(f"multiple top-level mdat boxes ({mdat_count})")
+        sys.exit(0)
+    sys.exit(1)
 except Exception:
-    print("unknown")
-    sys.exit(2)
+    sys.exit(1)
 PY
 }
 
 detect_reason() {
 	local file="$1"
 	local warning
-	local faststart_state
+	local structure_reason
 
 	if [[ "$FIX_ALL" -eq 1 ]]; then
 		printf 'forced by --all'
@@ -196,9 +201,9 @@ detect_reason() {
 	fi
 
 	if [[ "$WARNINGS_ONLY" -ne 1 ]]; then
-		faststart_state="$(mp4_faststart_state "$file" || true)"
-		if [[ "$faststart_state" == "slowstart" ]]; then
-			printf 'moov box is after mdat'
+		structure_reason="$(mp4_structure_reason "$file" || true)"
+		if [[ -n "$structure_reason" ]]; then
+			printf '%s' "$structure_reason"
 			return 0
 		fi
 	fi

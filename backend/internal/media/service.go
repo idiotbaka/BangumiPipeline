@@ -1648,14 +1648,17 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 	outputPath := finalOutputPath(job.StorageRoot, job)
 	webPlayable := isBrowserPlayable(video.Path, videoStream, audioStream)
 	fastStart := false
+	multipleMdat := false
 	problematicEditList := false
 	if webPlayable {
-		var fastStartErr error
-		fastStart, fastStartErr = mp4MoovBeforeMdat(video.Path)
-		if fastStartErr != nil {
-			s.logger.Warn("检查 MP4 faststart 失败，将通过 remux 重写容器", "source", "media", "media_job_id", job.ID, "source_file", filepath.Base(video.Path), "error", fastStartErr)
+		structure, structureErr := inspectMP4TopLevelStructure(video.Path)
+		if structureErr != nil {
+			s.logger.Warn("检查 MP4 结构失败，将通过 remux 重写容器", "source", "media", "media_job_id", job.ID, "source_file", filepath.Base(video.Path), "error", structureErr)
+		} else {
+			fastStart = structure.MoovBeforeMdat
+			multipleMdat = structure.MdatCount > 1
 		}
-		if fastStart {
+		if fastStart && !multipleMdat {
 			var editListErr error
 			problematicEditList, editListErr = s.hasProblematicEditList(ctx, video.Path)
 			if editListErr != nil {
@@ -1673,7 +1676,7 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 	case hasInternal || hasExternal:
 		action = "burn_subtitles"
 		needsTranscode = true
-	case webPlayable && (!fastStart || problematicEditList):
+	case webPlayable && (!fastStart || multipleMdat || problematicEditList):
 		action = "remux"
 		needsTranscode = true
 	case !webPlayable && videoStream.CodecName == "h264" && (audioStream.CodecName == "" || audioStream.CodecName == "aac"):
@@ -2241,51 +2244,73 @@ func isBrowserPlayable(path string, video, audio probeStream) bool {
 	return true
 }
 
+type mp4TopLevelStructure struct {
+	MoovBeforeMdat bool
+	MdatCount      int
+}
+
 func mp4MoovBeforeMdat(path string) (bool, error) {
+	structure, err := inspectMP4TopLevelStructure(path)
+	if err != nil {
+		return false, err
+	}
+	return structure.MoovBeforeMdat, nil
+}
+
+func inspectMP4TopLevelStructure(path string) (mp4TopLevelStructure, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	if ext != ".mp4" && ext != ".m4v" {
-		return false, nil
+		return mp4TopLevelStructure{}, nil
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return false, err
+		return mp4TopLevelStructure{}, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return false, err
+		return mp4TopLevelStructure{}, err
 	}
 	size := info.Size()
+	firstMoov := int64(-1)
+	firstMdat := int64(-1)
+	structure := mp4TopLevelStructure{}
 	var offset int64
 	for offset < size {
 		boxSize, boxType, headerSize, err := readMP4BoxHeader(file)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return false, nil
+				break
 			}
-			return false, err
+			return mp4TopLevelStructure{}, err
 		}
 		if boxSize == 0 {
 			boxSize = size - offset
 		}
 		if boxSize < headerSize {
-			return false, fmt.Errorf("invalid MP4 box %q size %d", boxType, boxSize)
+			return mp4TopLevelStructure{}, fmt.Errorf("invalid MP4 box %q size %d", boxType, boxSize)
 		}
 		switch boxType {
 		case "moov":
-			return true, nil
+			if firstMoov < 0 {
+				firstMoov = offset
+			}
 		case "mdat":
-			return false, nil
+			if firstMdat < 0 {
+				firstMdat = offset
+			}
+			structure.MdatCount++
 		}
 		offset += boxSize
 		if offset >= size {
 			break
 		}
 		if _, err := file.Seek(offset, io.SeekStart); err != nil {
-			return false, err
+			return mp4TopLevelStructure{}, err
 		}
 	}
-	return false, nil
+	structure.MoovBeforeMdat = firstMoov >= 0 && firstMdat >= 0 && firstMoov < firstMdat
+	return structure, nil
 }
 
 func readMP4BoxHeader(reader io.Reader) (size int64, boxType string, headerSize int64, err error) {
