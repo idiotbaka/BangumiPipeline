@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-exitFullscreen"
+description = "Enables the exitFullscreen command without any pre-configured scope."
+commands.allow = ["exitFullscreen"]
+
+[[permission]]
+identifier = "deny-exitFullscreen"
+description = "Denies the exitFullscreen command without any pre-configured scope."
+commands.deny = ["exitFullscreen"]

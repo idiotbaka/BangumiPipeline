@@ -9,6 +9,9 @@
     "dev": "npm run build:ui && concurrently --kill-others-on-fail --names admin,viewer,server \"npm run dev --workspace @bangumi-pipeline/admin\" \"npm run dev --workspace @bangumi-pipeline/viewer\" \"go run ./backend/cmd/server\"",
     "start": "npm run build:ui && go run ./backend/cmd/server",
     "build:ui": "npm run build --workspace @bangumi-pipeline/admin && npm run build --workspace @bangumi-pipeline/viewer",
+    "build:mobile": "npm run build --workspace @bangumi-pipeline/mobile",
+    "tauri:dev": "cargo tauri android dev",
+    "tauri:build": "cargo tauri android build",
     "build:server": "go build -buildvcs=false ./backend/cmd/server",
     "test": "go test ./backend/... && npm run build:ui"
   },

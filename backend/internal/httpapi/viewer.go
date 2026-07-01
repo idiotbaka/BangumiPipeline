@@ -51,7 +51,7 @@ func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, log
 		writeError(w, http.StatusNotFound, "not_found", "API endpoint not found")
 	})
 	mux.Handle("/", SPA(webDir))
-	return CommonMiddleware(logger, mux)
+	return CommonMiddleware(logger, viewerCORSMiddleware(mux))
 }
 
 func (a *ViewerAPI) register(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +87,9 @@ func (a *ViewerAPI) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setSessionCookie(w, session)
-	writeJSON(w, http.StatusCreated, map[string]any{"user": user})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"user": user, "token": session.Token, "expiresAt": session.ExpiresAt.Unix(),
+	})
 }
 
 func (a *ViewerAPI) login(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +111,9 @@ func (a *ViewerAPI) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setSessionCookie(w, session)
-	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": user, "token": session.Token, "expiresAt": session.ExpiresAt.Unix(),
+	})
 }
 
 func (a *ViewerAPI) me(w http.ResponseWriter, r *http.Request) {
@@ -558,9 +562,34 @@ func (a *ViewerAPI) internalError(w http.ResponseWriter, err error) {
 }
 
 func readViewerSessionToken(r *http.Request) string {
-	cookie, err := r.Cookie(viewerSessionCookie)
-	if err != nil {
-		return ""
+	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
+		scheme, token, ok := strings.Cut(authorization, " ")
+		if ok && strings.EqualFold(strings.TrimSpace(scheme), "Bearer") {
+			return strings.TrimSpace(token)
+		}
 	}
-	return cookie.Value
+	cookie, err := r.Cookie(viewerSessionCookie)
+	if err == nil {
+		return cookie.Value
+	}
+	if token := strings.TrimSpace(r.URL.Query().Get("viewer_token")); token != "" {
+		return token
+	}
+	return ""
+}
+
+func viewerCORSMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") != "" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Set("Access-Control-Max-Age", "600")
+		}
+		if r.Method == http.MethodOptions && strings.HasPrefix(r.URL.Path, "/api/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

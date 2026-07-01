@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the mobile client",
+  "windows": ["main"],
+  "permissions": ["core:default", "player:default"]
+}
