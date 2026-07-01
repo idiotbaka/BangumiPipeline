@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 
 import { APIError, api, configureAPI, currentAPIBaseURL, type SiteSettings, type ViewerUser } from './api'
 import { loadAppConfig, saveAPIBaseURL } from './config'
+import MobileShell from './components/MobileShell.vue'
 import charaImage from '../../viewer/src/assets/chara.png'
 
 const appName = 'BakaVip 2.0'
@@ -176,34 +177,25 @@ function saveAndApplyAPIBaseURL() {
     <div class="boot-float-card card-two" aria-hidden="true">
       <span />
       <i />
-      <b />
+      <em />
     </div>
     <section class="boot-status" aria-label="应用加载中">
       <span class="boot-kicker">MOBILE VIEWER</span>
-      <h1>{{ appName }}</h1>
+      <p class="boot-title">{{ appName }}</p>
       <div class="boot-line"><span /></div>
       <p>LOADING</p>
     </section>
     <img class="boot-chara" :src="charaImage" alt="" draggable="false" />
   </main>
 
-  <main v-else-if="user" class="signed-screen">
-    <div class="signed-card">
-      <span class="signed-kicker">SIGNED IN</span>
-      <h1>{{ appName }}</h1>
-      <p>{{ user.username }}</p>
-      <button class="secondary-button" :disabled="loading" type="button" @click="logout">
-        {{ loading ? '退出中' : '退出登录' }}
-      </button>
-    </div>
-  </main>
+  <MobileShell v-else-if="user" :user="user" :loading="loading" @logout="logout" />
 
   <main v-else class="auth-screen">
     <div class="grid-layer" aria-hidden="true" />
     <section class="hero-panel" aria-label="站点视觉">
       <div class="brand-block">
         <span class="brand-kicker">MOBILE VIEWER</span>
-        <h1>{{ appName }}</h1>
+        <p class="brand-title">{{ appName }}</p>
       </div>
       <div class="visual-card" aria-hidden="true">
         <div class="plate plate-a" />
@@ -211,7 +203,7 @@ function saveAndApplyAPIBaseURL() {
         <div class="float-card float-card-a">
           <span />
           <i />
-          <b />
+          <em />
         </div>
         <div class="float-card float-card-b">
           <span />
@@ -220,7 +212,7 @@ function saveAndApplyAPIBaseURL() {
         <div class="float-card float-card-c">
           <span />
           <i />
-          <b />
+          <em />
         </div>
         <div class="dash dash-a" />
         <div class="dash dash-b" />
@@ -234,8 +226,8 @@ function saveAndApplyAPIBaseURL() {
             返回登录
           </button>
           <span class="panel-tag">{{ mode === 'login' ? 'LOGIN' : 'REGISTER' }}</span>
-          <h2>{{ formTitle }}</h2>
-          <p>{{ formSubtitle }}</p>
+          <p class="form-title">{{ formTitle }}</p>
+          <p class="form-subtitle">{{ formSubtitle }}</p>
         </div>
 
         <label class="field server-field">

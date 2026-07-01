@@ -52,6 +52,20 @@ body,
   min-height: 100%;
 }
 
+html,
+body,
+* {
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 body {
   min-width: 320px;
   min-height: 100vh;
@@ -197,7 +211,7 @@ img {
   letter-spacing: 2px;
 }
 
-.boot-status h1 {
+.boot-title {
   margin-top: 6px;
   padding-right: 10px;
   color: var(--ink-900);
@@ -262,7 +276,7 @@ img {
 
 .boot-float-card span,
 .boot-float-card i,
-.boot-float-card b {
+.boot-float-card em {
   display: block;
   height: 7px;
   border-radius: 999px;
@@ -278,7 +292,7 @@ img {
   background: linear-gradient(90deg, rgba(73, 214, 233, 0.36), rgba(85, 119, 217, 0.24));
 }
 
-.boot-float-card b {
+.boot-float-card em {
   width: 32px;
   background: rgba(255, 229, 122, 0.78);
 }
@@ -334,8 +348,8 @@ img {
   letter-spacing: 2px;
 }
 
-.brand-block h1,
-.signed-card h1 {
+.brand-title,
+.signed-card .signed-title {
   margin-top: 8px;
   color: var(--ink-900);
   font-size: 30px;
@@ -393,7 +407,7 @@ img {
 
 .float-card span,
 .float-card i,
-.float-card b {
+.float-card em {
   display: block;
   height: 7px;
   border-radius: 999px;
@@ -409,7 +423,7 @@ img {
   background: linear-gradient(90deg, rgba(73, 214, 233, 0.38), rgba(85, 119, 217, 0.28));
 }
 
-.float-card b {
+.float-card em {
   width: 34px;
   background: rgba(255, 229, 122, 0.9);
 }
@@ -505,14 +519,14 @@ img {
   box-shadow: 0 10px 20px rgba(255, 95, 158, 0.24);
 }
 
-.form-head h2 {
+.form-title {
   margin-top: 16px;
   color: var(--ink-900);
   font-size: 30px;
   line-height: 1.15;
 }
 
-.form-head p {
+.form-subtitle {
   margin-top: 5px;
   color: var(--ink-400);
   font-size: 13px;
@@ -672,7 +686,6 @@ img {
   min-height: 36px;
   padding: 0 8px;
   color: var(--pink-600);
-  font-weight: 600;
   border-radius: 999px;
   transition: background 160ms var(--ease-soft), transform 160ms var(--ease-soft), color 160ms var(--ease-soft);
 }
@@ -726,7 +739,7 @@ img {
     padding: 16px 18px 14px;
   }
 
-  .boot-status h1 {
+  .boot-title {
     font-size: 20px;
   }
 
@@ -748,7 +761,7 @@ img {
     padding-left: 14px;
   }
 
-  .brand-block h1 {
+  .brand-title {
     font-size: 26px;
   }
 

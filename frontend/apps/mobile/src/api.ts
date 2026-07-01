@@ -15,6 +15,96 @@ export interface SiteSettings {
   updatedAt: number
 }
 
+export interface ViewerAnimeCard {
+  bangumiId: number
+  name: string
+  nameCN: string
+  title: string
+  airDate: string
+  hasCover: boolean
+  imageStatus: string
+  ratingScore: number | null
+  latestEpisode: string
+  latestEpisodeLabel: string
+  latestEpisodeTitle: string
+  updatedAt: number | null
+}
+
+export interface ViewerHome {
+  hotRecommendations: ViewerAnimeCard[]
+  recentUpdates: ViewerAnimeCard[]
+  carouselSlides: unknown[]
+  myFollows: ViewerFollowedAnime[]
+}
+
+export interface ViewerScheduleCard {
+  bangumiId: number
+  title: string
+  airDate: string
+  airWeekday: number
+  totalEpisodes: number
+  hasCover: boolean
+  imageStatus: string
+  latestEpisode: string
+  latestEpisodeLabel: string
+}
+
+export interface ViewerSchedule {
+  seasonKey: string
+  seasonLabel: string
+  items: ViewerScheduleCard[]
+}
+
+export interface ViewerFilterDimension {
+  id: number
+  name: string
+  sortOrder: number
+  tags: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ViewerLibrary {
+  items: ViewerScheduleCard[]
+  total: number
+}
+
+export interface ViewerWatchHistoryItem {
+  bangumiId: number
+  mediaId: number
+  animeTitle: string
+  episodeLabel: string
+  episodeTitle: string
+  latestEpisodeLabel: string
+  totalEpisodes: number
+  positionSeconds: number
+  durationSeconds: number
+  progressPercent: number
+  completed: boolean
+  hasCover: boolean
+  lastWatchedAt: number
+}
+
+export interface ViewerFollowedAnime {
+  bangumiId: number
+  animeTitle: string
+  totalEpisodes: number
+  mediaId: number
+  episodeLabel: string
+  episodeTitle: string
+  hasCover: boolean
+  hasWatchProgress: boolean
+  watchedEpisodeLabel: string
+  positionSeconds: number
+  durationSeconds: number
+  progressPercent: number
+  watchCompleted: boolean
+  latestEpisodeLabel: string
+  caughtUp: boolean
+  lastWatchedAt: number
+  followedAt: number
+}
+
 interface AuthResponse {
   user: ViewerUser
   token: string
@@ -137,4 +227,22 @@ export const api = {
       clearAuthSession()
     }
   },
+  home: () => request<{ home: ViewerHome }>('/api/home'),
+  animeSchedule: (season: string) =>
+    request<{ schedule: ViewerSchedule }>(`/api/anime-schedule?season=${encodeURIComponent(season)}`),
+  libraryFilters: () => request<{ items: ViewerFilterDimension[] }>('/api/library/filters'),
+  animeLibrary: (query: string, filters: Record<number, string[]> = {}) => {
+    const params = new URLSearchParams()
+    if (query.trim()) {
+      params.set('q', query.trim())
+    }
+    for (const [dimensionID, tags] of Object.entries(filters)) {
+      for (const tag of tags) {
+        params.append('filter', `${dimensionID}:${tag}`)
+      }
+    }
+    return request<{ library: ViewerLibrary }>(`/api/library?${params}`)
+  },
+  followedAnime: () => request<{ items: ViewerFollowedAnime[] }>('/api/follows'),
+  watchHistory: () => request<{ items: ViewerWatchHistoryItem[] }>('/api/watch-history'),
 }
