@@ -19,6 +19,7 @@ import homeNavIcon from '../assets/nav-home.svg?raw'
 import libraryNavIcon from '../assets/nav-library.svg?raw'
 import profileNavIcon from '../assets/nav-profile.svg?raw'
 import scheduleNavIcon from '../assets/nav-schedule.svg?raw'
+import searchIcon from '../assets/search.svg?raw'
 
 interface Props {
   user: ViewerUser
@@ -486,7 +487,9 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
       </div>
       <form v-if="activeTab === 'home'" class="top-search" role="search" @submit.prevent="submitSearch">
         <input v-model="searchQuery" type="search" placeholder="搜索番剧" />
-        <button type="submit" :disabled="searchLoading" aria-label="搜索番剧">搜</button>
+        <button class="search-icon-button" type="submit" :disabled="searchLoading" aria-label="搜索番剧">
+          <i aria-hidden="true" v-html="searchIcon" />
+        </button>
       </form>
     </header>
 
@@ -940,6 +943,33 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   background: var(--pink-600);
   border-radius: 7px;
   transition: transform 120ms var(--ease-soft), filter 120ms var(--ease-soft);
+}
+
+.top-search .search-icon-button {
+  width: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--pink-600);
+  background: transparent;
+  transform: translateX(2px);
+}
+
+.search-icon-button i {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+}
+
+.search-icon-button :deep(svg) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.search-icon-button :deep(path) {
+  fill: currentColor;
 }
 
 .search-page-form button {
