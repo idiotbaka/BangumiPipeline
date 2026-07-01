@@ -172,18 +172,7 @@ LIMIT ?`, userID, limit)
 			rows.Close()
 			return nil, err
 		}
-		item.EpisodeLabel = watchEpisodeLabel(season, episodeType, episodeNumber)
-		if item.Completed {
-			item.ProgressPercent = 100
-		} else if item.DurationSeconds > 0 {
-			item.ProgressPercent = int(math.Round(item.PositionSeconds / item.DurationSeconds * 100))
-			if item.ProgressPercent < 0 {
-				item.ProgressPercent = 0
-			}
-			if item.ProgressPercent > 100 {
-				item.ProgressPercent = 100
-			}
-		}
+		finalizeWatchHistoryItem(&item, season, episodeType, episodeNumber)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -197,6 +186,39 @@ LIMIT ?`, userID, limit)
 		return nil, err
 	}
 	return items, nil
+}
+
+func (s *Service) ManagedUserActivities(ctx context.Context, userID int64, limit int) ([]WatchHistoryItem, error) {
+	if userID < 1 {
+		return nil, ErrUserNotFound
+	}
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM viewer_users WHERE id = ?)", userID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrUserNotFound
+	}
+	return s.WatchHistory(ctx, userID, limit)
+}
+
+func finalizeWatchHistoryItem(item *WatchHistoryItem, season int, episodeType, episodeNumber string) {
+	item.EpisodeLabel = watchEpisodeLabel(season, episodeType, episodeNumber)
+	item.ProgressPercent = 0
+	if item.Completed {
+		item.ProgressPercent = 100
+		return
+	}
+	if item.DurationSeconds <= 0 {
+		return
+	}
+	item.ProgressPercent = int(math.Round(item.PositionSeconds / item.DurationSeconds * 100))
+	if item.ProgressPercent < 0 {
+		item.ProgressPercent = 0
+	}
+	if item.ProgressPercent > 100 {
+		item.ProgressPercent = 100
+	}
 }
 
 type historyEpisodeRef struct {

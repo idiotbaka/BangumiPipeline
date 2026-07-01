@@ -44,12 +44,13 @@ type User struct {
 }
 
 type ManagedUser struct {
-	ID         int64  `json:"id"`
-	Username   string `json:"username"`
-	Disabled   bool   `json:"disabled"`
-	DisabledAt *int64 `json:"disabledAt"`
-	CreatedAt  int64  `json:"createdAt"`
-	UpdatedAt  int64  `json:"updatedAt"`
+	ID           int64             `json:"id"`
+	Username     string            `json:"username"`
+	Disabled     bool              `json:"disabled"`
+	DisabledAt   *int64            `json:"disabledAt"`
+	CreatedAt    int64             `json:"createdAt"`
+	UpdatedAt    int64             `json:"updatedAt"`
+	LastActivity *WatchHistoryItem `json:"lastActivity"`
 }
 
 type UserPage struct {
@@ -310,11 +311,11 @@ LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return UserPage{}, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var user ManagedUser
 		var disabledAt sql.NullInt64
 		if err := rows.Scan(&user.ID, &user.Username, &disabledAt, &user.CreatedAt, &user.UpdatedAt); err != nil {
+			rows.Close()
 			return UserPage{}, err
 		}
 		if disabledAt.Valid {
@@ -324,9 +325,129 @@ LIMIT ? OFFSET ?`, listArgs...)
 		result.Items = append(result.Items, user)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return UserPage{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return UserPage{}, err
+	}
+	if err := s.attachManagedUserLastActivities(ctx, result.Items); err != nil {
 		return UserPage{}, err
 	}
 	return result, nil
+}
+
+func (s *Service) attachManagedUserLastActivities(ctx context.Context, users []ManagedUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(users))
+	placeholders := make([]string, 0, len(users))
+	for _, user := range users {
+		args = append(args, user.ID)
+		placeholders = append(placeholders, "?")
+	}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+WITH ranked_history AS (
+    SELECT history.user_id,
+           history.bangumi_id AS bangumi_id,
+           history.media_job_id AS media_job_id,
+           COALESCE(NULLIF(anime.name_cn, ''), anime.name) AS anime_title,
+           media.season_number AS season_number,
+           COALESCE(NULLIF(media.episode_type, ''), 'episode') AS episode_type,
+           media.episode_number AS episode_number,
+           COALESCE((
+               SELECT COALESCE(NULLIF(episode.name_cn, ''), episode.name)
+               FROM anime_episodes episode
+               WHERE episode.bangumi_id = media.bangumi_id
+                 AND episode.sort_number = CAST(media.episode_number AS REAL)
+                 AND (
+                     (LOWER(COALESCE(NULLIF(media.episode_type, ''), 'episode')) = 'episode' AND episode.type = 0)
+                     OR
+                     (LOWER(COALESCE(NULLIF(media.episode_type, ''), 'episode')) != 'episode' AND episode.type != 0)
+                 )
+               ORDER BY episode.type, episode.episode_id
+               LIMIT 1
+           ), '') AS episode_title,
+           CASE WHEN anime.total_episodes > 0 THEN anime.total_episodes ELSE anime.eps END AS total_episodes,
+           history.position_seconds AS position_seconds,
+           history.duration_seconds AS duration_seconds,
+           history.completed AS completed,
+           media.cover_status = 'completed' AND media.cover_path != '' AS has_cover,
+           history.last_watched_at AS last_watched_at,
+           ROW_NUMBER() OVER (
+               PARTITION BY history.user_id
+               ORDER BY history.last_watched_at DESC, history.id DESC
+           ) AS history_rank
+    FROM viewer_watch_history history
+    JOIN media_jobs media ON media.id = history.media_job_id
+    JOIN anime_metadata anime ON anime.bangumi_id = history.bangumi_id
+    WHERE history.user_id IN (%s)
+      AND anime.deleted_at IS NULL
+      AND media.status = 'completed'
+      AND media.output_path != ''
+)
+SELECT user_id,
+       bangumi_id,
+       media_job_id,
+       anime_title,
+       season_number,
+       episode_type,
+       episode_number,
+       episode_title,
+       total_episodes,
+       position_seconds,
+       duration_seconds,
+       completed,
+       has_cover,
+       last_watched_at
+FROM ranked_history
+WHERE history_rank = 1
+ORDER BY last_watched_at DESC, media_job_id DESC`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return err
+	}
+	userIDs := make([]int64, 0, len(users))
+	items := make([]WatchHistoryItem, 0, len(users))
+	for rows.Next() {
+		var userID int64
+		var item WatchHistoryItem
+		var season int
+		var episodeType, episodeNumber string
+		if err := rows.Scan(
+			&userID, &item.BangumiID, &item.MediaID, &item.AnimeTitle,
+			&season, &episodeType, &episodeNumber, &item.EpisodeTitle,
+			&item.TotalEpisodes, &item.PositionSeconds, &item.DurationSeconds,
+			&item.Completed, &item.HasCover, &item.LastWatchedAt,
+		); err != nil {
+			rows.Close()
+			return err
+		}
+		finalizeWatchHistoryItem(&item, season, episodeType, episodeNumber)
+		userIDs = append(userIDs, userID)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := s.attachHistoryLatestEpisodes(ctx, items); err != nil {
+		return err
+	}
+	activitiesByUser := make(map[int64]WatchHistoryItem, len(items))
+	for index, item := range items {
+		activitiesByUser[userIDs[index]] = item
+	}
+	for index := range users {
+		if activity, ok := activitiesByUser[users[index].ID]; ok {
+			item := activity
+			users[index].LastActivity = &item
+		}
+	}
+	return nil
 }
 
 func (s *Service) SetUserDisabled(ctx context.Context, userID int64, disabled bool) (ManagedUser, error) {

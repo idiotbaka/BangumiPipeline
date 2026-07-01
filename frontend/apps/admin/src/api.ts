@@ -61,6 +61,7 @@ export interface ViewerUser {
   disabledAt: number | null
   createdAt: number
   updatedAt: number
+  lastActivity: ViewerUserActivity | null
 }
 
 export interface ViewerUserPage {
@@ -68,6 +69,22 @@ export interface ViewerUserPage {
   total: number
   page: number
   pageSize: number
+}
+
+export interface ViewerUserActivity {
+  bangumiId: number
+  mediaId: number
+  animeTitle: string
+  episodeLabel: string
+  episodeTitle: string
+  latestEpisodeLabel: string
+  totalEpisodes: number
+  positionSeconds: number
+  durationSeconds: number
+  progressPercent: number
+  completed: boolean
+  hasCover: boolean
+  lastWatchedAt: number
 }
 
 export interface ViewerSiteSettings {
@@ -592,6 +609,10 @@ export const api = {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
     if (query.trim()) params.set('q', query.trim())
     return request<ViewerUserPage>(`/api/viewer/users?${params}`)
+  },
+  viewerUserActivities: (userId: number, limit = 200) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    return request<{ items: ViewerUserActivity[] }>(`/api/viewer/users/${userId}/activities?${params}`)
   },
   updateViewerUser: (userId: number, update: { disabled: boolean }) =>
     request<{ user: ViewerUser }>(`/api/viewer/users/${userId}`, {

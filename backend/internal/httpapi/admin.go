@@ -76,6 +76,7 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/settings/bangumi-custom-search", api.getBangumiCustomSearchSettings)
 	mux.HandleFunc("PUT /api/settings/bangumi-custom-search", api.updateBangumiCustomSearchSettings)
 	mux.HandleFunc("GET /api/viewer/users", api.listViewerUsers)
+	mux.HandleFunc("GET /api/viewer/users/{userID}/activities", api.listViewerUserActivities)
 	mux.HandleFunc("PATCH /api/viewer/users/{userID}", api.updateViewerUser)
 	mux.HandleFunc("POST /api/viewer/users/{userID}/password", api.resetViewerUserPassword)
 	mux.HandleFunc("GET /api/viewer/invites", api.listViewerInvites)
@@ -298,6 +299,23 @@ func (a *AdminAPI) listViewerUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *AdminAPI) listViewerUserActivities(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("userID"))
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := a.viewer.ManagedUserActivities(r.Context(), id, limit)
+	if err != nil {
+		a.viewerUserError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (a *AdminAPI) updateViewerUser(w http.ResponseWriter, r *http.Request) {
