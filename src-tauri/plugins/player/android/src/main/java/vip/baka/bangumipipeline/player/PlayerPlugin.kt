@@ -2,7 +2,9 @@ package vip.baka.bangumipipeline.player
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.view.View
 import android.view.WindowManager
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -28,6 +30,7 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
     private var previousOrientation: Int? = null
     private var fullscreenActive = false
     private var playbackKeepScreenOn = false
+    private val immersiveRefreshRunnable = Runnable { applyFullscreenImmersive() }
 
     @Command
     fun enterFullscreen(invoke: Invoke) {
@@ -38,11 +41,9 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
             }
             fullscreenActive = true
             activity.requestedOrientation = requestedOrientation(args.orientation)
-            WindowCompat.setDecorFitsSystemWindows(activity.window, false)
             applyKeepScreenOn()
-            val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            controller.hide(WindowInsetsCompat.Type.systemBars())
+            installImmersiveRefreshHooks()
+            scheduleFullscreenImmersiveRefresh()
             invoke.resolve(JSObject())
         }
     }
@@ -53,10 +54,13 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
             fullscreenActive = false
             activity.requestedOrientation = previousOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             previousOrientation = null
+            removeImmersiveRefreshHooks()
             applyKeepScreenOn()
             WindowCompat.getInsetsController(activity.window, activity.window.decorView)
                 .show(WindowInsetsCompat.Type.systemBars())
             WindowCompat.setDecorFitsSystemWindows(activity.window, true)
+            @Suppress("DEPRECATION")
+            activity.window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
             invoke.resolve(JSObject())
         }
     }
@@ -67,8 +71,31 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
         activity.runOnUiThread {
             playbackKeepScreenOn = args.enabled
             applyKeepScreenOn()
+            scheduleFullscreenImmersiveRefresh()
             invoke.resolve(JSObject())
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        activity.runOnUiThread {
+            scheduleFullscreenImmersiveRefresh()
+        }
+    }
+
+    override fun onPause() {
+        activity.runOnUiThread {
+            activity.window.decorView.removeCallbacks(immersiveRefreshRunnable)
+        }
+        super.onPause()
+    }
+
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun onDestroy() {
+        activity.runOnUiThread {
+            removeImmersiveRefreshHooks()
+        }
+        super.onDestroy()
     }
 
     private fun applyKeepScreenOn() {
@@ -77,6 +104,62 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
         } else {
             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+    }
+
+    private fun installImmersiveRefreshHooks() {
+        val decorView = activity.window.decorView
+        @Suppress("DEPRECATION")
+        decorView.setOnSystemUiVisibilityChangeListener {
+            if (fullscreenActive) {
+                scheduleFullscreenImmersiveRefresh()
+            }
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(decorView) { view, insets ->
+            if (fullscreenActive && insets.isVisible(WindowInsetsCompat.Type.systemBars())) {
+                view.post { scheduleFullscreenImmersiveRefresh() }
+            }
+            insets
+        }
+    }
+
+    private fun removeImmersiveRefreshHooks() {
+        val decorView = activity.window.decorView
+        decorView.removeCallbacks(immersiveRefreshRunnable)
+        @Suppress("DEPRECATION")
+        decorView.setOnSystemUiVisibilityChangeListener(null)
+        ViewCompat.setOnApplyWindowInsetsListener(decorView, null)
+    }
+
+    private fun scheduleFullscreenImmersiveRefresh() {
+        val decorView = activity.window.decorView
+        decorView.removeCallbacks(immersiveRefreshRunnable)
+        if (!fullscreenActive) {
+            return
+        }
+        applyFullscreenImmersive()
+        decorView.postDelayed(immersiveRefreshRunnable, 90L)
+        decorView.postDelayed(immersiveRefreshRunnable, 320L)
+    }
+
+    private fun applyFullscreenImmersive() {
+        if (!fullscreenActive) {
+            return
+        }
+        val window = activity.window
+        val decorView = window.decorView
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = WindowCompat.getInsetsController(window, decorView)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        @Suppress("DEPRECATION")
+        decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                or View.SYSTEM_UI_FLAG_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            )
     }
 
     private fun requestedOrientation(value: String?): Int {
