@@ -71,7 +71,10 @@ const weekdays = [
 
 const activeTab = ref<MainTab>('home')
 const routePage = ref<RoutePage>(null)
+const appPage = ref<HTMLElement | null>(null)
 const pageTransitionName = ref<PageTransitionName>('page-none')
+const pageTransitionActive = ref(false)
+const pageTransitionStyle = ref<Record<string, string>>({})
 const detailReturnPage = ref<DetailReturnPage>(null)
 const detailAnimeId = ref(0)
 const detailMediaId = ref(0)
@@ -123,6 +126,7 @@ let libraryRequestID = 0
 let refreshTokenSeed = 0
 let shellHistoryIndex = 0
 let previousScrollRestoration: ScrollRestoration | null = null
+let pendingTransitionScrollTop: number | null = null
 const tabScrollPositions: Record<MainTab, number> = {
   home: 0,
   schedule: 0,
@@ -149,6 +153,19 @@ const pageTitle = computed(() => {
   if (routePage.value === 'history') return '观看历史'
   if (routePage.value === 'detail') return '番剧详情'
   return ''
+})
+const topbarMode = computed(() => {
+  if (routePage.value === 'detail') return 'none'
+  return routePage.value === null ? 'main' : 'sub'
+})
+const topbarKey = computed(() => {
+  if (topbarMode.value === 'sub') return `sub-${routePage.value}`
+  return topbarMode.value
+})
+const topbarTransitionName = computed(() => {
+  if (pageTransitionName.value === 'page-slide-forward') return 'topbar-slide-forward'
+  if (pageTransitionName.value === 'page-slide-back') return 'topbar-slide-back'
+  return 'topbar-none'
 })
 const pageViewKey = computed(() => {
   if (routePage.value === 'detail') {
@@ -217,6 +234,49 @@ function replaceShellHistoryState() {
   window.history.replaceState(createShellHistoryState(), '', window.location.href)
 }
 
+function beginPageTransition(name: PageTransitionName, scrollTop: number | null) {
+  pageTransitionName.value = name
+  pendingTransitionScrollTop = scrollTop
+  if (name === 'page-none') {
+    pageTransitionActive.value = false
+    pageTransitionStyle.value = {}
+    return
+  }
+
+  const currentView = appPage.value?.querySelector<HTMLElement>('.page-view')
+  const rect = currentView?.getBoundingClientRect()
+  pageTransitionActive.value = true
+  pageTransitionStyle.value = rect
+    ? {
+        '--transition-page-top': `${rect.top}px`,
+        '--transition-page-left': `${rect.left}px`,
+        '--transition-page-width': `${rect.width}px`,
+        '--transition-page-min-height': `${Math.max(appPage.value?.offsetHeight ?? 0, rect.height)}px`,
+      }
+    : {}
+}
+
+function applyPendingTransitionScroll() {
+  if (pendingTransitionScrollTop === null) {
+    return
+  }
+  const top = pendingTransitionScrollTop
+  pendingTransitionScrollTop = null
+  window.scrollTo({ top, left: 0, behavior: 'auto' })
+}
+
+function schedulePendingTransitionScroll() {
+  void nextTick(() => {
+    applyPendingTransitionScroll()
+  })
+}
+
+function finishPageTransition() {
+  pageTransitionActive.value = false
+  pageTransitionStyle.value = {}
+  pendingTransitionScrollTop = null
+}
+
 function handleShellPopState(event: PopStateEvent) {
   if (!isShellHistoryState(event.state)) {
     return
@@ -226,12 +286,14 @@ function handleShellPopState(event: PopStateEvent) {
   const previousTab = activeTab.value
   const previousDetailAnimeId = detailAnimeId.value
   const previousDetailMediaId = detailMediaId.value
-  pageTransitionName.value =
+  const transitionName =
     event.state.historyIndex < shellHistoryIndex
       ? 'page-slide-back'
       : event.state.historyIndex > shellHistoryIndex
         ? 'page-slide-forward'
         : 'page-none'
+  const transitionScrollTop = event.state.page === null ? tabScrollPositions[event.state.tab] ?? 0 : 0
+  beginPageTransition(transitionName, transitionName === 'page-none' ? null : transitionScrollTop)
   shellHistoryIndex = Math.max(0, event.state.historyIndex)
   activeTab.value = event.state.tab
   routePage.value = event.state.page
@@ -255,7 +317,9 @@ function handleShellPopState(event: PopStateEvent) {
     previousDetailAnimeId === event.state.detailAnimeId &&
     previousDetailMediaId === event.state.detailMediaId
 
-  if (event.state.page === null) {
+  if (transitionName !== 'page-none' && !isSameDetail) {
+    schedulePendingTransitionScroll()
+  } else if (event.state.page === null) {
     if (previousPage !== null || previousTab !== event.state.tab) {
       restoreTabScroll(event.state.tab)
     }
@@ -360,14 +424,14 @@ function showTab(tab: MainTab) {
 
 function openRoute(page: SubRoutePage) {
   saveCurrentTabScroll()
-  pageTransitionName.value = 'page-slide-forward'
+  beginPageTransition('page-slide-forward', 0)
   routePage.value = page
   resetDetailState()
   if (page === 'follows' || page === 'history') {
     void ensureProfile()
   }
   pushShellHistoryState()
-  scrollToTopAfterRender()
+  schedulePendingTransitionScroll()
 }
 
 function closeRoute() {
@@ -379,7 +443,7 @@ function closeRouteDirect() {
     closeAnimeDetailDirect()
     return
   }
-  pageTransitionName.value = 'page-slide-back'
+  beginPageTransition('page-slide-back', tabScrollPositions[activeTab.value] ?? 0)
   routePage.value = null
   resetDetailState()
   if (activeTab.value === 'home') {
@@ -389,7 +453,7 @@ function closeRouteDirect() {
     void ensureProfile()
   }
   replaceShellHistoryState()
-  restoreTabScroll(activeTab.value)
+  schedulePendingTransitionScroll()
 }
 
 function openAnimeDetail(bangumiId: number, mediaId = 0, positionSeconds = 0) {
@@ -406,10 +470,10 @@ function openAnimeDetail(bangumiId: number, mediaId = 0, positionSeconds = 0) {
   detailAnimeId.value = bangumiId
   detailMediaId.value = mediaId > 0 ? mediaId : 0
   detailPosition.value = positionSeconds > 0 ? positionSeconds : 0
-  pageTransitionName.value = 'page-slide-forward'
+  beginPageTransition('page-slide-forward', 0)
   routePage.value = 'detail'
   pushShellHistoryState()
-  scrollToTopAfterRender()
+  schedulePendingTransitionScroll()
 }
 
 function closeAnimeDetail() {
@@ -418,7 +482,7 @@ function closeAnimeDetail() {
 
 function closeAnimeDetailDirect() {
   const returnPage = detailReturnPage.value
-  pageTransitionName.value = 'page-slide-back'
+  beginPageTransition('page-slide-back', returnPage === null ? tabScrollPositions[activeTab.value] ?? 0 : 0)
   resetDetailState()
   routePage.value = returnPage
   if (returnPage === 'follows' || returnPage === 'history') {
@@ -431,11 +495,11 @@ function closeAnimeDetailDirect() {
     if (activeTab.value === 'profile') {
       void ensureProfile()
     }
-    restoreTabScroll(activeTab.value)
   } else {
-    scrollToTopAfterRender()
+    // 子页面当前没有独立滚动记忆，返回时保持在顶部。
   }
   replaceShellHistoryState()
+  schedulePendingTransitionScroll()
 }
 
 function handleDetailFollowChanged() {
@@ -483,7 +547,9 @@ async function submitSearch() {
   }
   searchPageQuery.value = query
   if (shouldPushRoute) {
-    pageTransitionName.value = 'page-slide-forward'
+    beginPageTransition('page-slide-forward', 0)
+  } else {
+    beginPageTransition('page-none', null)
   }
   routePage.value = 'search'
   resetDetailState()
@@ -492,7 +558,11 @@ async function submitSearch() {
   } else {
     replaceShellHistoryState()
   }
-  scrollToTopAfterRender()
+  if (shouldPushRoute) {
+    schedulePendingTransitionScroll()
+  } else {
+    scrollToTopAfterRender()
+  }
   await loadSearch(query)
 }
 
@@ -789,29 +859,36 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 <template>
   <main class="mobile-shell" :class="{ 'route-mode': routePage !== null, 'detail-mode': routePage === 'detail' }">
-    <header v-if="routePage === null" class="app-topbar">
-      <div class="brand-mini">
-        <img :src="appIcon" alt="" />
-        <span class="brand-name">{{ appName }}</span>
-      </div>
-      <form v-if="activeTab === 'home'" class="top-search" role="search" @submit.prevent="submitSearch">
-        <input v-model="searchQuery" type="search" placeholder="搜索番剧" />
-        <button class="search-icon-button" type="submit" :disabled="searchLoading" aria-label="搜索番剧">
-          <i aria-hidden="true" v-html="searchIcon" />
-        </button>
-      </form>
-    </header>
+    <Transition :name="topbarTransitionName">
+      <header v-if="topbarMode === 'main'" :key="topbarKey" class="app-topbar">
+        <div class="brand-mini">
+          <img :src="appIcon" alt="" />
+          <span class="brand-name">{{ appName }}</span>
+        </div>
+        <form v-if="activeTab === 'home'" class="top-search" role="search" @submit.prevent="submitSearch">
+          <input v-model="searchQuery" type="search" placeholder="搜索番剧" />
+          <button class="search-icon-button" type="submit" :disabled="searchLoading" aria-label="搜索番剧">
+            <i aria-hidden="true" v-html="searchIcon" />
+          </button>
+        </form>
+      </header>
 
-    <header v-else-if="routePage !== 'detail'" class="sub-topbar">
-      <button type="button" aria-label="返回" @click="closeRoute">‹</button>
-      <div>
-        <span>{{ appName }}</span>
-        <p class="page-title">{{ pageTitle }}</p>
-      </div>
-    </header>
+      <header v-else-if="topbarMode === 'sub'" :key="topbarKey" class="sub-topbar">
+        <button type="button" aria-label="返回" @click="closeRoute">‹</button>
+        <div>
+          <span>{{ appName }}</span>
+          <p class="page-title">{{ pageTitle }}</p>
+        </div>
+      </header>
+    </Transition>
 
-    <section class="app-page">
-      <Transition :name="pageTransitionName">
+    <section
+      ref="appPage"
+      class="app-page"
+      :class="{ 'transition-active': pageTransitionActive }"
+      :style="pageTransitionStyle"
+    >
+      <Transition :name="pageTransitionName" @after-enter="finishPageTransition" @after-leave="finishPageTransition">
         <div :key="pageViewKey" class="page-view">
           <MobileAnimeDetailScreen
             v-if="routePage === 'detail'"
@@ -1272,7 +1349,8 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 <style scoped>
 .mobile-shell {
-  --mobile-topbar-height: calc(62px + env(safe-area-inset-top));
+  --shell-topbar-height: calc(62px + env(safe-area-inset-top));
+  --mobile-topbar-height: var(--shell-topbar-height);
   min-height: 100vh;
   min-height: 100dvh;
   overflow-x: hidden;
@@ -1294,12 +1372,53 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: var(--mobile-topbar-height);
+  min-height: var(--shell-topbar-height);
   padding: max(12px, env(safe-area-inset-top)) 14px 10px;
   background: rgba(255, 255, 255, 0.92);
   border-bottom: 1px solid rgba(32, 40, 62, 0.06);
   box-shadow: 0 6px 18px rgba(32, 40, 62, 0.04);
   backdrop-filter: blur(14px);
+}
+
+.topbar-slide-forward-enter-active,
+.topbar-slide-forward-leave-active,
+.topbar-slide-back-enter-active,
+.topbar-slide-back-leave-active {
+  transition:
+    transform 260ms cubic-bezier(0.2, 0.82, 0.2, 1),
+    opacity 220ms var(--ease-out);
+  will-change: transform, opacity;
+}
+
+.topbar-slide-forward-enter-active,
+.topbar-slide-back-enter-active {
+  z-index: 22;
+}
+
+.topbar-slide-forward-leave-active,
+.topbar-slide-back-leave-active {
+  z-index: 21;
+  pointer-events: none;
+}
+
+.topbar-slide-forward-enter-from {
+  opacity: 0.72;
+  transform: translate3d(100%, 0, 0);
+}
+
+.topbar-slide-forward-leave-to {
+  opacity: 0.5;
+  transform: translate3d(-24%, 0, 0);
+}
+
+.topbar-slide-back-enter-from {
+  opacity: 0.72;
+  transform: translate3d(-32%, 0, 0);
+}
+
+.topbar-slide-back-leave-to {
+  opacity: 0.5;
+  transform: translate3d(100%, 0, 0);
 }
 
 .brand-mini {
@@ -1445,8 +1564,10 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 }
 
 .app-page {
-  --page-pad-top: 12px;
-  --page-pad-x: 14px;
+  --transition-page-top: 0px;
+  --transition-page-left: 0px;
+  --transition-page-width: 100vw;
+  --transition-page-min-height: 0px;
   position: relative;
   width: min(100%, 520px);
   min-height: calc(100dvh - 132px);
@@ -1457,6 +1578,10 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 .page-view {
   min-width: 0;
+}
+
+.app-page.transition-active {
+  min-height: max(calc(100dvh - 132px), var(--transition-page-min-height));
 }
 
 .page-slide-forward-enter-active,
@@ -1471,11 +1596,11 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 .page-slide-forward-leave-active,
 .page-slide-back-leave-active {
-  position: absolute;
-  top: var(--page-pad-top);
-  right: var(--page-pad-x);
-  left: var(--page-pad-x);
+  position: fixed;
+  top: var(--transition-page-top);
+  left: var(--transition-page-left);
   z-index: 1;
+  width: var(--transition-page-width);
   pointer-events: none;
 }
 
@@ -1516,8 +1641,6 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 }
 
 .detail-mode .app-page {
-  --page-pad-top: 0px;
-  --page-pad-x: 0px;
   width: 100%;
   min-height: 100dvh;
   padding: 0;
@@ -2406,7 +2529,6 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 @media (max-width: 360px) {
   .app-page {
-    --page-pad-x: 12px;
     padding-right: 12px;
     padding-left: 12px;
   }

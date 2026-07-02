@@ -8,8 +8,6 @@ const overlayAndroidMainDir = resolve(repoRoot, 'src-tauri/android-src/main')
 const androidMainDir = resolve(repoRoot, 'src-tauri/gen/android/app/src/main')
 const androidResDir = resolve(repoRoot, 'src-tauri/gen/android/app/src/main/res')
 const androidManifest = resolve(repoRoot, 'src-tauri/gen/android/app/src/main/AndroidManifest.xml')
-const charaSource = resolve(repoRoot, 'frontend/apps/viewer/src/assets/chara.png')
-const charaTarget = resolve(androidResDir, 'drawable-nodpi/splash_chara.png')
 
 async function copyDirectoryContents(sourceDir, targetDir) {
   await mkdir(targetDir, { recursive: true })
@@ -41,7 +39,5 @@ try {
 await mkdir(androidResDir, { recursive: true })
 await copyDirectoryContents(overlayAndroidMainDir, androidMainDir)
 await copyDirectoryContents(overlayResDir, androidResDir)
-await mkdir(dirname(charaTarget), { recursive: true })
-await writeFile(charaTarget, await readFile(charaSource))
 
-console.log('Prepared Android splash resources.')
+console.log('Prepared Android app resources.')
