@@ -38,6 +38,7 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
             }
             fullscreenActive = true
             activity.requestedOrientation = requestedOrientation(args.orientation)
+            WindowCompat.setDecorFitsSystemWindows(activity.window, false)
             applyKeepScreenOn()
             val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -55,6 +56,7 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
             applyKeepScreenOn()
             WindowCompat.getInsetsController(activity.window, activity.window.decorView)
                 .show(WindowInsetsCompat.Type.systemBars())
+            WindowCompat.setDecorFitsSystemWindows(activity.window, true)
             invoke.resolve(JSObject())
         }
     }

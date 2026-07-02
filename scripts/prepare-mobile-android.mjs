@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const overlayResDir = resolve(repoRoot, 'src-tauri/android-res')
+const overlayAndroidMainDir = resolve(repoRoot, 'src-tauri/android-src/main')
+const androidMainDir = resolve(repoRoot, 'src-tauri/gen/android/app/src/main')
 const androidResDir = resolve(repoRoot, 'src-tauri/gen/android/app/src/main/res')
 const androidManifest = resolve(repoRoot, 'src-tauri/gen/android/app/src/main/AndroidManifest.xml')
 const charaSource = resolve(repoRoot, 'frontend/apps/viewer/src/assets/chara.png')
@@ -37,6 +39,7 @@ try {
 }
 
 await mkdir(androidResDir, { recursive: true })
+await copyDirectoryContents(overlayAndroidMainDir, androidMainDir)
 await copyDirectoryContents(overlayResDir, androidResDir)
 await mkdir(dirname(charaTarget), { recursive: true })
 await writeFile(charaTarget, await readFile(charaSource))
