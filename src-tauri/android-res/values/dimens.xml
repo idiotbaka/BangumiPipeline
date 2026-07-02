@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="splash_chara_width">540dp</dimen>
+    <dimen name="splash_chara_height">628dp</dimen>
+</resources>
