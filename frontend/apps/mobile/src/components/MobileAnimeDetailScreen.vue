@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import {
   api,
@@ -33,6 +33,8 @@ const followSaving = ref(false)
 const followError = ref('')
 const summaryExpanded = ref(false)
 const failedImages = ref<Set<string>>(new Set())
+const episodeRail = ref<HTMLElement | null>(null)
+const episodeCardRefs = new Map<string, HTMLElement>()
 let progressSaving = false
 let queuedProgress: { mediaId: number; positionSeconds: number; durationSeconds: number } | null = null
 
@@ -113,6 +115,7 @@ async function loadDetail() {
   errorMessage.value = ''
   followError.value = ''
   summaryExpanded.value = false
+  episodeCardRefs.clear()
   try {
     const result = await api.animeDetail(props.bangumiId)
     anime.value = result.anime
@@ -135,6 +138,7 @@ async function loadDetail() {
     errorMessage.value = error instanceof Error ? error.message : '番剧详情加载失败'
   } finally {
     loading.value = false
+    void scrollSelectedEpisodeIntoView('auto')
   }
 }
 
@@ -157,6 +161,27 @@ function selectEpisode(episode: ViewerDetailEpisode) {
   if (!episode.hasMedia) return
   selectedEpisodeKey.value = episode.key
   resumePosition.value = 0
+  void scrollSelectedEpisodeIntoView('smooth')
+}
+
+function setEpisodeCardRef(key: string, element: unknown) {
+  if (element instanceof HTMLElement) {
+    episodeCardRefs.set(key, element)
+    return
+  }
+  episodeCardRefs.delete(key)
+}
+
+async function scrollSelectedEpisodeIntoView(behavior: ScrollBehavior) {
+  const key = selectedEpisodeKey.value
+  if (!key) return
+  await nextTick()
+  window.requestAnimationFrame(() => {
+    const rail = episodeRail.value
+    const card = episodeCardRefs.get(key)
+    if (!rail || !card) return
+    card.scrollIntoView({ behavior, block: 'nearest', inline: 'center' })
+  })
 }
 
 async function saveProgress(progress: { mediaId: number; positionSeconds: number; durationSeconds: number }) {
@@ -328,10 +353,11 @@ function formatInfoValue(value: unknown): string {
           <div class="block-title">选集</div>
           <span>{{ playableEpisodes.length }} / {{ anime.episodes.length }}</span>
         </div>
-        <div v-if="anime.episodes.length" class="episode-rail">
+        <div v-if="anime.episodes.length" ref="episodeRail" class="episode-rail">
           <article
             v-for="episode in anime.episodes"
             :key="episode.key"
+            :ref="(element) => setEpisodeCardRef(episode.key, element)"
             class="episode-card"
             :class="{ selected: selectedEpisodeKey === episode.key, unavailable: !episode.hasMedia }"
             role="button"
@@ -450,11 +476,12 @@ function formatInfoValue(value: unknown): string {
   place-items: center;
   color: #ffffff;
   font-size: 28px;
-  line-height: 1;
+  line-height: 0;
   background: rgba(7, 10, 18, 0.42);
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 999px;
   backdrop-filter: blur(10px);
+  padding-bottom: 8px;
   transition: transform 140ms var(--ease-soft), background 140ms var(--ease-soft);
 }
 
@@ -673,8 +700,8 @@ function formatInfoValue(value: unknown): string {
   display: flex;
   gap: 10px;
   overflow-x: auto;
-  margin: 12px -15px -3px;
-  padding: 0 15px 3px;
+  margin: 9px 0 -3px;
+  padding: 3px 0 3px;
   scroll-snap-type: x proximity;
 }
 

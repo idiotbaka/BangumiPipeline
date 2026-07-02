@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
+import fullscreenIcon from '../assets/fullscreen.svg?raw'
 import { enterNativeFullscreen, exitNativeFullscreen, setNativeKeepScreenOn } from '../native/player'
 
 interface Props {
@@ -419,7 +420,7 @@ function clampPercent(value: number) {
         </button>
         <span>{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
         <button type="button" class="fullscreen-button" :aria-label="nativeFullscreen ? '退出全屏' : '横屏全屏'" @click="toggleFullscreen">
-          <i aria-hidden="true" />
+          <i aria-hidden="true" v-html="fullscreenIcon" />
         </button>
       </div>
     </div>
@@ -635,39 +636,20 @@ function clampPercent(value: number) {
 }
 
 .fullscreen-button i {
-  width: 17px;
-  height: 17px;
-  border: 1.5px solid currentColor;
-  clip-path: polygon(
-    0 0,
-    43% 0,
-    43% 14%,
-    14% 14%,
-    14% 43%,
-    0 43%,
-    0 0,
-    100% 0,
-    100% 43%,
-    86% 43%,
-    86% 14%,
-    57% 14%,
-    57% 0,
-    100% 0,
-    100% 100%,
-    57% 100%,
-    57% 86%,
-    86% 86%,
-    86% 57%,
-    100% 57%,
-    100% 100%,
-    0 100%,
-    0 57%,
-    14% 57%,
-    14% 86%,
-    43% 86%,
-    43% 100%,
-    0 100%
-  );
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+}
+
+.fullscreen-button :deep(svg) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.fullscreen-button :deep(path) {
+  fill: currentColor;
 }
 
 .hidden-progress {
