@@ -6,7 +6,7 @@ import { loadAppConfig, saveAPIBaseURL } from './config'
 import MobileShell from './components/MobileShell.vue'
 import charaImage from '../../viewer/src/assets/chara.png'
 
-const appName = 'BakaVip 2.0'
+const appName = 'BakaVip2'
 
 const ready = ref(false)
 const loading = ref(false)

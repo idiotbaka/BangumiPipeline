@@ -35,7 +35,7 @@ type RoutePage = 'search' | 'follows' | 'history' | 'detail' | null
 type SubRoutePage = Exclude<RoutePage, 'detail' | null>
 type DetailReturnPage = Exclude<RoutePage, 'detail'>
 
-const appName = 'BakaVip 2.0'
+const appName = 'BakaVip2'
 const now = new Date()
 const tabs: Array<{ key: MainTab; label: string; icon: string }> = [
   { key: 'home', label: '首页', icon: homeNavIcon },

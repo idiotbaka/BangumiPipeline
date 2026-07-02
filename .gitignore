@@ -2,6 +2,7 @@
 node_modules/
 frontend/apps/*/dist/
 build/
+apk/
 autobangumi
 autobangumi.exe
 
@@ -13,6 +14,7 @@ data/
 
 # Local configuration
 .env
+src-tauri/android-signing/
 
 # Editors and operating systems
 .idea/

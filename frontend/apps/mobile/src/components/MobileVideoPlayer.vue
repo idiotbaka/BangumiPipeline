@@ -562,7 +562,7 @@ function clampTime(value: number) {
     </div>
 
     <div class="player-title">
-      <span>{{ nativeFullscreen ? '正在播放' : 'BakaVip 2.0' }}</span>
+      <span>{{ nativeFullscreen ? '正在播放' : 'BakaVip2' }}</span>
       <p>{{ title }}</p>
     </div>
 

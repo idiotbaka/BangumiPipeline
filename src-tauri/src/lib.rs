@@ -3,5 +3,5 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_player::init())
         .run(tauri::generate_context!())
-        .expect("error while running BakaVip 2.0");
+        .expect("error while running BakaVip2");
 }
