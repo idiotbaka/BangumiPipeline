@@ -729,7 +729,13 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             <p class="section-title">我的追番</p>
             <button class="section-link" type="button" @click="openRoute('follows')">全部 &gt;</button>
           </div>
-          <div v-if="homeLoading" class="state-card">正在加载追番...</div>
+          <div v-if="homeLoading" class="follow-rail skeleton-follow-rail" aria-label="正在加载追番">
+            <article v-for="index in 2" :key="index" class="continue-card skeleton-continue-card">
+              <div class="episode-cover skeleton-block" />
+              <div class="skeleton-line skeleton-block" />
+              <div class="skeleton-line short skeleton-block" />
+            </article>
+          </div>
           <div v-else-if="homeFollows.length === 0" class="state-card">还没有追番</div>
           <div v-else class="follow-rail">
             <article
@@ -766,7 +772,13 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <div class="section-head">
             <p class="section-title">最近更新</p>
           </div>
-          <div v-if="homeLoading" class="state-card">正在加载更新...</div>
+          <div v-if="homeLoading" class="poster-grid" aria-label="正在加载最近更新">
+            <article v-for="index in 6" :key="index" class="poster-card skeleton-card">
+              <div class="poster-cover skeleton-block" />
+              <div class="skeleton-line skeleton-block" />
+              <div class="skeleton-line short skeleton-block" />
+            </article>
+          </div>
           <div v-else-if="homeError" class="state-card error">{{ homeError }}</div>
           <div v-else class="poster-grid">
             <article
@@ -799,7 +811,13 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <div class="section-head">
             <p class="section-title">热播推荐</p>
           </div>
-          <div v-if="homeLoading" class="state-card">正在加载推荐...</div>
+          <div v-if="homeLoading" class="poster-grid" aria-label="正在加载热播推荐">
+            <article v-for="index in 6" :key="index" class="poster-card skeleton-card">
+              <div class="poster-cover skeleton-block" />
+              <div class="skeleton-line skeleton-block" />
+              <div class="skeleton-line short skeleton-block" />
+            </article>
+          </div>
           <div v-else class="poster-grid">
             <article
               v-for="item in hotItems"
@@ -856,7 +874,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           </div>
         </section>
 
-        <div v-if="scheduleLoading" class="state-card">正在加载时间表...</div>
+        <div v-if="scheduleLoading" class="result-list schedule-list" aria-label="正在加载时间表">
+          <article v-for="index in 6" :key="index" class="list-row poster-row skeleton-list-row">
+            <div class="poster-fallback small skeleton-block" />
+            <div>
+              <div class="skeleton-line skeleton-block" />
+              <div class="skeleton-line short skeleton-block" />
+              <div class="skeleton-line tiny skeleton-block" />
+            </div>
+          </article>
+        </div>
         <div v-else-if="scheduleError" class="state-card error">{{ scheduleError }}</div>
         <div v-else-if="scheduleItems.length === 0" class="state-card">这一天暂时没有番剧</div>
         <div v-else class="result-list schedule-list">
@@ -898,7 +925,14 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             </button>
           </div>
 
-          <div v-if="libraryFiltersLoading" class="state-card compact-state">正在加载筛选标签...</div>
+          <div v-if="libraryFiltersLoading" class="library-filter-list skeleton-filter-list" aria-label="正在加载筛选标签">
+            <section v-for="index in 3" :key="index" class="library-filter-row">
+              <div class="skeleton-filter-title skeleton-block" />
+              <div class="tag-rail">
+                <div v-for="tagIndex in 4" :key="tagIndex" class="skeleton-tag skeleton-block" />
+              </div>
+            </section>
+          </div>
           <div v-else-if="libraryFiltersError" class="state-card error compact-state">
             {{ libraryFiltersError }}
             <button type="button" @click="loadLibraryFilters">重试</button>
@@ -1811,6 +1845,58 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   width: 58%;
   height: 9px;
   margin-top: 6px;
+}
+
+.skeleton-line.tiny {
+  width: 46%;
+  height: 9px;
+  margin-top: 7px;
+}
+
+.skeleton-card .poster-cover,
+.skeleton-card .library-cover,
+.skeleton-continue-card .episode-cover,
+.skeleton-list-row .poster-fallback {
+  background: #f0f2f7;
+}
+
+.skeleton-follow-rail {
+  min-height: 166px;
+}
+
+.skeleton-continue-card {
+  pointer-events: none;
+}
+
+.skeleton-list-row {
+  pointer-events: none;
+}
+
+.skeleton-list-row .skeleton-line {
+  margin-top: 0;
+}
+
+.skeleton-list-row .skeleton-line.short,
+.skeleton-list-row .skeleton-line.tiny {
+  margin-top: 8px;
+}
+
+.skeleton-filter-list {
+  gap: 14px;
+}
+
+.skeleton-filter-title {
+  width: 68px;
+  height: 13px;
+  margin-bottom: 10px;
+  border-radius: 999px;
+}
+
+.skeleton-tag {
+  flex: 0 0 auto;
+  width: 68px;
+  height: 34px;
+  border-radius: 8px;
 }
 
 .result-list {
