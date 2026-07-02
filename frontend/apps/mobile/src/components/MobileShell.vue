@@ -34,6 +34,7 @@ type MainTab = 'home' | 'schedule' | 'library' | 'profile'
 type RoutePage = 'search' | 'follows' | 'history' | 'detail' | null
 type SubRoutePage = Exclude<RoutePage, 'detail' | null>
 type DetailReturnPage = Exclude<RoutePage, 'detail'>
+type PageTransitionName = 'page-slide-forward' | 'page-slide-back' | 'page-none'
 
 interface MobileShellHistoryState {
   bpMobileShell: true
@@ -70,6 +71,7 @@ const weekdays = [
 
 const activeTab = ref<MainTab>('home')
 const routePage = ref<RoutePage>(null)
+const pageTransitionName = ref<PageTransitionName>('page-none')
 const detailReturnPage = ref<DetailReturnPage>(null)
 const detailAnimeId = ref(0)
 const detailMediaId = ref(0)
@@ -148,6 +150,15 @@ const pageTitle = computed(() => {
   if (routePage.value === 'detail') return '番剧详情'
   return ''
 })
+const pageViewKey = computed(() => {
+  if (routePage.value === 'detail') {
+    return `detail-${detailAnimeId.value}-${detailMediaId.value || 0}`
+  }
+  if (routePage.value !== null) {
+    return `route-${routePage.value}`
+  }
+  return `tab-${activeTab.value}`
+})
 
 onMounted(() => {
   initializeShellHistory()
@@ -215,6 +226,12 @@ function handleShellPopState(event: PopStateEvent) {
   const previousTab = activeTab.value
   const previousDetailAnimeId = detailAnimeId.value
   const previousDetailMediaId = detailMediaId.value
+  pageTransitionName.value =
+    event.state.historyIndex < shellHistoryIndex
+      ? 'page-slide-back'
+      : event.state.historyIndex > shellHistoryIndex
+        ? 'page-slide-forward'
+        : 'page-none'
   shellHistoryIndex = Math.max(0, event.state.historyIndex)
   activeTab.value = event.state.tab
   routePage.value = event.state.page
@@ -321,6 +338,7 @@ function showTab(tab: MainTab) {
     return
   }
   saveCurrentTabScroll()
+  pageTransitionName.value = 'page-none'
   activeTab.value = tab
   routePage.value = null
   resetDetailState()
@@ -342,6 +360,7 @@ function showTab(tab: MainTab) {
 
 function openRoute(page: SubRoutePage) {
   saveCurrentTabScroll()
+  pageTransitionName.value = 'page-slide-forward'
   routePage.value = page
   resetDetailState()
   if (page === 'follows' || page === 'history') {
@@ -360,6 +379,7 @@ function closeRouteDirect() {
     closeAnimeDetailDirect()
     return
   }
+  pageTransitionName.value = 'page-slide-back'
   routePage.value = null
   resetDetailState()
   if (activeTab.value === 'home') {
@@ -386,6 +406,7 @@ function openAnimeDetail(bangumiId: number, mediaId = 0, positionSeconds = 0) {
   detailAnimeId.value = bangumiId
   detailMediaId.value = mediaId > 0 ? mediaId : 0
   detailPosition.value = positionSeconds > 0 ? positionSeconds : 0
+  pageTransitionName.value = 'page-slide-forward'
   routePage.value = 'detail'
   pushShellHistoryState()
   scrollToTopAfterRender()
@@ -397,6 +418,7 @@ function closeAnimeDetail() {
 
 function closeAnimeDetailDirect() {
   const returnPage = detailReturnPage.value
+  pageTransitionName.value = 'page-slide-back'
   resetDetailState()
   routePage.value = returnPage
   if (returnPage === 'follows' || returnPage === 'history') {
@@ -460,6 +482,9 @@ async function submitSearch() {
     saveCurrentTabScroll()
   }
   searchPageQuery.value = query
+  if (shouldPushRoute) {
+    pageTransitionName.value = 'page-slide-forward'
+  }
   routePage.value = 'search'
   resetDetailState()
   if (shouldPushRoute) {
@@ -786,14 +811,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
     </header>
 
     <section class="app-page">
-      <MobileAnimeDetailScreen
-        v-if="routePage === 'detail'"
-        :bangumi-id="detailAnimeId"
-        :initial-media-id="detailMediaId"
-        :initial-position="detailPosition"
-        @back="closeAnimeDetail"
-        @follow-changed="handleDetailFollowChanged"
-      />
+      <Transition :name="pageTransitionName">
+        <div :key="pageViewKey" class="page-view">
+          <MobileAnimeDetailScreen
+            v-if="routePage === 'detail'"
+            :bangumi-id="detailAnimeId"
+            :initial-media-id="detailMediaId"
+            :initial-position="detailPosition"
+            @back="closeAnimeDetail"
+            @follow-changed="handleDetailFollowChanged"
+          />
 
       <div v-else-if="routePage === 'search'" class="page-stack search-page">
         <form class="search-page-form" role="search" @submit.prevent="submitSearch">
@@ -1193,37 +1220,39 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
         </section>
       </div>
 
-      <div v-else class="page-stack profile-page">
-        <section class="profile-head">
-          <img :src="appIcon" alt="" />
-          <div>
-            <p class="profile-name">{{ props.user.username }}</p>
-            <p class="profile-subtitle">{{ appName }}</p>
+          <div v-else class="page-stack profile-page">
+            <section class="profile-head">
+              <img :src="appIcon" alt="" />
+              <div>
+                <p class="profile-name">{{ props.user.username }}</p>
+                <p class="profile-subtitle">{{ appName }}</p>
+              </div>
+            </section>
+
+            <div v-if="profileError" class="state-card error">{{ profileError }}</div>
+
+            <section class="menu-list">
+              <button type="button" @click="openRoute('follows')">
+                <span>我的追番</span>
+                <span class="menu-tail">
+                  <small>{{ follows.length || home.myFollows.length }} 部</small>
+                  <span class="chevron" aria-hidden="true">&gt;</span>
+                </span>
+              </button>
+              <button type="button" @click="openRoute('history')">
+                <span>观看历史</span>
+                <span class="menu-tail">
+                  <small>{{ history.length }} 条</small>
+                  <span class="chevron" aria-hidden="true">&gt;</span>
+                </span>
+              </button>
+              <button class="logout-menu" :disabled="loading" type="button" @click="emit('logout')">
+                <span>{{ loading ? '退出中' : '退出登录' }}</span>
+              </button>
+            </section>
           </div>
-        </section>
-
-        <div v-if="profileError" class="state-card error">{{ profileError }}</div>
-
-        <section class="menu-list">
-          <button type="button" @click="openRoute('follows')">
-            <span>我的追番</span>
-            <span class="menu-tail">
-              <small>{{ follows.length || home.myFollows.length }} 部</small>
-              <span class="chevron" aria-hidden="true">&gt;</span>
-            </span>
-          </button>
-          <button type="button" @click="openRoute('history')">
-            <span>观看历史</span>
-            <span class="menu-tail">
-              <small>{{ history.length }} 条</small>
-              <span class="chevron" aria-hidden="true">&gt;</span>
-            </span>
-          </button>
-          <button class="logout-menu" :disabled="loading" type="button" @click="emit('logout')">
-            <span>{{ loading ? '退出中' : '退出登录' }}</span>
-          </button>
-        </section>
-      </div>
+        </div>
+      </Transition>
     </section>
 
     <nav v-if="routePage === null" class="bottom-nav" aria-label="底部导航">
@@ -1416,10 +1445,64 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 }
 
 .app-page {
+  --page-pad-top: 12px;
+  --page-pad-x: 14px;
+  position: relative;
   width: min(100%, 520px);
   min-height: calc(100dvh - 132px);
+  overflow-x: hidden;
   margin: 0 auto;
   padding: 12px 14px calc(86px + env(safe-area-inset-bottom));
+}
+
+.page-view {
+  min-width: 0;
+}
+
+.page-slide-forward-enter-active,
+.page-slide-forward-leave-active,
+.page-slide-back-enter-active,
+.page-slide-back-leave-active {
+  transition:
+    transform 260ms cubic-bezier(0.2, 0.82, 0.2, 1),
+    opacity 220ms var(--ease-out);
+  will-change: transform, opacity;
+}
+
+.page-slide-forward-leave-active,
+.page-slide-back-leave-active {
+  position: absolute;
+  top: var(--page-pad-top);
+  right: var(--page-pad-x);
+  left: var(--page-pad-x);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.page-slide-forward-enter-active,
+.page-slide-back-enter-active {
+  position: relative;
+  z-index: 2;
+}
+
+.page-slide-forward-enter-from {
+  opacity: 0.72;
+  transform: translate3d(100%, 0, 0);
+}
+
+.page-slide-forward-leave-to {
+  opacity: 0.5;
+  transform: translate3d(-24%, 0, 0);
+}
+
+.page-slide-back-enter-from {
+  opacity: 0.72;
+  transform: translate3d(-32%, 0, 0);
+}
+
+.page-slide-back-leave-to {
+  opacity: 0.5;
+  transform: translate3d(100%, 0, 0);
 }
 
 .route-mode .app-page {
@@ -1433,6 +1516,8 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 }
 
 .detail-mode .app-page {
+  --page-pad-top: 0px;
+  --page-pad-x: 0px;
   width: 100%;
   min-height: 100dvh;
   padding: 0;
@@ -1441,7 +1526,6 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 .page-stack {
   display: grid;
   gap: 18px;
-  animation: page-in 180ms var(--ease-out) both;
 }
 
 .home-page {
@@ -2322,6 +2406,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 @media (max-width: 360px) {
   .app-page {
+    --page-pad-x: 12px;
     padding-right: 12px;
     padding-left: 12px;
   }
@@ -2347,12 +2432,21 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   }
 }
 
-@keyframes page-in {
-  from {
-    opacity: 0;
+@media (prefers-reduced-motion: reduce) {
+  .page-slide-forward-enter-active,
+  .page-slide-forward-leave-active,
+  .page-slide-back-enter-active,
+  .page-slide-back-leave-active {
+    position: static;
+    transition: none;
   }
-  to {
+
+  .page-slide-forward-enter-from,
+  .page-slide-forward-leave-to,
+  .page-slide-back-enter-from,
+  .page-slide-back-leave-to {
     opacity: 1;
+    transform: none;
   }
 }
 
