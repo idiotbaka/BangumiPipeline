@@ -29,6 +29,7 @@ const errorMessage = ref('')
 const mediaReady = ref(false)
 const resumeApplied = ref(false)
 const hasPlayed = ref(false)
+const autoplayAttempted = ref(false)
 const nativeFullscreen = ref(false)
 const seekGestureActive = ref(false)
 const seekGestureDelta = ref(0)
@@ -37,15 +38,23 @@ const seekGestureTarget = ref(0)
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
 let bufferTimer: ReturnType<typeof setInterval> | null = null
+let tapTimer: ReturnType<typeof setTimeout> | null = null
 let fullscreenHistoryPushed = false
 let ignoreNextPopState = false
-let suppressNextVideoClick = false
+let lastTap:
+  | {
+      time: number
+      x: number
+      y: number
+    }
+  | null = null
 let seekGesture:
   | {
       pointerId: number
       startX: number
       startY: number
       startTime: number
+      canSeek: boolean
       tracking: boolean
       moved: boolean
     }
@@ -53,6 +62,8 @@ let seekGesture:
 
 const seekGestureThreshold = 28
 const seekGestureClickTolerance = 6
+const doubleTapDelay = 260
+const doubleTapDistance = 42
 const maxSeekGestureSeconds = 600
 
 const playerLoading = computed(() => Boolean(props.src) && !mediaReady.value && !errorMessage.value)
@@ -89,6 +100,7 @@ onBeforeUnmount(() => {
   stopProgressTimer()
   stopBufferTimer()
   stopControlsTimer()
+  stopTapTimer()
   void setNativeKeepScreenOn(false)
   if (nativeFullscreen.value) {
     void exitFullscreen({ fromUnmount: true })
@@ -103,22 +115,23 @@ async function togglePlay() {
     return
   }
   if (element.paused) {
-    try {
-      await element.play()
-    } catch {
-      errorMessage.value = '视频暂时无法播放'
-    }
+    await requestPlayback(false)
   } else {
     element.pause()
   }
 }
 
-function handleVideoClick() {
-  if (suppressNextVideoClick) {
-    suppressNextVideoClick = false
-    return
+async function requestPlayback(silent: boolean) {
+  const element = video.value
+  if (!element || !props.src || !canControlPlayback.value) return
+  try {
+    await element.play()
+  } catch {
+    if (!silent) {
+      errorMessage.value = '视频暂时无法播放'
+    }
+    showControls()
   }
-  void togglePlay()
 }
 
 function resetMediaState() {
@@ -132,8 +145,10 @@ function resetMediaState() {
   mediaReady.value = false
   resumeApplied.value = false
   hasPlayed.value = false
+  autoplayAttempted.value = false
   stopProgressTimer()
   stopBufferTimer()
+  stopTapTimer()
   showControls()
 }
 
@@ -143,6 +158,7 @@ function handleLoadedMetadata() {
   mediaReady.value = duration.value > 0
   applyResumePosition()
   updateBuffered()
+  attemptAutoplay()
 }
 
 function applyResumePosition() {
@@ -230,7 +246,16 @@ function handleCanPlay() {
   if (!mediaReady.value) handleLoadedMetadata()
   buffering.value = false
   updateBuffered()
+  attemptAutoplay()
   if (playing.value) scheduleControlsHide()
+}
+
+function attemptAutoplay() {
+  if (autoplayAttempted.value || !canControlPlayback.value || !video.value?.paused) {
+    return
+  }
+  autoplayAttempted.value = true
+  void requestPlayback(true)
 }
 
 function handleError() {
@@ -248,9 +273,8 @@ function handleInteraction() {
 }
 
 function handlePointerDown(event: PointerEvent) {
-  handleInteraction()
   resetSeekGesturePreview()
-  if (!canStartSeekGesture(event)) {
+  if (!event.isPrimary || isInteractiveTarget(event.target)) {
     seekGesture = null
     return
   }
@@ -259,10 +283,13 @@ function handlePointerDown(event: PointerEvent) {
     startX: event.clientX,
     startY: event.clientY,
     startTime: currentTime.value,
+    canSeek: canStartSeekGesture(event),
     tracking: false,
     moved: false,
   }
-  player.value?.setPointerCapture?.(event.pointerId)
+  if (seekGesture.canSeek) {
+    player.value?.setPointerCapture?.(event.pointerId)
+  }
 }
 
 function handlePointerMove(event: PointerEvent) {
@@ -276,6 +303,9 @@ function handlePointerMove(event: PointerEvent) {
   const absY = Math.abs(deltaY)
   if (absX > seekGestureClickTolerance || absY > seekGestureClickTolerance) {
     seekGesture.moved = true
+  }
+  if (!seekGesture.canSeek) {
+    return
   }
   if (!seekGesture.tracking) {
     if (absX < seekGestureThreshold) {
@@ -297,18 +327,16 @@ function handlePointerUp(event: PointerEvent) {
   if (!seekGesture || event.pointerId !== seekGesture.pointerId) {
     return
   }
-  if (seekGesture.moved) {
-    suppressNextVideoClick = true
-    window.setTimeout(() => {
-      suppressNextVideoClick = false
-    }, 0)
-  }
   if (seekGesture.tracking && Math.abs(seekGestureDelta.value) >= 5) {
     applySeekGesture()
   }
-  player.value?.releasePointerCapture?.(event.pointerId)
+  const shouldHandleTap = !seekGesture.tracking && !seekGesture.moved && !isInteractiveTarget(event.target)
+  releaseGesturePointerCapture(event.pointerId)
   seekGesture = null
   resetSeekGesturePreview()
+  if (shouldHandleTap) {
+    handlePlayerTap(event)
+  }
 }
 
 function handlePointerCancel(event?: PointerEvent) {
@@ -354,16 +382,63 @@ function applySeekGesture() {
 
 function cancelSeekGesture() {
   if (seekGesture?.pointerId !== undefined) {
-    player.value?.releasePointerCapture?.(seekGesture.pointerId)
+    releaseGesturePointerCapture(seekGesture.pointerId)
   }
   seekGesture = null
   resetSeekGesturePreview()
+}
+
+function releaseGesturePointerCapture(pointerId: number) {
+  const element = player.value
+  if (!element?.hasPointerCapture?.(pointerId)) {
+    return
+  }
+  element.releasePointerCapture(pointerId)
 }
 
 function resetSeekGesturePreview() {
   seekGestureActive.value = false
   seekGestureDelta.value = 0
   seekGestureTarget.value = currentTime.value
+}
+
+function handlePlayerTap(event: PointerEvent) {
+  if (playerLoading.value || errorMessage.value || buffering.value) {
+    showControls()
+    return
+  }
+
+  const now = window.performance.now()
+  const isDoubleTap =
+    lastTap !== null &&
+    now - lastTap.time <= doubleTapDelay &&
+    Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) <= doubleTapDistance
+
+  if (isDoubleTap) {
+    stopTapTimer()
+    lastTap = null
+    showControls()
+    void togglePlay()
+    return
+  }
+
+  lastTap = { time: now, x: event.clientX, y: event.clientY }
+  stopTapTimer()
+  tapTimer = window.setTimeout(() => {
+    toggleControls()
+    lastTap = null
+    tapTimer = null
+  }, doubleTapDelay)
+}
+
+function toggleControls() {
+  if (controlsVisible.value) {
+    controlsVisible.value = false
+    stopControlsTimer()
+    return
+  }
+  showControls()
+  scheduleControlsHide()
 }
 
 function showControls() {
@@ -386,6 +461,13 @@ function stopControlsTimer() {
   if (controlsTimer !== null) {
     clearTimeout(controlsTimer)
     controlsTimer = null
+  }
+}
+
+function stopTapTimer() {
+  if (tapTimer !== null) {
+    clearTimeout(tapTimer)
+    tapTimer = null
   }
 }
 
@@ -504,7 +586,7 @@ function clampTime(value: number) {
   <section
     ref="player"
     class="mobile-player"
-    :class="{ fullscreen: nativeFullscreen, 'ui-hidden': !controlsVisible && playing, loading: playerLoading }"
+    :class="{ fullscreen: nativeFullscreen, 'ui-hidden': !controlsVisible, loading: playerLoading }"
     tabindex="0"
     :aria-label="`正在播放 ${title}`"
     @pointerdown="handlePointerDown"
@@ -522,7 +604,6 @@ function clampTime(value: number) {
       playsinline
       webkit-playsinline
       x5-playsinline
-      @click="handleVideoClick"
       @play="handlePlay"
       @pause="handlePause"
       @ended="handleEnded"
@@ -539,16 +620,6 @@ function clampTime(value: number) {
     />
 
     <div class="player-shade" aria-hidden="true" />
-
-    <button
-      v-if="canControlPlayback && !playing && !buffering && !errorMessage"
-      class="center-play"
-      type="button"
-      aria-label="播放"
-      @click="togglePlay"
-    >
-      <i aria-hidden="true" />
-    </button>
 
     <div v-if="playerLoading" class="player-state" aria-live="polite">
       <i aria-hidden="true" /><span>播放器加载中</span>
@@ -644,28 +715,6 @@ function clampTime(value: number) {
   transition: opacity 180ms var(--ease-soft);
 }
 
-.center-play {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 58px;
-  height: 58px;
-  display: grid;
-  place-items: center;
-  color: #ffffff;
-  background: rgba(238, 63, 134, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.48);
-  border-radius: 50%;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
-  transform: translate(-50%, -50%);
-  transition: transform 160ms var(--ease-soft), filter 160ms var(--ease-soft);
-}
-
-.center-play:active {
-  transform: translate(-50%, -50%) scale(0.95);
-}
-
-.center-play i,
 .play-button i:not(.pause) {
   width: 0;
   height: 0;
