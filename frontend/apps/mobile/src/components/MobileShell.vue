@@ -72,6 +72,7 @@ const home = ref<ViewerHome>({
 })
 const homeLoading = ref(false)
 const homeError = ref('')
+const homeRefreshToken = ref(0)
 
 const searchQuery = ref('')
 const searchPageQuery = ref('')
@@ -97,11 +98,14 @@ const libraryError = ref('')
 
 const follows = ref<ViewerFollowedAnime[]>([])
 const history = ref<ViewerWatchHistoryItem[]>([])
+const profileLoaded = ref(false)
 const profileLoading = ref(false)
 const profileError = ref('')
+const profileRefreshToken = ref(0)
 
 let relativeTimer: ReturnType<typeof setInterval> | null = null
 let libraryRequestID = 0
+let refreshTokenSeed = 0
 const tabScrollPositions: Record<MainTab, number> = {
   home: 0,
   schedule: 0,
@@ -147,6 +151,12 @@ onBeforeUnmount(() => {
 
 function showTab(tab: MainTab) {
   if (routePage.value === null && activeTab.value === tab) {
+    if (tab === 'home') {
+      refreshHomeIfNeeded()
+    }
+    if (tab === 'profile') {
+      void ensureProfile()
+    }
     return
   }
   saveCurrentTabScroll()
@@ -160,6 +170,9 @@ function showTab(tab: MainTab) {
   }
   if (tab === 'profile') {
     void ensureProfile()
+  }
+  if (tab === 'home') {
+    refreshHomeIfNeeded()
   }
   restoreTabScroll(tab)
 }
@@ -179,6 +192,12 @@ function closeRoute() {
     return
   }
   routePage.value = null
+  if (activeTab.value === 'home') {
+    refreshHomeIfNeeded()
+  }
+  if (activeTab.value === 'profile') {
+    void ensureProfile()
+  }
   restoreTabScroll(activeTab.value)
 }
 
@@ -186,6 +205,7 @@ function openAnimeDetail(bangumiId: number, mediaId = 0, positionSeconds = 0) {
   if (!Number.isFinite(bangumiId) || bangumiId <= 0) {
     return
   }
+  markPlaybackDataNeedsRefresh()
   if (routePage.value === null) {
     saveCurrentTabScroll()
     detailReturnPage.value = null
@@ -206,7 +226,16 @@ function closeAnimeDetail() {
   detailPosition.value = 0
   routePage.value = returnPage
   detailReturnPage.value = null
+  if (returnPage === 'follows' || returnPage === 'history') {
+    void ensureProfile()
+  }
   if (returnPage === null) {
+    if (activeTab.value === 'home') {
+      refreshHomeIfNeeded()
+    }
+    if (activeTab.value === 'profile') {
+      void ensureProfile()
+    }
     restoreTabScroll(activeTab.value)
   } else {
     scrollToTopAfterRender()
@@ -214,16 +243,32 @@ function closeAnimeDetail() {
 }
 
 function handleDetailFollowChanged() {
+  markPlaybackDataNeedsRefresh()
+}
+
+function markPlaybackDataNeedsRefresh() {
+  refreshTokenSeed += 1
+  homeRefreshToken.value = refreshTokenSeed
+  profileRefreshToken.value = refreshTokenSeed
+}
+
+function refreshHomeIfNeeded() {
+  if (homeRefreshToken.value === 0 || homeLoading.value) {
+    return
+  }
   void loadHome()
-  void loadProfile()
 }
 
 async function loadHome() {
+  const requestRefreshToken = homeRefreshToken.value
   homeLoading.value = true
   homeError.value = ''
   try {
     const result = await api.home()
     home.value = result.home
+    if (homeRefreshToken.value === requestRefreshToken) {
+      homeRefreshToken.value = 0
+    }
   } catch (error) {
     homeError.value = error instanceof Error ? error.message : '首页加载失败'
   } finally {
@@ -394,19 +439,27 @@ function changeSeason(direction: number) {
 }
 
 async function ensureProfile() {
-  if ((follows.value.length > 0 || history.value.length > 0) && !profileError.value) {
+  if (profileLoading.value) {
+    return
+  }
+  if (profileLoaded.value && profileRefreshToken.value === 0 && !profileError.value) {
     return
   }
   await loadProfile()
 }
 
 async function loadProfile() {
+  const requestRefreshToken = profileRefreshToken.value
   profileLoading.value = true
   profileError.value = ''
   try {
     const [followResult, historyResult] = await Promise.all([api.followedAnime(), api.watchHistory()])
     follows.value = followResult.items
     history.value = historyResult.items
+    profileLoaded.value = true
+    if (profileRefreshToken.value === requestRefreshToken) {
+      profileRefreshToken.value = 0
+    }
   } catch (error) {
     profileError.value = error instanceof Error ? error.message : '个人数据加载失败'
   } finally {
