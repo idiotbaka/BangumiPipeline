@@ -35,6 +35,19 @@ type RoutePage = 'search' | 'follows' | 'history' | 'detail' | null
 type SubRoutePage = Exclude<RoutePage, 'detail' | null>
 type DetailReturnPage = Exclude<RoutePage, 'detail'>
 
+interface MobileShellHistoryState {
+  bpMobileShell: true
+  historyIndex: number
+  tab: MainTab
+  page: RoutePage
+  searchQuery: string
+  searchPageQuery: string
+  detailReturnPage: DetailReturnPage
+  detailAnimeId: number
+  detailMediaId: number
+  detailPosition: number
+}
+
 const appName = 'BakaVip2'
 const now = new Date()
 const tabs: Array<{ key: MainTab; label: string; icon: string }> = [
@@ -106,6 +119,8 @@ const profileRefreshToken = ref(0)
 let relativeTimer: ReturnType<typeof setInterval> | null = null
 let libraryRequestID = 0
 let refreshTokenSeed = 0
+let shellHistoryIndex = 0
+let previousScrollRestoration: ScrollRestoration | null = null
 const tabScrollPositions: Record<MainTab, number> = {
   home: 0,
   schedule: 0,
@@ -135,8 +150,10 @@ const pageTitle = computed(() => {
 })
 
 onMounted(() => {
+  initializeShellHistory()
   void loadHome()
   window.addEventListener('scroll', handleWindowScroll, { passive: true })
+  window.addEventListener('popstate', handleShellPopState)
   relativeTimer = setInterval(() => {
     relativeTimeNow.value = Date.now()
   }, 60_000)
@@ -146,8 +163,152 @@ onBeforeUnmount(() => {
   if (relativeTimer !== null) {
     clearInterval(relativeTimer)
   }
+  restoreBrowserScrollRestoration()
   window.removeEventListener('scroll', handleWindowScroll)
+  window.removeEventListener('popstate', handleShellPopState)
 })
+
+function initializeShellHistory() {
+  previousScrollRestoration = window.history.scrollRestoration
+  window.history.scrollRestoration = 'manual'
+  shellHistoryIndex = 0
+  window.history.replaceState(createShellHistoryState(), '', window.location.href)
+}
+
+function restoreBrowserScrollRestoration() {
+  if (previousScrollRestoration !== null) {
+    window.history.scrollRestoration = previousScrollRestoration
+    previousScrollRestoration = null
+  }
+}
+
+function createShellHistoryState(): MobileShellHistoryState {
+  return {
+    bpMobileShell: true,
+    historyIndex: shellHistoryIndex,
+    tab: activeTab.value,
+    page: routePage.value,
+    searchQuery: searchQuery.value,
+    searchPageQuery: searchPageQuery.value,
+    detailReturnPage: detailReturnPage.value,
+    detailAnimeId: detailAnimeId.value,
+    detailMediaId: detailMediaId.value,
+    detailPosition: detailPosition.value,
+  }
+}
+
+function pushShellHistoryState() {
+  shellHistoryIndex += 1
+  window.history.pushState(createShellHistoryState(), '', window.location.href)
+}
+
+function replaceShellHistoryState() {
+  window.history.replaceState(createShellHistoryState(), '', window.location.href)
+}
+
+function handleShellPopState(event: PopStateEvent) {
+  if (!isShellHistoryState(event.state)) {
+    return
+  }
+
+  const previousPage = routePage.value
+  const previousTab = activeTab.value
+  const previousDetailAnimeId = detailAnimeId.value
+  const previousDetailMediaId = detailMediaId.value
+  shellHistoryIndex = Math.max(0, event.state.historyIndex)
+  activeTab.value = event.state.tab
+  routePage.value = event.state.page
+  searchQuery.value = event.state.searchQuery
+  searchPageQuery.value = event.state.searchPageQuery
+
+  if (event.state.page === 'detail') {
+    detailReturnPage.value = event.state.detailReturnPage
+    detailAnimeId.value = event.state.detailAnimeId
+    detailMediaId.value = event.state.detailMediaId
+    detailPosition.value = event.state.detailPosition
+  } else {
+    resetDetailState()
+  }
+
+  ensureCurrentViewData()
+
+  const isSameDetail =
+    previousPage === 'detail' &&
+    event.state.page === 'detail' &&
+    previousDetailAnimeId === event.state.detailAnimeId &&
+    previousDetailMediaId === event.state.detailMediaId
+
+  if (event.state.page === null) {
+    if (previousPage !== null || previousTab !== event.state.tab) {
+      restoreTabScroll(event.state.tab)
+    }
+  } else if (!isSameDetail) {
+    scrollToTopAfterRender()
+  }
+}
+
+function isShellHistoryState(value: unknown): value is MobileShellHistoryState {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const state = value as Partial<MobileShellHistoryState>
+  return (
+    state.bpMobileShell === true &&
+    typeof state.historyIndex === 'number' &&
+    isMainTab(state.tab) &&
+    isRoutePage(state.page)
+  )
+}
+
+function isMainTab(value: unknown): value is MainTab {
+  return value === 'home' || value === 'schedule' || value === 'library' || value === 'profile'
+}
+
+function isRoutePage(value: unknown): value is RoutePage {
+  return value === null || value === 'search' || value === 'follows' || value === 'history' || value === 'detail'
+}
+
+function navigateBackOrClose() {
+  if (shellHistoryIndex > 0) {
+    window.history.back()
+    return
+  }
+  if (routePage.value === 'detail') {
+    closeAnimeDetailDirect()
+    return
+  }
+  if (routePage.value !== null) {
+    closeRouteDirect()
+  }
+}
+
+function resetDetailState() {
+  detailReturnPage.value = null
+  detailAnimeId.value = 0
+  detailMediaId.value = 0
+  detailPosition.value = 0
+}
+
+function ensureCurrentViewData() {
+  if (routePage.value === 'follows' || routePage.value === 'history') {
+    void ensureProfile()
+    return
+  }
+  if (routePage.value === null) {
+    if (activeTab.value === 'home') {
+      refreshHomeIfNeeded()
+    }
+    if (activeTab.value === 'schedule' && schedule.value === null && !scheduleLoading.value) {
+      void loadSchedule()
+    }
+    if (activeTab.value === 'library') {
+      void ensureLibrary()
+    }
+    if (activeTab.value === 'profile') {
+      void ensureProfile()
+    }
+  }
+}
 
 function showTab(tab: MainTab) {
   if (routePage.value === null && activeTab.value === tab) {
@@ -162,6 +323,7 @@ function showTab(tab: MainTab) {
   saveCurrentTabScroll()
   activeTab.value = tab
   routePage.value = null
+  resetDetailState()
   if (tab === 'schedule' && schedule.value === null && !scheduleLoading.value) {
     void loadSchedule()
   }
@@ -174,30 +336,39 @@ function showTab(tab: MainTab) {
   if (tab === 'home') {
     refreshHomeIfNeeded()
   }
+  replaceShellHistoryState()
   restoreTabScroll(tab)
 }
 
 function openRoute(page: SubRoutePage) {
   saveCurrentTabScroll()
   routePage.value = page
+  resetDetailState()
   if (page === 'follows' || page === 'history') {
     void ensureProfile()
   }
+  pushShellHistoryState()
   scrollToTopAfterRender()
 }
 
 function closeRoute() {
+  navigateBackOrClose()
+}
+
+function closeRouteDirect() {
   if (routePage.value === 'detail') {
-    closeAnimeDetail()
+    closeAnimeDetailDirect()
     return
   }
   routePage.value = null
+  resetDetailState()
   if (activeTab.value === 'home') {
     refreshHomeIfNeeded()
   }
   if (activeTab.value === 'profile') {
     void ensureProfile()
   }
+  replaceShellHistoryState()
   restoreTabScroll(activeTab.value)
 }
 
@@ -216,16 +387,18 @@ function openAnimeDetail(bangumiId: number, mediaId = 0, positionSeconds = 0) {
   detailMediaId.value = mediaId > 0 ? mediaId : 0
   detailPosition.value = positionSeconds > 0 ? positionSeconds : 0
   routePage.value = 'detail'
+  pushShellHistoryState()
   scrollToTopAfterRender()
 }
 
 function closeAnimeDetail() {
+  navigateBackOrClose()
+}
+
+function closeAnimeDetailDirect() {
   const returnPage = detailReturnPage.value
-  detailAnimeId.value = 0
-  detailMediaId.value = 0
-  detailPosition.value = 0
+  resetDetailState()
   routePage.value = returnPage
-  detailReturnPage.value = null
   if (returnPage === 'follows' || returnPage === 'history') {
     void ensureProfile()
   }
@@ -240,6 +413,7 @@ function closeAnimeDetail() {
   } else {
     scrollToTopAfterRender()
   }
+  replaceShellHistoryState()
 }
 
 function handleDetailFollowChanged() {
@@ -281,9 +455,18 @@ async function submitSearch() {
   if (!query) {
     return
   }
-  saveCurrentTabScroll()
+  const shouldPushRoute = routePage.value !== 'search'
+  if (routePage.value === null) {
+    saveCurrentTabScroll()
+  }
   searchPageQuery.value = query
   routePage.value = 'search'
+  resetDetailState()
+  if (shouldPushRoute) {
+    pushShellHistoryState()
+  } else {
+    replaceShellHistoryState()
+  }
   scrollToTopAfterRender()
   await loadSearch(query)
 }
