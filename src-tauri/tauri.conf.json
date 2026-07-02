@@ -33,8 +33,5 @@
     "android": {
       "minSdkVersion": 24
     }
-  },
-  "plugins": {
-    "player": {}
   }
 }

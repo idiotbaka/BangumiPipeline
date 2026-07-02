@@ -15,6 +15,7 @@ data/
 # Local configuration
 .env
 src-tauri/android-signing/
+src-tauri/plugins/*/android/.tauri/
 
 # Editors and operating systems
 .idea/
