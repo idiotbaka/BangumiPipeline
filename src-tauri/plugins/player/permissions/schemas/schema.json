@@ -343,10 +343,34 @@
           "markdownDescription": "Denies the exit_fullscreen command without any pre-configured scope."
         },
         {
-          "description": "Allows the mobile player to enter and exit native fullscreen.\n#### This default permission set includes:\n\n- `allow-enterFullscreen`\n- `allow-exitFullscreen`\n- `allow-enter-fullscreen`\n- `allow-exit-fullscreen`",
+          "description": "Enables the setKeepScreenOn command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-setKeepScreenOn",
+          "markdownDescription": "Enables the setKeepScreenOn command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the setKeepScreenOn command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-setKeepScreenOn",
+          "markdownDescription": "Denies the setKeepScreenOn command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_keep_screen_on command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-keep-screen-on",
+          "markdownDescription": "Enables the set_keep_screen_on command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_keep_screen_on command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-keep-screen-on",
+          "markdownDescription": "Denies the set_keep_screen_on command without any pre-configured scope."
+        },
+        {
+          "description": "Allows the mobile player to control native fullscreen and playback wake lock.\n#### This default permission set includes:\n\n- `allow-enterFullscreen`\n- `allow-exitFullscreen`\n- `allow-setKeepScreenOn`\n- `allow-enter-fullscreen`\n- `allow-exit-fullscreen`\n- `allow-set-keep-screen-on`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Allows the mobile player to enter and exit native fullscreen.\n#### This default permission set includes:\n\n- `allow-enterFullscreen`\n- `allow-exitFullscreen`\n- `allow-enter-fullscreen`\n- `allow-exit-fullscreen`"
+          "markdownDescription": "Allows the mobile player to control native fullscreen and playback wake lock.\n#### This default permission set includes:\n\n- `allow-enterFullscreen`\n- `allow-exitFullscreen`\n- `allow-setKeepScreenOn`\n- `allow-enter-fullscreen`\n- `allow-exit-fullscreen`\n- `allow-set-keep-screen-on`"
         }
       ]
     }

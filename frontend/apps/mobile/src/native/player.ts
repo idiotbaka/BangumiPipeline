@@ -41,3 +41,16 @@ export async function exitNativeFullscreen() {
   }
   return true
 }
+
+export async function setNativeKeepScreenOn(enabled: boolean) {
+  const core = tauriCore()
+  if (!core) {
+    return false
+  }
+  try {
+    await core.invoke('plugin:player|setKeepScreenOn', { enabled })
+  } catch {
+    await core.invoke('plugin:player|set_keep_screen_on', { args: { enabled } })
+  }
+  return true
+}

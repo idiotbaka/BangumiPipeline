@@ -1,13 +1,15 @@
 ## Default Permission
 
-Allows the mobile player to enter and exit native fullscreen.
+Allows the mobile player to control native fullscreen and playback wake lock.
 
 #### This default permission set includes the following:
 
 - `allow-enterFullscreen`
 - `allow-exitFullscreen`
+- `allow-setKeepScreenOn`
 - `allow-enter-fullscreen`
 - `allow-exit-fullscreen`
+- `allow-set-keep-screen-on`
 
 ## Permission Table
 
@@ -118,6 +120,58 @@ Enables the exit_fullscreen command without any pre-configured scope.
 <td>
 
 Denies the exit_fullscreen command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`player:allow-setKeepScreenOn`
+
+</td>
+<td>
+
+Enables the setKeepScreenOn command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`player:deny-setKeepScreenOn`
+
+</td>
+<td>
+
+Denies the setKeepScreenOn command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`player:allow-set-keep-screen-on`
+
+</td>
+<td>
+
+Enables the set_keep_screen_on command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`player:deny-set-keep-screen-on`
+
+</td>
+<td>
+
+Denies the set_keep_screen_on command without any pre-configured scope.
 
 </td>
 </tr>

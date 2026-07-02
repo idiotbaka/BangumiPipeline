@@ -20,6 +20,7 @@ import libraryNavIcon from '../assets/nav-library.svg?raw'
 import profileNavIcon from '../assets/nav-profile.svg?raw'
 import scheduleNavIcon from '../assets/nav-schedule.svg?raw'
 import searchIcon from '../assets/search.svg?raw'
+import MobileAnimeDetailScreen from './MobileAnimeDetailScreen.vue'
 
 interface Props {
   user: ViewerUser
@@ -30,7 +31,9 @@ const props = defineProps<Props>()
 const emit = defineEmits<{ (event: 'logout'): void }>()
 
 type MainTab = 'home' | 'schedule' | 'library' | 'profile'
-type RoutePage = 'search' | 'follows' | 'history' | null
+type RoutePage = 'search' | 'follows' | 'history' | 'detail' | null
+type SubRoutePage = Exclude<RoutePage, 'detail' | null>
+type DetailReturnPage = Exclude<RoutePage, 'detail'>
 
 const appName = 'BakaVip 2.0'
 const now = new Date()
@@ -54,6 +57,10 @@ const weekdays = [
 
 const activeTab = ref<MainTab>('home')
 const routePage = ref<RoutePage>(null)
+const detailReturnPage = ref<DetailReturnPage>(null)
+const detailAnimeId = ref(0)
+const detailMediaId = ref(0)
+const detailPosition = ref(0)
 const relativeTimeNow = ref(Date.now())
 const failedImages = ref<Set<string>>(new Set())
 
@@ -119,6 +126,7 @@ const pageTitle = computed(() => {
   if (routePage.value === 'search') return '搜索结果'
   if (routePage.value === 'follows') return '我的追番'
   if (routePage.value === 'history') return '观看历史'
+  if (routePage.value === 'detail') return '番剧详情'
   return ''
 })
 
@@ -156,7 +164,7 @@ function showTab(tab: MainTab) {
   restoreTabScroll(tab)
 }
 
-function openRoute(page: Exclude<RoutePage, null>) {
+function openRoute(page: SubRoutePage) {
   saveCurrentTabScroll()
   routePage.value = page
   if (page === 'follows' || page === 'history') {
@@ -166,8 +174,48 @@ function openRoute(page: Exclude<RoutePage, null>) {
 }
 
 function closeRoute() {
+  if (routePage.value === 'detail') {
+    closeAnimeDetail()
+    return
+  }
   routePage.value = null
   restoreTabScroll(activeTab.value)
+}
+
+function openAnimeDetail(bangumiId: number, mediaId = 0, positionSeconds = 0) {
+  if (!Number.isFinite(bangumiId) || bangumiId <= 0) {
+    return
+  }
+  if (routePage.value === null) {
+    saveCurrentTabScroll()
+    detailReturnPage.value = null
+  } else if (routePage.value !== 'detail') {
+    detailReturnPage.value = routePage.value
+  }
+  detailAnimeId.value = bangumiId
+  detailMediaId.value = mediaId > 0 ? mediaId : 0
+  detailPosition.value = positionSeconds > 0 ? positionSeconds : 0
+  routePage.value = 'detail'
+  scrollToTopAfterRender()
+}
+
+function closeAnimeDetail() {
+  const returnPage = detailReturnPage.value
+  detailAnimeId.value = 0
+  detailMediaId.value = 0
+  detailPosition.value = 0
+  routePage.value = returnPage
+  detailReturnPage.value = null
+  if (returnPage === null) {
+    restoreTabScroll(activeTab.value)
+  } else {
+    scrollToTopAfterRender()
+  }
+}
+
+function handleDetailFollowChanged() {
+  void loadHome()
+  void loadProfile()
 }
 
 async function loadHome() {
@@ -479,7 +527,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 </script>
 
 <template>
-  <main class="mobile-shell" :class="{ 'route-mode': routePage !== null }">
+  <main class="mobile-shell" :class="{ 'route-mode': routePage !== null, 'detail-mode': routePage === 'detail' }">
     <header v-if="routePage === null" class="app-topbar">
       <div class="brand-mini">
         <img :src="appIcon" alt="" />
@@ -493,7 +541,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
       </form>
     </header>
 
-    <header v-else class="sub-topbar">
+    <header v-else-if="routePage !== 'detail'" class="sub-topbar">
       <button type="button" aria-label="返回" @click="closeRoute">‹</button>
       <div>
         <span>{{ appName }}</span>
@@ -502,7 +550,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
     </header>
 
     <section class="app-page">
-      <div v-if="routePage === 'search'" class="page-stack search-page">
+      <MobileAnimeDetailScreen
+        v-if="routePage === 'detail'"
+        :bangumi-id="detailAnimeId"
+        :initial-media-id="detailMediaId"
+        :initial-position="detailPosition"
+        @back="closeAnimeDetail"
+        @follow-changed="handleDetailFollowChanged"
+      />
+
+      <div v-else-if="routePage === 'search'" class="page-stack search-page">
         <form class="search-page-form" role="search" @submit.prevent="submitSearch">
           <input v-model="searchQuery" type="search" placeholder="搜索番剧" />
           <button type="submit" :disabled="searchLoading">搜索</button>
@@ -513,7 +570,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           没有找到“{{ searchPageQuery }}”
         </div>
         <div v-else class="result-list">
-          <article v-for="item in searchResults" :key="item.bangumiId" class="list-row poster-row">
+          <article
+            v-for="item in searchResults"
+            :key="item.bangumiId"
+            class="list-row poster-row"
+            role="button"
+            tabindex="0"
+            @click="openAnimeDetail(item.bangumiId)"
+            @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
+            @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
+          >
             <img
               v-if="imageAvailable(`search-${item.bangumiId}`, item.hasCover)"
               :src="animeCoverURL(item.bangumiId)"
@@ -535,7 +601,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
         <div v-else-if="profileError" class="state-card error">{{ profileError }}</div>
         <div v-else-if="follows.length === 0" class="state-card">还没有追番</div>
         <div v-else class="result-list">
-          <article v-for="item in follows" :key="item.bangumiId" class="list-row media-row">
+          <article
+            v-for="item in follows"
+            :key="item.bangumiId"
+            class="list-row media-row"
+            role="button"
+            tabindex="0"
+            @click="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
+            @keydown.enter.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
+            @keydown.space.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
+          >
             <div class="list-cover">
               <img
                 v-if="item.mediaId > 0 && imageAvailable(`follow-list-${item.bangumiId}`, item.hasCover)"
@@ -563,7 +638,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
         <div v-else-if="profileError" class="state-card error">{{ profileError }}</div>
         <div v-else-if="history.length === 0" class="state-card">还没有观看历史</div>
         <div v-else class="result-list">
-          <article v-for="item in history" :key="`${item.bangumiId}-${item.mediaId}`" class="list-row media-row">
+          <article
+            v-for="item in history"
+            :key="`${item.bangumiId}-${item.mediaId}`"
+            class="list-row media-row"
+            role="button"
+            tabindex="0"
+            @click="openAnimeDetail(item.bangumiId, item.mediaId, item.completed ? 0 : item.positionSeconds)"
+            @keydown.enter.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.completed ? 0 : item.positionSeconds)"
+            @keydown.space.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.completed ? 0 : item.positionSeconds)"
+          >
             <div class="list-cover">
               <img
                 v-if="imageAvailable(`history-${item.mediaId}`, item.hasCover)"
@@ -595,7 +679,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <div v-if="homeLoading" class="state-card">正在加载追番...</div>
           <div v-else-if="homeFollows.length === 0" class="state-card">还没有追番</div>
           <div v-else class="follow-rail">
-            <article v-for="item in homeFollows" :key="item.bangumiId" class="continue-card">
+            <article
+              v-for="item in homeFollows"
+              :key="item.bangumiId"
+              class="continue-card"
+              role="button"
+              tabindex="0"
+              @click="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
+              @keydown.enter.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
+              @keydown.space.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
+            >
               <div class="episode-cover">
                 <img
                   v-if="item.mediaId > 0 && imageAvailable(`home-follow-${item.bangumiId}`, item.hasCover)"
@@ -623,7 +716,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <div v-if="homeLoading" class="state-card">正在加载更新...</div>
           <div v-else-if="homeError" class="state-card error">{{ homeError }}</div>
           <div v-else class="poster-grid">
-            <article v-for="item in recentItems" :key="item.bangumiId" class="poster-card">
+            <article
+              v-for="item in recentItems"
+              :key="item.bangumiId"
+              class="poster-card"
+              role="button"
+              tabindex="0"
+              @click="openAnimeDetail(item.bangumiId)"
+              @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
+              @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
+            >
               <div class="poster-cover">
                 <img
                   v-if="imageAvailable(`recent-${item.bangumiId}`, item.hasCover)"
@@ -646,7 +748,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           </div>
           <div v-if="homeLoading" class="state-card">正在加载推荐...</div>
           <div v-else class="poster-grid">
-            <article v-for="item in hotItems" :key="item.bangumiId" class="poster-card">
+            <article
+              v-for="item in hotItems"
+              :key="item.bangumiId"
+              class="poster-card"
+              role="button"
+              tabindex="0"
+              @click="openAnimeDetail(item.bangumiId)"
+              @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
+              @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
+            >
               <div class="poster-cover">
                 <img
                   v-if="imageAvailable(`hot-${item.bangumiId}`, item.hasCover)"
@@ -696,7 +807,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
         <div v-else-if="scheduleError" class="state-card error">{{ scheduleError }}</div>
         <div v-else-if="scheduleItems.length === 0" class="state-card">这一天暂时没有番剧</div>
         <div v-else class="result-list schedule-list">
-          <article v-for="item in scheduleItems" :key="item.bangumiId" class="list-row poster-row">
+          <article
+            v-for="item in scheduleItems"
+            :key="item.bangumiId"
+            class="list-row poster-row"
+            role="button"
+            tabindex="0"
+            @click="openAnimeDetail(item.bangumiId)"
+            @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
+            @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
+          >
             <img
               v-if="imageAvailable(`schedule-${item.bangumiId}`, item.hasCover)"
               :src="animeCoverURL(item.bangumiId)"
@@ -768,7 +888,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
           <template v-else>
             <div class="poster-grid library-grid">
-              <article v-for="item in visibleLibraryItems" :key="item.bangumiId" class="library-card">
+              <article
+                v-for="item in visibleLibraryItems"
+                :key="item.bangumiId"
+                class="library-card"
+                role="button"
+                tabindex="0"
+                @click="openAnimeDetail(item.bangumiId)"
+                @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
+                @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
+              >
                 <div class="library-cover">
                   <img
                     v-if="imageAvailable(`library-${item.bangumiId}`, item.hasCover)"
@@ -1027,6 +1156,18 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   padding-bottom: 24px;
 }
 
+.detail-mode {
+  --mobile-topbar-height: 0px;
+  padding-top: 0;
+  background: #f6f7fb;
+}
+
+.detail-mode .app-page {
+  width: 100%;
+  min-height: 100dvh;
+  padding: 0;
+}
+
 .page-stack {
   display: grid;
   gap: 18px;
@@ -1119,7 +1260,23 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 .continue-card {
   min-width: 0;
+  outline: 0;
   scroll-snap-align: start;
+}
+
+.continue-card:active,
+.poster-card:active,
+.list-row:active,
+.library-card:active {
+  transform: scale(0.99);
+}
+
+.continue-card:focus-visible,
+.poster-card:focus-visible,
+.list-row:focus-visible,
+.library-card:focus-visible {
+  outline: 2px solid rgba(238, 63, 134, 0.34);
+  outline-offset: 3px;
 }
 
 .episode-cover {

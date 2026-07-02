@@ -75,6 +75,11 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+body.mobile-player-fullscreen {
+  overflow: hidden;
+  background: #000000;
+}
+
 button,
 input {
   color: inherit;

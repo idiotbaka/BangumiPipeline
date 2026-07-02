@@ -69,6 +69,73 @@ export interface ViewerLibrary {
   total: number
 }
 
+export interface ViewerAnimeTag {
+  name: string
+  count: number
+}
+
+export interface ViewerAnimeActor {
+  actorId: number
+  name: string
+  summary: string
+  career: string[]
+  hasImage: boolean
+  imageStatus: string
+}
+
+export interface ViewerAnimeCharacter {
+  characterId: number
+  name: string
+  summary: string
+  relation: string
+  hasImage: boolean
+  imageStatus: string
+  actors: ViewerAnimeActor[]
+}
+
+export interface ViewerDetailEpisode {
+  key: string
+  episodeId: number
+  mediaId: number
+  label: string
+  title: string
+  originalTitle: string
+  summary: string
+  airDate: string
+  duration: string
+  sortNumber: number
+  type: number
+  hasMedia: boolean
+  hasCover: boolean
+}
+
+export interface ViewerAnimeDetail {
+  bangumiId: number
+  title: string
+  originalTitle: string
+  airDate: string
+  airWeekday: number
+  platform: string
+  summary: string
+  totalEpisodes: number
+  hasCover: boolean
+  ratingScore: number | null
+  infobox: Array<Record<string, unknown>>
+  metaTags: string[]
+  tags: ViewerAnimeTag[]
+  characters: ViewerAnimeCharacter[]
+  episodes: ViewerDetailEpisode[]
+}
+
+export interface ViewerWatchProgress {
+  mediaId: number
+  bangumiId: number
+  positionSeconds: number
+  durationSeconds: number
+  completed: boolean
+  updatedAt: number
+}
+
 export interface ViewerWatchHistoryItem {
   bangumiId: number
   mediaId: number
@@ -245,4 +312,23 @@ export const api = {
   },
   followedAnime: () => request<{ items: ViewerFollowedAnime[] }>('/api/follows'),
   watchHistory: () => request<{ items: ViewerWatchHistoryItem[] }>('/api/watch-history'),
+  animeDetail: (bangumiId: number) =>
+    request<{ anime: ViewerAnimeDetail; watchProgress: ViewerWatchProgress | null; followed: boolean }>(
+      `/api/anime/${bangumiId}/detail`,
+    ),
+  updateAnimeFollow: (bangumiId: number, followed: boolean) =>
+    request<{ followed: boolean }>(`/api/anime/${bangumiId}/follow`, {
+      method: 'PUT',
+      body: JSON.stringify({ followed }),
+    }),
+  updateWatchProgress: (
+    bangumiId: number,
+    mediaId: number,
+    positionSeconds: number,
+    durationSeconds: number,
+  ) =>
+    request<{ progress: ViewerWatchProgress | null }>(`/api/anime/${bangumiId}/media/${mediaId}/progress`, {
+      method: 'PUT',
+      body: JSON.stringify({ positionSeconds, durationSeconds }),
+    }),
 }

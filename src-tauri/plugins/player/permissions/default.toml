@@ -1,10 +1,12 @@
 "$schema" = "schemas/schema.json"
 
 [default]
-description = "Allows the mobile player to enter and exit native fullscreen."
+description = "Allows the mobile player to control native fullscreen and playback wake lock."
 permissions = [
   "allow-enterFullscreen",
   "allow-exitFullscreen",
+  "allow-setKeepScreenOn",
   "allow-enter-fullscreen",
   "allow-exit-fullscreen",
+  "allow-set-keep-screen-on",
 ]
