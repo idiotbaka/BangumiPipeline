@@ -2,6 +2,7 @@ package vip.baka.bangumipipeline.player
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.os.Build
 import android.view.View
 import android.view.WindowManager
 import androidx.core.view.ViewCompat
@@ -56,11 +57,7 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
             previousOrientation = null
             removeImmersiveRefreshHooks()
             applyKeepScreenOn()
-            WindowCompat.getInsetsController(activity.window, activity.window.decorView)
-                .show(WindowInsetsCompat.Type.systemBars())
-            WindowCompat.setDecorFitsSystemWindows(activity.window, true)
-            @Suppress("DEPRECATION")
-            activity.window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            restoreNormalSystemBars()
             invoke.resolve(JSObject())
         }
     }
@@ -160,6 +157,27 @@ class PlayerPlugin(private val activity: Activity) : Plugin(activity) {
                 or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                 or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
             )
+    }
+
+    private fun restoreNormalSystemBars() {
+        val window = activity.window
+        val decorView = window.decorView
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        @Suppress("DEPRECATION")
+        decorView.systemUiVisibility = normalSystemUiVisibilityFlags()
+        val controller = WindowCompat.getInsetsController(window, decorView)
+        controller.show(WindowInsetsCompat.Type.systemBars())
+        controller.isAppearanceLightStatusBars = true
+        controller.isAppearanceLightNavigationBars = true
+    }
+
+    @Suppress("DEPRECATION")
+    private fun normalSystemUiVisibilityFlags(): Int {
+        var flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        }
+        return flags
     }
 
     private fun requestedOrientation(value: String?): Int {
