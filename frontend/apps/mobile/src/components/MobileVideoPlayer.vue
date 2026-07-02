@@ -30,12 +30,30 @@ const mediaReady = ref(false)
 const resumeApplied = ref(false)
 const hasPlayed = ref(false)
 const nativeFullscreen = ref(false)
+const seekGestureActive = ref(false)
+const seekGestureDelta = ref(0)
+const seekGestureTarget = ref(0)
 
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
 let bufferTimer: ReturnType<typeof setInterval> | null = null
 let fullscreenHistoryPushed = false
 let ignoreNextPopState = false
+let suppressNextVideoClick = false
+let seekGesture:
+  | {
+      pointerId: number
+      startX: number
+      startY: number
+      startTime: number
+      tracking: boolean
+      moved: boolean
+    }
+  | null = null
+
+const seekGestureThreshold = 28
+const seekGestureClickTolerance = 6
+const maxSeekGestureSeconds = 600
 
 const playerLoading = computed(() => Boolean(props.src) && !mediaReady.value && !errorMessage.value)
 const canControlPlayback = computed(() => Boolean(props.src) && mediaReady.value && !errorMessage.value)
@@ -47,6 +65,12 @@ const progressStyle = computed(() => {
     '--buffered': `${Math.max(clampPercent(progress), clampPercent(buffered))}%`,
   }
 })
+const seekGestureText = computed(() => {
+  const prefix = seekGestureDelta.value >= 0 ? '+' : '-'
+  return `${prefix}${formatDuration(Math.abs(seekGestureDelta.value))}`
+})
+const seekGestureDirection = computed(() => (seekGestureDelta.value >= 0 ? 'forward' : 'backward'))
+const seekGestureTargetText = computed(() => formatTime(seekGestureTarget.value))
 
 watch(
   () => props.src,
@@ -89,7 +113,16 @@ async function togglePlay() {
   }
 }
 
+function handleVideoClick() {
+  if (suppressNextVideoClick) {
+    suppressNextVideoClick = false
+    return
+  }
+  void togglePlay()
+}
+
 function resetMediaState() {
+  cancelSeekGesture()
   playing.value = false
   buffering.value = false
   currentTime.value = 0
@@ -214,6 +247,125 @@ function handleInteraction() {
   scheduleControlsHide()
 }
 
+function handlePointerDown(event: PointerEvent) {
+  handleInteraction()
+  resetSeekGesturePreview()
+  if (!canStartSeekGesture(event)) {
+    seekGesture = null
+    return
+  }
+  seekGesture = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    startTime: currentTime.value,
+    tracking: false,
+    moved: false,
+  }
+  player.value?.setPointerCapture?.(event.pointerId)
+}
+
+function handlePointerMove(event: PointerEvent) {
+  handleInteraction()
+  if (!seekGesture || event.pointerId !== seekGesture.pointerId) {
+    return
+  }
+  const deltaX = event.clientX - seekGesture.startX
+  const deltaY = event.clientY - seekGesture.startY
+  const absX = Math.abs(deltaX)
+  const absY = Math.abs(deltaY)
+  if (absX > seekGestureClickTolerance || absY > seekGestureClickTolerance) {
+    seekGesture.moved = true
+  }
+  if (!seekGesture.tracking) {
+    if (absX < seekGestureThreshold) {
+      return
+    }
+    if (absX <= absY * 1.25) {
+      cancelSeekGesture()
+      return
+    }
+    seekGesture.tracking = true
+    seekGestureActive.value = true
+    showControls()
+  }
+  event.preventDefault()
+  updateSeekGesturePreview(deltaX)
+}
+
+function handlePointerUp(event: PointerEvent) {
+  if (!seekGesture || event.pointerId !== seekGesture.pointerId) {
+    return
+  }
+  if (seekGesture.moved) {
+    suppressNextVideoClick = true
+    window.setTimeout(() => {
+      suppressNextVideoClick = false
+    }, 0)
+  }
+  if (seekGesture.tracking && Math.abs(seekGestureDelta.value) >= 5) {
+    applySeekGesture()
+  }
+  player.value?.releasePointerCapture?.(event.pointerId)
+  seekGesture = null
+  resetSeekGesturePreview()
+}
+
+function handlePointerCancel(event?: PointerEvent) {
+  if (event && seekGesture && event.pointerId !== seekGesture.pointerId) {
+    return
+  }
+  cancelSeekGesture()
+}
+
+function canStartSeekGesture(event: PointerEvent) {
+  return (
+    playing.value &&
+    canControlPlayback.value &&
+    duration.value > 0 &&
+    event.isPrimary &&
+    !isInteractiveTarget(event.target)
+  )
+}
+
+function isInteractiveTarget(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest('button, input, a, [role="button"], .player-controls'))
+}
+
+function updateSeekGesturePreview(deltaX: number) {
+  const elementWidth = Math.max(player.value?.clientWidth ?? 0, 1)
+  const effectiveDistance = Math.max(Math.abs(deltaX) - seekGestureThreshold, 0)
+  const gestureRange = Math.max(elementWidth * 0.72 - seekGestureThreshold, 1)
+  const rawSeconds = (effectiveDistance / gestureRange) * maxSeekGestureSeconds
+  const signedSeconds = Math.sign(deltaX) * Math.min(maxSeekGestureSeconds, rawSeconds)
+  const target = clampTime((seekGesture?.startTime ?? currentTime.value) + signedSeconds)
+  seekGestureTarget.value = target
+  seekGestureDelta.value = Math.round(target - (seekGesture?.startTime ?? currentTime.value))
+}
+
+function applySeekGesture() {
+  const element = video.value
+  if (!element) return
+  element.currentTime = seekGestureTarget.value
+  currentTime.value = seekGestureTarget.value
+  updateBuffered()
+  reportProgress()
+}
+
+function cancelSeekGesture() {
+  if (seekGesture?.pointerId !== undefined) {
+    player.value?.releasePointerCapture?.(seekGesture.pointerId)
+  }
+  seekGesture = null
+  resetSeekGesturePreview()
+}
+
+function resetSeekGesturePreview() {
+  seekGestureActive.value = false
+  seekGestureDelta.value = 0
+  seekGestureTarget.value = currentTime.value
+}
+
 function showControls() {
   controlsVisible.value = true
   stopControlsTimer()
@@ -332,8 +484,19 @@ function formatTime(value: number) {
   return hours > 0 ? `${String(hours).padStart(2, '0')}:${base}` : base
 }
 
+function formatDuration(value: number) {
+  const total = Math.floor(Math.max(value, 0))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
 function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value))
+}
+
+function clampTime(value: number) {
+  return Math.max(0, Math.min(duration.value || 0, value))
 }
 </script>
 
@@ -344,8 +507,11 @@ function clampPercent(value: number) {
     :class="{ fullscreen: nativeFullscreen, 'ui-hidden': !controlsVisible && playing, loading: playerLoading }"
     tabindex="0"
     :aria-label="`正在播放 ${title}`"
-    @pointermove="handleInteraction"
-    @pointerdown="handleInteraction"
+    @pointerdown="handlePointerDown"
+    @pointermove="handlePointerMove"
+    @pointerup="handlePointerUp"
+    @pointercancel="handlePointerCancel"
+    @lostpointercapture="handlePointerCancel"
     @focusin="handleInteraction"
   >
     <video
@@ -356,7 +522,7 @@ function clampPercent(value: number) {
       playsinline
       webkit-playsinline
       x5-playsinline
-      @click="togglePlay"
+      @click="handleVideoClick"
       @play="handlePlay"
       @pause="handlePause"
       @ended="handleEnded"
@@ -389,6 +555,11 @@ function clampPercent(value: number) {
     </div>
     <div v-if="buffering" class="player-state"><i aria-hidden="true" /><span>缓冲中</span></div>
     <div v-if="errorMessage" class="player-error"><span>!</span><p>{{ errorMessage }}</p></div>
+
+    <div v-if="seekGestureActive" class="seek-gesture" :class="seekGestureDirection" aria-live="polite">
+      <p>{{ seekGestureText }}</p>
+      <small>{{ seekGestureDirection === 'forward' ? '快进到' : '快退到' }} {{ seekGestureTargetText }}</small>
+    </div>
 
     <div class="player-title">
       <span>{{ nativeFullscreen ? '正在播放' : 'BakaVip 2.0' }}</span>
@@ -439,6 +610,7 @@ function clampPercent(value: number) {
   color: #ffffff;
   background: #070a12;
   outline: 0;
+  touch-action: pan-y;
 }
 
 .mobile-player.fullscreen {
@@ -548,12 +720,55 @@ function clampPercent(value: number) {
   border-radius: 50%;
 }
 
+.seek-gesture {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 4;
+  min-width: 112px;
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  padding: 10px 16px 9px;
+  color: #ffffff;
+  background: rgba(7, 10, 18, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.seek-gesture.forward {
+  color: var(--pink-300);
+}
+
+.seek-gesture.backward {
+  color: var(--cyan-300);
+}
+
+.seek-gesture small {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+}
+
+.seek-gesture p {
+  color: #ffffff;
+  font-size: 23px;
+  line-height: 1.18;
+  letter-spacing: 0;
+}
+
 .player-title {
   position: absolute;
   top: calc(12px + env(safe-area-inset-top));
   right: 14px;
-  left: 14px;
+  left: auto;
   z-index: 2;
+  width: min(64%, 360px);
+  text-align: right;
   pointer-events: none;
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.72);
   transition: opacity 180ms var(--ease-soft), transform 180ms var(--ease-soft);

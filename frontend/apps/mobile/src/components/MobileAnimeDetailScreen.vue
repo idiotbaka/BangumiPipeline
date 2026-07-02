@@ -32,6 +32,7 @@ const followed = ref(false)
 const followSaving = ref(false)
 const followError = ref('')
 const summaryExpanded = ref(false)
+const metadataExpanded = ref(false)
 const failedImages = ref<Set<string>>(new Set())
 const episodeRail = ref<HTMLElement | null>(null)
 const episodeCardRefs = new Map<string, HTMLElement>()
@@ -115,6 +116,7 @@ async function loadDetail() {
   errorMessage.value = ''
   followError.value = ''
   summaryExpanded.value = false
+  metadataExpanded.value = false
   episodeCardRefs.clear()
   try {
     const result = await api.animeDetail(props.bangumiId)
@@ -394,12 +396,24 @@ function formatInfoValue(value: unknown): string {
 
       <section class="detail-block">
         <div class="block-title">元数据</div>
-        <dl class="metadata-list">
-          <div v-for="item in metadataItems" :key="item.key">
-            <dt>{{ item.key }}</dt>
-            <dd>{{ item.value }}</dd>
-          </div>
-        </dl>
+        <div class="metadata-box" :class="{ expanded: metadataExpanded }">
+          <dl class="metadata-list">
+            <div v-for="item in metadataItems" :key="item.key">
+              <dt>{{ item.key }}</dt>
+              <dd>{{ item.value }}</dd>
+            </div>
+          </dl>
+        </div>
+        <div
+          class="summary-arrow"
+          :class="{ expanded: metadataExpanded }"
+          role="button"
+          tabindex="0"
+          :aria-label="metadataExpanded ? '收起元数据' : '展开元数据'"
+          @click="metadataExpanded = !metadataExpanded"
+          @keydown.enter.prevent="metadataExpanded = !metadataExpanded"
+          @keydown.space.prevent="metadataExpanded = !metadataExpanded"
+        />
       </section>
 
       <section class="detail-block cast-block">
@@ -807,6 +821,34 @@ function formatInfoValue(value: unknown): string {
   display: grid;
   gap: 0;
   margin-top: 8px;
+}
+
+.metadata-box {
+  position: relative;
+  max-height: 205px;
+  overflow: hidden;
+  transition: max-height 260ms var(--ease-soft);
+}
+
+.metadata-box.expanded {
+  max-height: 760px;
+}
+
+.metadata-box::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 36px;
+  pointer-events: none;
+  background: linear-gradient(transparent, rgba(255, 255, 255, 0.96));
+  opacity: 1;
+  transition: opacity 180ms var(--ease-soft);
+}
+
+.metadata-box.expanded::after {
+  opacity: 0;
 }
 
 .metadata-list > div {
