@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "vip.baka.bangumipipeline.mobile",
   "build": {
-    "beforeDevCommand": "npm run dev --workspace @bangumi-pipeline/mobile",
+    "beforeDevCommand": "npm run prepare:mobile-android && npm run dev --workspace @bangumi-pipeline/mobile",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build --workspace @bangumi-pipeline/mobile",
+    "beforeBuildCommand": "npm run prepare:mobile-android && npm run build --workspace @bangumi-pipeline/mobile",
     "frontendDist": "../frontend/apps/mobile/dist"
   },
   "app": {

@@ -10,6 +10,7 @@
     "start": "npm run build:ui && go run ./backend/cmd/server",
     "build:ui": "npm run build --workspace @bangumi-pipeline/admin && npm run build --workspace @bangumi-pipeline/viewer",
     "build:mobile": "npm run build --workspace @bangumi-pipeline/mobile",
+    "prepare:mobile-android": "node scripts/prepare-mobile-android.mjs",
     "tauri:dev": "cargo tauri android dev",
     "tauri:build": "cargo tauri android build",
     "build:server": "go build -buildvcs=false ./backend/cmd/server",
