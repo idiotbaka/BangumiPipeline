@@ -41,6 +41,10 @@ const (
 
 	completionCleanupWarningPrefix = "最终产物已完成，但 qBittorrent 下载清理失败:"
 	completedDownloadCleanupLimit  = 50
+
+	maxTranscodedVideoBitRateBPS = int64(1_680_000)
+	maxTranscodedVideoRateArg    = "1680k"
+	maxTranscodedVideoBufSizeArg = "3360k"
 )
 
 var (
@@ -164,17 +168,20 @@ type probeResult struct {
 }
 
 type probeStream struct {
-	Index     int    `json:"index"`
-	CodecName string `json:"codec_name"`
-	CodecType string `json:"codec_type"`
-	Profile   string `json:"profile"`
-	PixFmt    string `json:"pix_fmt"`
-	Duration  string `json:"duration"`
+	Index     int               `json:"index"`
+	CodecName string            `json:"codec_name"`
+	CodecType string            `json:"codec_type"`
+	Profile   string            `json:"profile"`
+	PixFmt    string            `json:"pix_fmt"`
+	BitRate   string            `json:"bit_rate"`
+	Duration  string            `json:"duration"`
+	Tags      map[string]string `json:"tags"`
 }
 
 type probeFormat struct {
 	FormatName string `json:"format_name"`
 	Duration   string `json:"duration"`
+	BitRate    string `json:"bit_rate"`
 }
 
 type mediaPlan struct {
@@ -188,6 +195,7 @@ type mediaPlan struct {
 	needsTranscode       bool
 	action               string
 	totalDurationMS      int64
+	videoBitRateBPS      int64
 }
 
 type processResult struct {
@@ -1691,6 +1699,7 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 		videoCodec: videoStream.CodecName, audioCodec: audioStream.CodecName,
 		hasInternalSubtitles: hasInternal, hasExternalSubtitles: hasExternal,
 		needsTranscode: needsTranscode, action: action, totalDurationMS: totalDurationMS,
+		videoBitRateBPS: videoBitRateBPS(videoStream),
 	}, nil
 }
 
@@ -1710,6 +1719,18 @@ func (s *Service) probe(ctx context.Context, path string) (probeResult, error) {
 		return probeResult{}, fmt.Errorf("解析 ffprobe 输出失败: %w", err)
 	}
 	return result, nil
+}
+
+func (s *Service) detectVideoBitRate(ctx context.Context, path string) (int64, error) {
+	probe, err := s.probe(ctx, path)
+	if err != nil {
+		return 0, err
+	}
+	videoStream, _, _ := classifyStreams(probe.Streams)
+	if videoStream.CodecName == "" {
+		return 0, errors.New("未找到视频流")
+	}
+	return videoBitRateBPS(videoStream), nil
 }
 
 func (s *Service) hasProblematicEditList(ctx context.Context, path string) (bool, error) {
@@ -1857,6 +1878,14 @@ func (s *Service) videoDurationMS(ctx context.Context, path string) (int64, erro
 	return probeDurationMS(probe, videoStream), nil
 }
 
+func (p mediaPlan) encodesVideo() bool {
+	return p.action == "transcode" || p.action == "burn_subtitles"
+}
+
+func (p mediaPlan) limitsVideoBitRate() bool {
+	return p.encodesVideo() && p.videoBitRateBPS > maxTranscodedVideoBitRateBPS
+}
+
 func encodeJPEGCover(sourcePNG, destinationJPG string) error {
 	return imageutil.EncodeJPEG(sourcePNG, destinationJPG, 80)
 }
@@ -1888,25 +1917,19 @@ func (s *Service) runFFmpeg(ctx context.Context, jobID int64, plan mediaPlan) er
 	}
 	tempPath := plan.outputPath + ".tmp.mp4"
 	_ = os.Remove(tempPath)
-	args := []string{
-		"-hide_banner", "-nostats", "-loglevel", "warning", "-progress", "pipe:1",
-		"-y", "-i", plan.sourcePath, "-map", "0:v:0", "-map", "0:a:0?",
-	}
-	switch plan.action {
-	case "remux":
-		args = append(args, "-c", "copy", "-movflags", "+faststart")
-	default:
-		if plan.hasExternalSubtitles {
-			args = append(args, "-vf", "subtitles=filename="+ffmpegFilterPath(plan.subtitlePath))
-		} else if plan.hasInternalSubtitles {
-			args = append(args, "-vf", "subtitles=filename="+ffmpegFilterPath(plan.sourcePath)+":si=0")
+	if plan.encodesVideo() && plan.videoBitRateBPS <= 0 {
+		detectedBitRate, err := s.detectVideoBitRate(ctx, plan.sourcePath)
+		if err != nil {
+			s.logger.Warn("探测源视频码率失败，将不启用码率上限", "source", "media", "media_job_id", jobID, "source_file", filepath.Base(plan.sourcePath), "error", err)
+		} else {
+			plan.videoBitRateBPS = detectedBitRate
 		}
-		args = append(args,
-			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-			"-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-sn",
-		)
 	}
-	args = append(args, tempPath)
+	if plan.limitsVideoBitRate() {
+		s.logger.Info("媒体转码启用视频码率上限", "source", "media", "media_job_id", jobID,
+			"source_video_bitrate_bps", plan.videoBitRateBPS, "max_video_bitrate_bps", maxTranscodedVideoBitRateBPS)
+	}
+	args := ffmpegArgs(plan, tempPath)
 	command := exec.CommandContext(ctx, s.ffmpegPath, args...)
 
 	stdout, err := command.StdoutPipe()
@@ -1968,6 +1991,33 @@ func (s *Service) runFFmpeg(ctx context.Context, jobID int64, plan mediaPlan) er
 		return err
 	}
 	return nil
+}
+
+func ffmpegArgs(plan mediaPlan, tempPath string) []string {
+	args := []string{
+		"-hide_banner", "-nostats", "-loglevel", "warning", "-progress", "pipe:1",
+		"-y", "-i", plan.sourcePath, "-map", "0:v:0", "-map", "0:a:0?",
+	}
+	switch plan.action {
+	case "remux":
+		args = append(args, "-c", "copy", "-movflags", "+faststart")
+	default:
+		if plan.hasExternalSubtitles {
+			args = append(args, "-vf", "subtitles=filename="+ffmpegFilterPath(plan.subtitlePath))
+		} else if plan.hasInternalSubtitles {
+			args = append(args, "-vf", "subtitles=filename="+ffmpegFilterPath(plan.sourcePath)+":si=0")
+		}
+		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23")
+		if plan.limitsVideoBitRate() {
+			args = append(args, "-maxrate", maxTranscodedVideoRateArg, "-bufsize", maxTranscodedVideoBufSizeArg)
+		}
+		args = append(args,
+			"-pix_fmt", "yuv420p",
+			"-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-sn",
+		)
+	}
+	args = append(args, tempPath)
+	return args
 }
 
 type progressUpdate struct {
@@ -2185,6 +2235,38 @@ func probeDurationMS(probe probeResult, video probeStream) int64 {
 		return milliseconds
 	}
 	return parseSecondsDurationMS(video.Duration)
+}
+
+func videoBitRateBPS(video probeStream) int64 {
+	if bitRate := parseBitRateBPS(video.BitRate); bitRate > 0 {
+		return bitRate
+	}
+	return parseBitRateBPS(streamTagValue(video.Tags, "BPS"))
+}
+
+func streamTagValue(tags map[string]string, key string) string {
+	for tagKey, value := range tags {
+		if strings.EqualFold(tagKey, key) {
+			return value
+		}
+	}
+	return ""
+}
+
+func parseBitRateBPS(value string) int64 {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "N/A") {
+		return 0
+	}
+	bitRate, err := strconv.ParseInt(value, 10, 64)
+	if err == nil && bitRate > 0 {
+		return bitRate
+	}
+	floatBitRate, err := strconv.ParseFloat(value, 64)
+	if err != nil || floatBitRate <= 0 {
+		return 0
+	}
+	return int64(floatBitRate)
 }
 
 func parseSecondsDurationMS(value string) int64 {

@@ -227,6 +227,60 @@ func TestProblematicEditListWarning(t *testing.T) {
 	}
 }
 
+func TestVideoBitRateBPSReadsStreamBitRateAndBPSTag(t *testing.T) {
+	if got := videoBitRateBPS(probeStream{BitRate: "1680609"}); got != 1_680_609 {
+		t.Fatalf("unexpected stream bit rate: got %d", got)
+	}
+	if got := videoBitRateBPS(probeStream{Tags: map[string]string{"BPS": "7997469"}}); got != 7_997_469 {
+		t.Fatalf("unexpected BPS tag bit rate: got %d", got)
+	}
+	if got := videoBitRateBPS(probeStream{BitRate: "N/A"}); got != 0 {
+		t.Fatalf("expected unknown bit rate to be 0, got %d", got)
+	}
+}
+
+func TestFFmpegArgsLimitHighBitRateTranscode(t *testing.T) {
+	args := ffmpegArgs(mediaPlan{
+		sourcePath:      "source.mkv",
+		outputPath:      "output.mp4",
+		action:          "transcode",
+		videoBitRateBPS: maxTranscodedVideoBitRateBPS + 1,
+	}, "output.mp4.tmp.mp4")
+	if !hasArgPair(args, "-maxrate", maxTranscodedVideoRateArg) {
+		t.Fatalf("expected maxrate cap in args: %v", args)
+	}
+	if !hasArgPair(args, "-bufsize", maxTranscodedVideoBufSizeArg) {
+		t.Fatalf("expected bufsize cap in args: %v", args)
+	}
+}
+
+func TestFFmpegArgsDoNotLimitLowBitRateTranscode(t *testing.T) {
+	args := ffmpegArgs(mediaPlan{
+		sourcePath:      "source.mkv",
+		outputPath:      "output.mp4",
+		action:          "burn_subtitles",
+		videoBitRateBPS: maxTranscodedVideoBitRateBPS,
+	}, "output.mp4.tmp.mp4")
+	if hasArg(args, "-maxrate") || hasArg(args, "-bufsize") {
+		t.Fatalf("did not expect bitrate cap for low-bitrate source: %v", args)
+	}
+}
+
+func TestFFmpegArgsDoNotLimitRemux(t *testing.T) {
+	args := ffmpegArgs(mediaPlan{
+		sourcePath:      "source.mkv",
+		outputPath:      "output.mp4",
+		action:          "remux",
+		videoBitRateBPS: maxTranscodedVideoBitRateBPS + 1,
+	}, "output.mp4.tmp.mp4")
+	if hasArg(args, "-maxrate") || hasArg(args, "-bufsize") {
+		t.Fatalf("did not expect bitrate cap for remux: %v", args)
+	}
+	if !hasArgPair(args, "-c", "copy") {
+		t.Fatalf("expected remux to copy streams: %v", args)
+	}
+}
+
 type metadataRefreshRecorder struct {
 	ids []int64
 }
@@ -284,6 +338,24 @@ func assertMediaJobStatus(t *testing.T, ctx context.Context, db *sql.DB, jobID i
 	if got != want {
 		t.Fatalf("media job %d status = %q, want %q", jobID, got, want)
 	}
+}
+
+func hasArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArgPair(args []string, key, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == key && args[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func insertPlannedPendingMediaJob(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64, episodeNumber, action string, needsTranscode bool, now time.Time) int64 {
