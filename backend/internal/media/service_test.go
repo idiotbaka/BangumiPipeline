@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,6 +282,71 @@ func TestFFmpegArgsDoNotLimitRemux(t *testing.T) {
 	}
 }
 
+func TestSelectSubtitlePrefersChineseExternalSubtitle(t *testing.T) {
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "bangumi.mkv")
+	writeTestFile(t, videoPath)
+	zhTWPath := filepath.Join(dir, "bangumi.zh-TW.srt")
+	zhCNPath := filepath.Join(dir, "bangumi.zh-CN.ass")
+	writeTestFile(t, zhTWPath)
+	writeTestFile(t, zhCNPath)
+
+	selection := selectSubtitle(videoPath, []probeStream{
+		{CodecName: "ass", CodecType: "subtitle", Tags: map[string]string{"title": "Chinese Traditional"}},
+	})
+	if selection.externalPath != zhCNPath {
+		t.Fatalf("expected zh-CN external subtitle %q, got %+v", zhCNPath, selection)
+	}
+	if !selection.hasExternal || !selection.hasInternal {
+		t.Fatalf("expected both subtitle kinds to be detected, got %+v", selection)
+	}
+}
+
+func TestSelectSubtitlePrefersChineseInternalBeforeFallbackExternal(t *testing.T) {
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "bangumi.mkv")
+	fallbackPath := filepath.Join(dir, "bangumi.srt")
+	writeTestFile(t, videoPath)
+	writeTestFile(t, fallbackPath)
+
+	selection := selectSubtitle(videoPath, []probeStream{
+		{CodecName: "ass", CodecType: "subtitle", Tags: map[string]string{"language": "eng"}},
+		{CodecName: "ass", CodecType: "subtitle", Tags: map[string]string{"title": "繁體中文"}},
+	})
+	if selection.externalPath != "" || selection.internalIndex != 1 {
+		t.Fatalf("expected Chinese internal subtitle index 1, got %+v", selection)
+	}
+}
+
+func TestSelectSubtitleFallsBackToExternalSubtitle(t *testing.T) {
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "bangumi.mkv")
+	fallbackPath := filepath.Join(dir, "bangumi.srt")
+	writeTestFile(t, videoPath)
+	writeTestFile(t, fallbackPath)
+
+	selection := selectSubtitle(videoPath, []probeStream{
+		{CodecName: "ass", CodecType: "subtitle", Tags: map[string]string{"language": "eng"}},
+	})
+	if selection.externalPath != fallbackPath {
+		t.Fatalf("expected fallback external subtitle %q, got %+v", fallbackPath, selection)
+	}
+}
+
+func TestFFmpegArgsUseSelectedInternalSubtitleIndex(t *testing.T) {
+	args := ffmpegArgs(mediaPlan{
+		sourcePath:            "source.mkv",
+		outputPath:            "output.mp4",
+		action:                "burn_subtitles",
+		hasInternalSubtitles:  true,
+		internalSubtitleIndex: 2,
+		videoBitRateBPS:       maxTranscodedVideoBitRateBPS,
+	}, "output.mp4.tmp.mp4")
+	if !hasArgContaining(args, ":si=2") {
+		t.Fatalf("expected selected subtitle index in args: %v", args)
+	}
+}
+
 type metadataRefreshRecorder struct {
 	ids []int64
 }
@@ -356,6 +422,22 @@ func hasArgPair(args []string, key, value string) bool {
 		}
 	}
 	return false
+}
+
+func hasArgContaining(args []string, want string) bool {
+	for _, arg := range args {
+		if strings.Contains(arg, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeTestFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func insertPlannedPendingMediaJob(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64, episodeNumber, action string, needsTranscode bool, now time.Time) int64 {

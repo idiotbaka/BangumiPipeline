@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -185,17 +186,29 @@ type probeFormat struct {
 }
 
 type mediaPlan struct {
-	sourcePath           string
-	subtitlePath         string
-	outputPath           string
-	videoCodec           string
-	audioCodec           string
-	hasInternalSubtitles bool
-	hasExternalSubtitles bool
-	needsTranscode       bool
-	action               string
-	totalDurationMS      int64
-	videoBitRateBPS      int64
+	sourcePath            string
+	subtitlePath          string
+	outputPath            string
+	videoCodec            string
+	audioCodec            string
+	hasInternalSubtitles  bool
+	hasExternalSubtitles  bool
+	needsTranscode        bool
+	action                string
+	totalDurationMS       int64
+	videoBitRateBPS       int64
+	internalSubtitleIndex int
+}
+
+type subtitleSelection struct {
+	externalPath  string
+	internalIndex int
+	hasExternal   bool
+	hasInternal   bool
+}
+
+func (s subtitleSelection) selected() bool {
+	return s.externalPath != "" || s.hasInternal
 }
 
 type processResult struct {
@@ -1652,7 +1665,7 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 		return mediaPlan{}, errors.New("未找到视频流")
 	}
 	totalDurationMS := probeDurationMS(probe, videoStream)
-	subtitlePath := findExternalSubtitle(video.Path)
+	subtitle := selectSubtitle(video.Path, subtitleStreams)
 	outputPath := finalOutputPath(job.StorageRoot, job)
 	webPlayable := isBrowserPlayable(video.Path, videoStream, audioStream)
 	fastStart := false
@@ -1675,13 +1688,13 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 			}
 		}
 	}
-	hasInternal := len(subtitleStreams) > 0
-	hasExternal := subtitlePath != ""
+	hasInternal := subtitle.hasInternal
+	hasExternal := subtitle.hasExternal
 
 	action := "copy"
 	needsTranscode := false
 	switch {
-	case hasInternal || hasExternal:
+	case subtitle.selected():
 		action = "burn_subtitles"
 		needsTranscode = true
 	case webPlayable && (!fastStart || multipleMdat || problematicEditList):
@@ -1695,11 +1708,12 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 		needsTranscode = true
 	}
 	return mediaPlan{
-		sourcePath: video.Path, subtitlePath: subtitlePath, outputPath: outputPath,
+		sourcePath: video.Path, subtitlePath: subtitle.externalPath, outputPath: outputPath,
 		videoCodec: videoStream.CodecName, audioCodec: audioStream.CodecName,
 		hasInternalSubtitles: hasInternal, hasExternalSubtitles: hasExternal,
 		needsTranscode: needsTranscode, action: action, totalDurationMS: totalDurationMS,
-		videoBitRateBPS: videoBitRateBPS(videoStream),
+		videoBitRateBPS:       videoBitRateBPS(videoStream),
+		internalSubtitleIndex: subtitle.internalIndex,
 	}, nil
 }
 
@@ -1731,6 +1745,21 @@ func (s *Service) detectVideoBitRate(ctx context.Context, path string) (int64, e
 		return 0, errors.New("未找到视频流")
 	}
 	return videoBitRateBPS(videoStream), nil
+}
+
+func (s *Service) detectInternalSubtitleIndex(ctx context.Context, path string) (int, error) {
+	probe, err := s.probe(ctx, path)
+	if err != nil {
+		return 0, err
+	}
+	_, _, subtitles := classifyStreams(probe.Streams)
+	if len(subtitles) == 0 {
+		return 0, errors.New("未找到内封字幕流")
+	}
+	if index, ok := preferredInternalSubtitleIndex(subtitles); ok {
+		return index, nil
+	}
+	return 0, nil
 }
 
 func (s *Service) hasProblematicEditList(ctx context.Context, path string) (bool, error) {
@@ -1925,6 +1954,14 @@ func (s *Service) runFFmpeg(ctx context.Context, jobID int64, plan mediaPlan) er
 			plan.videoBitRateBPS = detectedBitRate
 		}
 	}
+	if plan.action == "burn_subtitles" && plan.subtitlePath == "" && plan.hasInternalSubtitles {
+		internalSubtitleIndex, err := s.detectInternalSubtitleIndex(ctx, plan.sourcePath)
+		if err != nil {
+			s.logger.Warn("探测内封字幕轨道失败，将使用第一条字幕流", "source", "media", "media_job_id", jobID, "source_file", filepath.Base(plan.sourcePath), "error", err)
+		} else {
+			plan.internalSubtitleIndex = internalSubtitleIndex
+		}
+	}
 	if plan.limitsVideoBitRate() {
 		s.logger.Info("媒体转码启用视频码率上限", "source", "media", "media_job_id", jobID,
 			"source_video_bitrate_bps", plan.videoBitRateBPS, "max_video_bitrate_bps", maxTranscodedVideoBitRateBPS)
@@ -2002,10 +2039,10 @@ func ffmpegArgs(plan mediaPlan, tempPath string) []string {
 	case "remux":
 		args = append(args, "-c", "copy", "-movflags", "+faststart")
 	default:
-		if plan.hasExternalSubtitles {
+		if plan.subtitlePath != "" {
 			args = append(args, "-vf", "subtitles=filename="+ffmpegFilterPath(plan.subtitlePath))
 		} else if plan.hasInternalSubtitles {
-			args = append(args, "-vf", "subtitles=filename="+ffmpegFilterPath(plan.sourcePath)+":si=0")
+			args = append(args, "-vf", "subtitles=filename="+ffmpegFilterPath(plan.sourcePath)+":si="+strconv.Itoa(plan.internalSubtitleIndex))
 		}
 		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23")
 		if plan.limitsVideoBitRate() {
@@ -2189,24 +2226,172 @@ func findPrimaryVideo(root string) (mediaFile, error) {
 	return best, nil
 }
 
-func findExternalSubtitle(videoPath string) string {
+func selectSubtitle(videoPath string, internalSubtitles []probeStream) subtitleSelection {
+	externalSubtitles := findExternalSubtitles(videoPath)
+	selection := subtitleSelection{
+		hasExternal: len(externalSubtitles) > 0,
+		hasInternal: len(internalSubtitles) > 0,
+	}
+	if externalPath := preferredExternalSubtitle(videoPath, externalSubtitles); externalPath != "" {
+		selection.externalPath = externalPath
+		return selection
+	}
+	if internalIndex, ok := preferredInternalSubtitleIndex(internalSubtitles); ok {
+		selection.internalIndex = internalIndex
+		return selection
+	}
+	if externalPath := fallbackExternalSubtitle(videoPath, externalSubtitles); externalPath != "" {
+		selection.externalPath = externalPath
+		return selection
+	}
+	return selection
+}
+
+func findExternalSubtitles(videoPath string) []string {
 	dir := filepath.Dir(videoPath)
-	base := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
-	var fallback string
+	paths := make([]string, 0)
 	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || !isSubtitleFile(path) {
 			return nil
 		}
-		if strings.EqualFold(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), base) {
-			fallback = path
-			return io.EOF
-		}
-		if fallback == "" {
-			fallback = path
-		}
+		paths = append(paths, path)
 		return nil
 	})
-	return fallback
+	sort.Slice(paths, func(i, j int) bool {
+		return strings.ToLower(filepath.ToSlash(paths[i])) < strings.ToLower(filepath.ToSlash(paths[j]))
+	})
+	return paths
+}
+
+func preferredExternalSubtitle(videoPath string, subtitles []string) string {
+	videoBase := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
+	bestPath := ""
+	bestRank := maxInt()
+	for _, path := range subtitles {
+		subtitleBase := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		label, ok := subtitleLanguageSuffix(videoBase, subtitleBase)
+		if !ok {
+			continue
+		}
+		rank, ok := preferredExternalSubtitleLanguageRank(label)
+		if !ok {
+			continue
+		}
+		rank = rank*10 + subtitleExtensionRank(path)
+		if rank < bestRank {
+			bestRank = rank
+			bestPath = path
+		}
+	}
+	return bestPath
+}
+
+func fallbackExternalSubtitle(videoPath string, subtitles []string) string {
+	if len(subtitles) == 0 {
+		return ""
+	}
+	videoBase := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
+	bestPath := ""
+	bestRank := maxInt()
+	for _, path := range subtitles {
+		subtitleBase := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		rank := 100 + subtitleExtensionRank(path)
+		if strings.EqualFold(subtitleBase, videoBase) {
+			rank = subtitleExtensionRank(path)
+		}
+		if rank < bestRank {
+			bestRank = rank
+			bestPath = path
+		}
+	}
+	return bestPath
+}
+
+func subtitleLanguageSuffix(videoBase, subtitleBase string) (string, bool) {
+	prefix := videoBase + "."
+	if len(subtitleBase) <= len(prefix) || !strings.EqualFold(subtitleBase[:len(prefix)], prefix) {
+		return "", false
+	}
+	return subtitleBase[len(prefix):], true
+}
+
+func preferredExternalSubtitleLanguageRank(label string) (int, bool) {
+	normalized := normalizeSubtitleLabel(label)
+	preferred := []string{
+		"zh-cn", "zh-hans", "chs", "sc", "gb", "cn",
+		"zh-tw", "zh-hant", "cht", "tc", "big5", "tw",
+		"zh", "chi", "zho",
+	}
+	for index, candidate := range preferred {
+		if normalized == candidate {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func subtitleExtensionRank(path string) int {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".ass":
+		return 0
+	case ".ssa":
+		return 1
+	case ".srt":
+		return 2
+	case ".vtt":
+		return 3
+	default:
+		return 9
+	}
+}
+
+func preferredInternalSubtitleIndex(subtitles []probeStream) (int, bool) {
+	bestIndex := 0
+	bestRank := maxInt()
+	for index, subtitle := range subtitles {
+		rank, ok := internalSubtitleRank(subtitle)
+		if ok && rank < bestRank {
+			bestRank = rank
+			bestIndex = index
+		}
+	}
+	return bestIndex, bestRank != maxInt()
+}
+
+func internalSubtitleRank(subtitle probeStream) (int, bool) {
+	title := strings.ToLower(streamTagValue(subtitle.Tags, "title"))
+	titlePatterns := []string{
+		"chinese simplified", "simplified chinese", "简体中文", "簡體中文", "简体", "簡體", "简", "簡",
+		"chinese traditional", "traditional chinese", "繁体中文", "繁體中文", "繁体", "繁體", "繁",
+		"中文", "chinese",
+	}
+	for index, pattern := range titlePatterns {
+		if strings.Contains(title, pattern) {
+			return index, true
+		}
+	}
+	language := normalizeSubtitleLabel(streamTagValue(subtitle.Tags, "language"))
+	languagePatterns := []string{
+		"zh-cn", "zh-hans", "chs", "sc", "cn",
+		"zh-tw", "zh-hant", "cht", "tc", "tw",
+		"zh", "chi", "zho",
+	}
+	for index, pattern := range languagePatterns {
+		if language == pattern {
+			return len(titlePatterns) + index, true
+		}
+	}
+	return 0, false
+}
+
+func normalizeSubtitleLabel(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "_", "-")
+	return value
+}
+
+func maxInt() int {
+	return int(^uint(0) >> 1)
 }
 
 func classifyStreams(streams []probeStream) (probeStream, probeStream, []probeStream) {
