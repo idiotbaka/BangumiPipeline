@@ -1703,7 +1703,7 @@ func offsetEpisodeNumber(value string, offset int) (string, bool) {
 		number = 1
 	}
 	if math.Mod(number, 1) == 0 {
-		return strconv.FormatInt(int64(number), 10), true
+		return fmt.Sprintf("%02d", int64(number)), true
 	}
 	return strconv.FormatFloat(number, 'f', -1, 64), true
 }

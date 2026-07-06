@@ -67,8 +67,8 @@ FROM subscription_items
 WHERE item_key = 'ep13' AND match_status = ?`, matchStatusMatched).Scan(&episodeNumber, &reason); err != nil {
 		t.Fatal(err)
 	}
-	if episodeNumber != "1" {
-		t.Fatalf("expected offset episode 1, got %q", episodeNumber)
+	if episodeNumber != "01" {
+		t.Fatalf("expected offset episode 01, got %q", episodeNumber)
 	}
 	if reason == "" || !strings.Contains(reason, "番剧索引偏移 -12") {
 		t.Fatalf("expected offset in match reason, got %q", reason)
@@ -80,8 +80,15 @@ func TestOffsetEpisodeNumberClampsToOne(t *testing.T) {
 	if !ok {
 		t.Fatal("expected numeric episode to be offset")
 	}
-	if got != "1" {
-		t.Fatalf("expected clamped episode 1, got %q", got)
+	if got != "01" {
+		t.Fatalf("expected clamped episode 01, got %q", got)
+	}
+	got, ok = offsetEpisodeNumber("22", -12)
+	if !ok {
+		t.Fatal("expected numeric episode to be offset")
+	}
+	if got != "10" {
+		t.Fatalf("expected offset episode 10, got %q", got)
 	}
 }
 
