@@ -282,6 +282,57 @@ func TestFFmpegArgsDoNotLimitRemux(t *testing.T) {
 	}
 }
 
+func TestFFmpegArgsScaleOversizedTranscode(t *testing.T) {
+	args := ffmpegArgs(mediaPlan{
+		sourcePath:      "source.mkv",
+		outputPath:      "output.mp4",
+		action:          "transcode",
+		videoWidth:      3840,
+		videoHeight:     2160,
+		videoBitRateBPS: maxTranscodedVideoBitRateBPS,
+	}, "output.mp4.tmp.mp4")
+	if !hasArgContaining(args, "scale=") {
+		t.Fatalf("expected scale filter for oversized video: %v", args)
+	}
+}
+
+func TestFFmpegArgsDoNotScale1080pTranscode(t *testing.T) {
+	args := ffmpegArgs(mediaPlan{
+		sourcePath:      "source.mkv",
+		outputPath:      "output.mp4",
+		action:          "transcode",
+		videoWidth:      1920,
+		videoHeight:     1080,
+		videoBitRateBPS: maxTranscodedVideoBitRateBPS,
+	}, "output.mp4.tmp.mp4")
+	if hasArgContaining(args, "scale=") {
+		t.Fatalf("did not expect scale filter for 1080p video: %v", args)
+	}
+}
+
+func TestFFmpegArgsCombineScaleAndSubtitleFilters(t *testing.T) {
+	args := ffmpegArgs(mediaPlan{
+		sourcePath:            "source.mkv",
+		outputPath:            "output.mp4",
+		action:                "burn_subtitles",
+		hasInternalSubtitles:  true,
+		internalSubtitleIndex: 1,
+		videoWidth:            3840,
+		videoHeight:           2160,
+		videoBitRateBPS:       maxTranscodedVideoBitRateBPS,
+	}, "output.mp4.tmp.mp4")
+	filter, ok := argValue(args, "-vf")
+	if !ok {
+		t.Fatalf("expected vf filter in args: %v", args)
+	}
+	if !strings.Contains(filter, "scale=") || !strings.Contains(filter, "subtitles=") || !strings.Contains(filter, ":si=1") {
+		t.Fatalf("expected scale and subtitle filters in one vf arg, got %q from %v", filter, args)
+	}
+	if countArg(args, "-vf") != 1 {
+		t.Fatalf("expected one vf arg, got %v", args)
+	}
+}
+
 func TestSelectSubtitlePrefersChineseExternalSubtitle(t *testing.T) {
 	dir := t.TempDir()
 	videoPath := filepath.Join(dir, "bangumi.mkv")
@@ -422,6 +473,25 @@ func hasArgPair(args []string, key, value string) bool {
 		}
 	}
 	return false
+}
+
+func argValue(args []string, key string) (string, bool) {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == key {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
+func countArg(args []string, want string) int {
+	count := 0
+	for _, arg := range args {
+		if arg == want {
+			count++
+		}
+	}
+	return count
 }
 
 func hasArgContaining(args []string, want string) bool {

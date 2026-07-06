@@ -43,9 +43,11 @@ const (
 	completionCleanupWarningPrefix = "最终产物已完成，但 qBittorrent 下载清理失败:"
 	completedDownloadCleanupLimit  = 50
 
-	maxTranscodedVideoBitRateBPS = int64(1_680_000)
-	maxTranscodedVideoRateArg    = "1680k"
-	maxTranscodedVideoBufSizeArg = "3360k"
+	maxTranscodedVideoBitRateBPS = int64(3_360_000)
+	maxTranscodedVideoRateArg    = "3360k"
+	maxTranscodedVideoBufSizeArg = "6720k"
+	maxOutputVideoWidth          = 1920
+	maxOutputVideoHeight         = 1080
 )
 
 var (
@@ -173,6 +175,8 @@ type probeStream struct {
 	CodecName string            `json:"codec_name"`
 	CodecType string            `json:"codec_type"`
 	Profile   string            `json:"profile"`
+	Width     int               `json:"width"`
+	Height    int               `json:"height"`
 	PixFmt    string            `json:"pix_fmt"`
 	BitRate   string            `json:"bit_rate"`
 	Duration  string            `json:"duration"`
@@ -197,6 +201,8 @@ type mediaPlan struct {
 	action                string
 	totalDurationMS       int64
 	videoBitRateBPS       int64
+	videoWidth            int
+	videoHeight           int
 	internalSubtitleIndex int
 }
 
@@ -1668,6 +1674,7 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 	subtitle := selectSubtitle(video.Path, subtitleStreams)
 	outputPath := finalOutputPath(job.StorageRoot, job)
 	webPlayable := isBrowserPlayable(video.Path, videoStream, audioStream)
+	exceedsMaxResolution := videoExceedsMaxResolution(videoStream.Width, videoStream.Height)
 	fastStart := false
 	multipleMdat := false
 	problematicEditList := false
@@ -1697,6 +1704,9 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 	case subtitle.selected():
 		action = "burn_subtitles"
 		needsTranscode = true
+	case exceedsMaxResolution:
+		action = "transcode"
+		needsTranscode = true
 	case webPlayable && (!fastStart || multipleMdat || problematicEditList):
 		action = "remux"
 		needsTranscode = true
@@ -1713,6 +1723,8 @@ func (s *Service) planJob(ctx context.Context, job pendingJob) (mediaPlan, error
 		hasInternalSubtitles: hasInternal, hasExternalSubtitles: hasExternal,
 		needsTranscode: needsTranscode, action: action, totalDurationMS: totalDurationMS,
 		videoBitRateBPS:       videoBitRateBPS(videoStream),
+		videoWidth:            videoStream.Width,
+		videoHeight:           videoStream.Height,
 		internalSubtitleIndex: subtitle.internalIndex,
 	}, nil
 }
@@ -1735,14 +1747,22 @@ func (s *Service) probe(ctx context.Context, path string) (probeResult, error) {
 	return result, nil
 }
 
-func (s *Service) detectVideoBitRate(ctx context.Context, path string) (int64, error) {
+func (s *Service) detectPrimaryVideoStream(ctx context.Context, path string) (probeStream, error) {
 	probe, err := s.probe(ctx, path)
 	if err != nil {
-		return 0, err
+		return probeStream{}, err
 	}
 	videoStream, _, _ := classifyStreams(probe.Streams)
 	if videoStream.CodecName == "" {
-		return 0, errors.New("未找到视频流")
+		return probeStream{}, errors.New("未找到视频流")
+	}
+	return videoStream, nil
+}
+
+func (s *Service) detectVideoBitRate(ctx context.Context, path string) (int64, error) {
+	videoStream, err := s.detectPrimaryVideoStream(ctx, path)
+	if err != nil {
+		return 0, err
 	}
 	return videoBitRateBPS(videoStream), nil
 }
@@ -1915,6 +1935,14 @@ func (p mediaPlan) limitsVideoBitRate() bool {
 	return p.encodesVideo() && p.videoBitRateBPS > maxTranscodedVideoBitRateBPS
 }
 
+func (p mediaPlan) limitsVideoResolution() bool {
+	return p.encodesVideo() && videoExceedsMaxResolution(p.videoWidth, p.videoHeight)
+}
+
+func videoExceedsMaxResolution(width, height int) bool {
+	return width > maxOutputVideoWidth || height > maxOutputVideoHeight
+}
+
 func encodeJPEGCover(sourcePNG, destinationJPG string) error {
 	return imageutil.EncodeJPEG(sourcePNG, destinationJPG, 80)
 }
@@ -1946,12 +1974,18 @@ func (s *Service) runFFmpeg(ctx context.Context, jobID int64, plan mediaPlan) er
 	}
 	tempPath := plan.outputPath + ".tmp.mp4"
 	_ = os.Remove(tempPath)
-	if plan.encodesVideo() && plan.videoBitRateBPS <= 0 {
-		detectedBitRate, err := s.detectVideoBitRate(ctx, plan.sourcePath)
+	if plan.encodesVideo() && (plan.videoBitRateBPS <= 0 || plan.videoWidth <= 0 || plan.videoHeight <= 0) {
+		videoStream, err := s.detectPrimaryVideoStream(ctx, plan.sourcePath)
 		if err != nil {
-			s.logger.Warn("探测源视频码率失败，将不启用码率上限", "source", "media", "media_job_id", jobID, "source_file", filepath.Base(plan.sourcePath), "error", err)
+			s.logger.Warn("探测源视频参数失败，将使用已保存的转码计划", "source", "media", "media_job_id", jobID, "source_file", filepath.Base(plan.sourcePath), "error", err)
 		} else {
-			plan.videoBitRateBPS = detectedBitRate
+			if plan.videoBitRateBPS <= 0 {
+				plan.videoBitRateBPS = videoBitRateBPS(videoStream)
+			}
+			if plan.videoWidth <= 0 || plan.videoHeight <= 0 {
+				plan.videoWidth = videoStream.Width
+				plan.videoHeight = videoStream.Height
+			}
 		}
 	}
 	if plan.action == "burn_subtitles" && plan.subtitlePath == "" && plan.hasInternalSubtitles {
@@ -2039,10 +2073,8 @@ func ffmpegArgs(plan mediaPlan, tempPath string) []string {
 	case "remux":
 		args = append(args, "-c", "copy", "-movflags", "+faststart")
 	default:
-		if plan.subtitlePath != "" {
-			args = append(args, "-vf", "subtitles=filename="+ffmpegFilterPath(plan.subtitlePath))
-		} else if plan.hasInternalSubtitles {
-			args = append(args, "-vf", "subtitles=filename="+ffmpegFilterPath(plan.sourcePath)+":si="+strconv.Itoa(plan.internalSubtitleIndex))
+		if filters := videoFilters(plan); len(filters) > 0 {
+			args = append(args, "-vf", strings.Join(filters, ","))
 		}
 		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23")
 		if plan.limitsVideoBitRate() {
@@ -2055,6 +2087,25 @@ func ffmpegArgs(plan mediaPlan, tempPath string) []string {
 	}
 	args = append(args, tempPath)
 	return args
+}
+
+func videoFilters(plan mediaPlan) []string {
+	filters := make([]string, 0, 2)
+	if plan.limitsVideoResolution() {
+		filters = append(filters, outputResolutionScaleFilter())
+	}
+	if plan.subtitlePath != "" {
+		filters = append(filters, "subtitles=filename="+ffmpegFilterPath(plan.subtitlePath))
+	} else if plan.hasInternalSubtitles {
+		filters = append(filters, "subtitles=filename="+ffmpegFilterPath(plan.sourcePath)+":si="+strconv.Itoa(plan.internalSubtitleIndex))
+	}
+	return filters
+}
+
+func outputResolutionScaleFilter() string {
+	return fmt.Sprintf("scale='if(gt(iw/ih,%d/%d),min(%d,iw),-2)':'if(gt(iw/ih,%d/%d),-2,min(%d,ih))'",
+		maxOutputVideoWidth, maxOutputVideoHeight, maxOutputVideoWidth,
+		maxOutputVideoWidth, maxOutputVideoHeight, maxOutputVideoHeight)
 }
 
 type progressUpdate struct {
