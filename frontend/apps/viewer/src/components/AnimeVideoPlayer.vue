@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import fullscreenIcon from '../assets/player-icons/fullscreen.svg?raw'
+import fullscreenExitIcon from '../assets/player-icons/fullscreen-exit.svg?raw'
+import volumeIcon from '../assets/player-icons/volume.svg?raw'
+import volumeMutedIcon from '../assets/player-icons/volume-muted.svg?raw'
+import webFullscreenIcon from '../assets/player-icons/web-fullscreen.svg?raw'
+import webFullscreenExitIcon from '../assets/player-icons/web-fullscreen-exit.svg?raw'
+
 interface Props {
   mediaId: number
   src: string
@@ -24,6 +31,11 @@ const muted = ref(false)
 const playbackRate = ref(1)
 const errorMessage = ref('')
 const webFullscreen = ref(false)
+const fullscreenActive = ref(false)
+const timelineBubbleVisible = ref(false)
+const timelineBubblePercent = ref(0)
+const timelineBubbleTime = ref(0)
+const volumeBubbleVisible = ref(false)
 const controlsVisible = ref(true)
 const resumeApplied = ref(false)
 const hasPlayed = ref(false)
@@ -33,6 +45,7 @@ let previousBodyOverflow = ''
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
 let bufferTimer: ReturnType<typeof setInterval> | null = null
+let volumeBubbleTimer: ReturnType<typeof setTimeout> | null = null
 const bufferRangeToleranceSeconds = 0.5
 
 const progressStyle = computed(() => {
@@ -43,8 +56,21 @@ const progressStyle = computed(() => {
     '--buffered': `${Math.max(progress, Math.min(100, buffered))}%`,
   }
 })
+const volumeStyle = computed(() => {
+  const level = muted.value ? 0 : Math.max(0, Math.min(1, volume.value)) * 100
+  return { '--volume': `${level}%` }
+})
+const volumePercent = computed(() => Math.round((muted.value ? 0 : Math.max(0, Math.min(1, volume.value))) * 100))
+const timelineBubbleStyle = computed(() => ({ '--timeline-hover': `${timelineBubblePercent.value}%` }))
+const timelineBubbleLabel = computed(() => formatTime(timelineBubbleTime.value))
 const playerLoading = computed(() => Boolean(props.src) && !mediaReady.value && !errorMessage.value)
 const canControlPlayback = computed(() => mediaReady.value && !errorMessage.value)
+const volumeIconSrc = computed(() => muted.value ? volumeMutedIcon : volumeIcon)
+const volumeLabel = computed(() => muted.value ? '取消静音' : '静音')
+const webFullscreenIconSrc = computed(() => webFullscreen.value ? webFullscreenExitIcon : webFullscreenIcon)
+const webFullscreenLabel = computed(() => webFullscreen.value ? '退出网页全屏' : '网页全屏')
+const fullscreenIconSrc = computed(() => fullscreenActive.value ? fullscreenExitIcon : fullscreenIcon)
+const fullscreenLabel = computed(() => fullscreenActive.value ? '退出全屏' : '全屏')
 
 watch(
   () => props.src,
@@ -66,14 +92,20 @@ watch(
   },
 )
 
-onMounted(() => window.addEventListener('keydown', handleWindowKeydown))
+onMounted(() => {
+  window.addEventListener('keydown', handleWindowKeydown)
+  document.addEventListener('fullscreenchange', handleFullscreenChange)
+  handleFullscreenChange()
+})
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleWindowKeydown)
+  document.removeEventListener('fullscreenchange', handleFullscreenChange)
   reportProgress()
   stopProgressTimer()
   stopBufferTimer()
   stopControlsTimer()
+  stopVolumeBubbleTimer()
   exitWebFullscreen()
 })
 
@@ -256,6 +288,48 @@ function stopBufferTimer() {
   }
 }
 
+function showVolumeBubble() {
+  volumeBubbleVisible.value = true
+  stopVolumeBubbleTimer()
+  volumeBubbleTimer = setTimeout(() => {
+    volumeBubbleVisible.value = false
+    volumeBubbleTimer = null
+  }, 1_100)
+}
+
+function stopVolumeBubbleTimer() {
+  if (volumeBubbleTimer !== null) {
+    clearTimeout(volumeBubbleTimer)
+    volumeBubbleTimer = null
+  }
+}
+
+function showTimelineBubble(event: PointerEvent) {
+  updateTimelineBubble(event)
+  if (duration.value > 0 && canControlPlayback.value) {
+    timelineBubbleVisible.value = true
+  }
+}
+
+function updateTimelineBubble(event: PointerEvent) {
+  if (duration.value <= 0 || !canControlPlayback.value) {
+    timelineBubbleVisible.value = false
+    return
+  }
+  const target = event.currentTarget
+  if (!(target instanceof HTMLElement)) return
+  const rect = target.getBoundingClientRect()
+  const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0
+  const clampedRatio = Math.max(0, Math.min(1, ratio))
+  timelineBubblePercent.value = clampedRatio * 100
+  timelineBubbleTime.value = clampedRatio * duration.value
+  timelineBubbleVisible.value = true
+}
+
+function hideTimelineBubble() {
+  timelineBubbleVisible.value = false
+}
+
 function reportProgress() {
   if (!hasPlayed.value || props.mediaId < 1 || currentTime.value <= 0 || duration.value <= 0) return
   emit('progress', {
@@ -280,12 +354,18 @@ function changeVolume(event: Event) {
   video.value.muted = value === 0
   volume.value = value
   muted.value = value === 0
+  showVolumeBubble()
 }
 
 function toggleMute() {
   if (!video.value) return
+  if (video.value.muted && volume.value === 0) {
+    video.value.volume = 0.6
+    volume.value = 0.6
+  }
   video.value.muted = !video.value.muted
   muted.value = video.value.muted
+  showVolumeBubble()
 }
 
 function cyclePlaybackRate() {
@@ -297,11 +377,18 @@ function cyclePlaybackRate() {
 
 async function toggleFullscreen() {
   if (!player.value) return
-  if (document.fullscreenElement) await document.exitFullscreen()
-  else {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen()
+      return
+    }
     exitWebFullscreen()
     await nextTick()
     await player.value.requestFullscreen()
+  } catch {
+    showControls()
+  } finally {
+    handleFullscreenChange()
   }
 }
 
@@ -322,6 +409,10 @@ function exitWebFullscreen() {
   webFullscreen.value = false
   document.body.style.overflow = previousBodyOverflow
   document.body.classList.remove('bp-web-fullscreen')
+}
+
+function handleFullscreenChange() {
+  fullscreenActive.value = document.fullscreenElement === player.value
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
@@ -397,18 +488,33 @@ function formatTime(value: number) {
     </div>
 
     <div class="player-controls">
-      <input
-        class="timeline"
-        type="range"
-        min="0"
-        :max="duration || 0"
-        step="0.1"
-        :value="currentTime"
-        :style="progressStyle"
-        :disabled="!canControlPlayback"
-        aria-label="播放进度"
-        @input="seek"
-      />
+      <div
+        class="timeline-wrap"
+        @pointerenter="showTimelineBubble"
+        @pointermove="updateTimelineBubble"
+        @pointerleave="hideTimelineBubble"
+      >
+        <div
+          class="timeline-bubble"
+          :class="{ visible: timelineBubbleVisible }"
+          :style="timelineBubbleStyle"
+          aria-hidden="true"
+        >
+          {{ timelineBubbleLabel }}
+        </div>
+        <input
+          class="timeline"
+          type="range"
+          min="0"
+          :max="duration || 0"
+          step="0.1"
+          :value="currentTime"
+          :style="progressStyle"
+          :disabled="!canControlPlayback"
+          aria-label="播放进度"
+          @input="seek"
+        />
+      </div>
       <div class="control-row">
         <button
           class="play-control"
@@ -421,28 +527,45 @@ function formatTime(value: number) {
         </button>
         <span class="time-code">{{ formatTime(currentTime) }} <i>/</i> {{ formatTime(duration) }}</span>
         <div class="control-spacer" />
-        <button class="text-control" type="button" @click="toggleMute">{{ muted ? 'MUTE' : 'VOL' }}</button>
-        <input
-          class="volume-range"
-          type="range"
-          min="0"
-          max="1"
-          step="0.05"
-          :value="muted ? 0 : volume"
-          aria-label="音量"
-          @input="changeVolume"
-        />
+        <div class="volume-cluster">
+          <div class="volume-bubble" :class="{ visible: volumeBubbleVisible }" :aria-hidden="!volumeBubbleVisible" aria-live="polite">{{ volumePercent }}%</div>
+          <button class="icon-control volume-control" type="button" :aria-label="volumeLabel" :title="volumeLabel" @click="toggleMute">
+            <i aria-hidden="true" v-html="volumeIconSrc" />
+          </button>
+          <input
+            class="volume-range"
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            :value="muted ? 0 : volume"
+            :style="volumeStyle"
+            aria-label="音量"
+            @pointerdown="showVolumeBubble"
+            @input="changeVolume"
+          />
+        </div>
         <button class="text-control rate" type="button" @click="cyclePlaybackRate">{{ playbackRate }}×</button>
         <button
-          class="web-fullscreen-control"
+          class="icon-control web-fullscreen-control"
           :class="{ active: webFullscreen }"
           type="button"
-          :aria-label="webFullscreen ? '退出网页全屏' : '进入网页全屏'"
+          :aria-label="webFullscreenLabel"
+          :title="webFullscreenLabel"
           @click="toggleWebFullscreen"
         >
-          <i aria-hidden="true" />{{ webFullscreen ? '退出网页全屏' : '网页全屏' }}
+          <i aria-hidden="true" v-html="webFullscreenIconSrc" />
         </button>
-        <button class="fullscreen-control" type="button" aria-label="全屏" @click="toggleFullscreen"><i aria-hidden="true" /></button>
+        <button
+          class="icon-control fullscreen-control"
+          :class="{ active: fullscreenActive }"
+          type="button"
+          :aria-label="fullscreenLabel"
+          :title="fullscreenLabel"
+          @click="toggleFullscreen"
+        >
+          <i aria-hidden="true" v-html="fullscreenIconSrc" />
+        </button>
       </div>
     </div>
     <div class="hidden-progress" :style="progressStyle" aria-hidden="true" />
@@ -467,27 +590,35 @@ function formatTime(value: number) {
 .player-heading span { color: var(--cyan-300); font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; }
 .player-heading p { margin-top: 3px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .player-controls { position: absolute; right: 24px; bottom: 20px; left: 24px; transition: opacity 180ms ease, transform 180ms ease; }
-.timeline { width: 100%; height: 4px; appearance: none; cursor: pointer; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(142,232,242,.58) var(--progress) var(--buffered), rgba(255,255,255,.28) var(--buffered) 100%); }
+.timeline-wrap { position: relative; height: 18px; display: flex; align-items: center; }
+.timeline-bubble { position: absolute; bottom: calc(100% + 8px); left: var(--timeline-hover); z-index: 4; min-width: 58px; padding: 6px 10px 7px; color: rgba(255,255,255,.94); font-family: var(--font-mono); font-size: 12px; line-height: 1; text-align: center; pointer-events: none; opacity: 0; background: rgba(78,82,92,.92); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; box-shadow: 0 10px 22px rgba(0,0,0,.24); transform: translate(-50%, 4px); transition: opacity 140ms ease, transform 140ms ease; }
+.timeline-bubble::after { content: ''; position: absolute; top: 100%; left: 50%; width: 8px; height: 8px; background: rgba(78,82,92,.92); border-right: 1px solid rgba(255,255,255,.14); border-bottom: 1px solid rgba(255,255,255,.14); transform: translate(-50%, -4px) rotate(45deg); }
+.timeline-bubble.visible { opacity: 1; transform: translate(-50%, 0); }
+.timeline { width: 100%; height: 4px; display: block; appearance: none; cursor: pointer; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(142,232,242,.58) var(--progress) var(--buffered), rgba(255,255,255,.28) var(--buffered) 100%); }
 .timeline:disabled { cursor: wait; opacity: .62; }
 .timeline::-webkit-slider-thumb { width: 13px; height: 13px; appearance: none; background: #fff; border: 3px solid var(--pink-400); transform: rotate(45deg); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
-.control-row { height: 46px; display: flex; align-items: flex-end; gap: 14px; }
-.play-control { width: 30px; height: 30px; display: grid; place-items: center; color: #fff; }
-.play-control:disabled { cursor: wait; opacity: .45; }
+.control-row { height: 48px; display: flex; align-items: center; gap: 12px; padding-top: 4px; }
+.play-control, .icon-control { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 36px; color: rgba(255,255,255,.86); border: 1px solid transparent; border-radius: 8px; background: rgba(9,13,23,.2); transition: color 160ms ease, border-color 160ms ease, background 160ms ease, transform 160ms ease; }
+.play-control:hover:not(:disabled), .icon-control:hover, .icon-control.active { color: #fff; border-color: rgba(142,232,242,.44); background: rgba(73,214,233,.16); box-shadow: 0 0 0 1px rgba(255,255,255,.06) inset; transform: translateY(-1px); }
+.play-control:disabled { cursor: wait; opacity: .45; transform: none; }
 .play-control i:not(.pause) { width: 0; height: 0; margin-left: 3px; border-top: 7px solid transparent; border-bottom: 7px solid transparent; border-left: 11px solid currentColor; }
 .play-control i.pause { width: 11px; height: 14px; border-right: 4px solid currentColor; border-left: 4px solid currentColor; }
-.time-code { margin-bottom: 5px; color: rgba(255,255,255,.82); font-family: var(--font-mono); font-size: 13px; }
+.time-code { min-width: 104px; color: rgba(255,255,255,.82); font-family: var(--font-mono); font-size: 13px; white-space: nowrap; }
 .time-code i { padding: 0 4px; color: var(--pink-300); font-style: normal; }
 .control-spacer { flex: 1; }
-.text-control { margin-bottom: 3px; color: rgba(255,255,255,.75); font-family: var(--font-mono); font-size: 13px; letter-spacing: .5px; }
-.text-control:hover { color: var(--cyan-300); }
-.text-control.rate { min-width: 32px; }
-.volume-range { width: 70px; height: 3px; margin-bottom: 10px; appearance: none; background: rgba(255,255,255,.3); }
+.volume-cluster { position: relative; display: inline-flex; align-items: center; gap: 10px; }
+.volume-bubble { position: absolute; bottom: calc(100% + 10px); left: 50%; z-index: 3; min-width: 46px; padding: 5px 9px 6px; color: rgba(255,255,255,.94); font-family: var(--font-mono); font-size: 12px; line-height: 1; text-align: center; pointer-events: none; opacity: 0; background: rgba(78,82,92,.92); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; box-shadow: 0 10px 22px rgba(0,0,0,.24); transform: translate(-50%, 4px); transition: opacity 140ms ease, transform 140ms ease; }
+.volume-bubble::after { content: ''; position: absolute; top: 100%; left: 50%; width: 8px; height: 8px; background: rgba(78,82,92,.92); border-right: 1px solid rgba(255,255,255,.14); border-bottom: 1px solid rgba(255,255,255,.14); transform: translate(-50%, -4px) rotate(45deg); }
+.volume-bubble.visible { opacity: 1; transform: translate(-50%, 0); }
+.icon-control > i { width: 20px; height: 20px; display: grid; place-items: center; color: currentColor; filter: drop-shadow(0 2px 6px rgba(0,0,0,.35)); }
+.icon-control :deep(svg) { width: 100%; height: 100%; display: block; }
+.icon-control :deep(path) { fill: currentColor; }
+.volume-control > i { width: 22px; height: 22px; }
+.text-control { height: 32px; min-width: 42px; padding: 0 8px; color: rgba(255,255,255,.78); font-family: var(--font-mono); font-size: 13px; letter-spacing: .2px; border: 1px solid transparent; border-radius: 8px; background: rgba(9,13,23,.2); transition: color 160ms ease, border-color 160ms ease, background 160ms ease; }
+.text-control:hover { color: #fff; border-color: rgba(255,95,158,.42); background: rgba(255,95,158,.14); }
+.text-control.rate { min-width: 46px; }
+.volume-range { width: 84px; height: 3px; appearance: none; cursor: pointer; background: linear-gradient(90deg, rgba(142,232,242,.86) 0 var(--volume), rgba(255,255,255,.3) var(--volume) 100%); }
 .volume-range::-webkit-slider-thumb { width: 9px; height: 9px; appearance: none; background: var(--cyan-300); transform: rotate(45deg); }
-.fullscreen-control { width: 28px; height: 28px; display: grid; place-items: center; }
-.fullscreen-control i { width: 14px; height: 14px; border: 1px solid rgba(255,255,255,.84); clip-path: polygon(0 0, 42% 0, 42% 12%, 12% 12%, 12% 42%, 0 42%, 0 0, 100% 0, 100% 42%, 88% 42%, 88% 12%, 58% 12%, 58% 0, 100% 0, 100% 100%, 58% 100%, 58% 88%, 88% 88%, 88% 58%, 100% 58%, 100% 100%, 0 100%, 0 58%, 12% 58%, 12% 88%, 42% 88%, 42% 100%, 0 100%); }
-.web-fullscreen-control { height: 29px; display: inline-flex; align-items: center; gap: 7px; margin-bottom: -1px; padding: 0 9px; color: rgba(255,255,255,.78); font-size: 13px; white-space: nowrap; border: 1px solid rgba(255,255,255,.24); background: rgba(9,13,23,.38); clip-path: polygon(var(--bevel-sm)); }
-.web-fullscreen-control:hover, .web-fullscreen-control.active { color: #fff; border-color: rgba(142,232,242,.55); background: rgba(73,214,233,.18); }
-.web-fullscreen-control i { width: 12px; height: 9px; border: 1px solid currentColor; box-shadow: inset 0 2px 0 rgba(142,232,242,.45); }
 .loading-mark, .buffering-mark, .player-error { position: absolute; top: 50%; left: 50%; display: grid; place-items: center; gap: 10px; transform: translate(-50%, -50%); }
 .loading-mark i { width: 46px; height: 46px; border: 1px solid rgba(142,232,242,.35); box-shadow: inset 0 0 0 6px rgba(142,232,242,.08), 0 0 18px rgba(142,232,242,.22); clip-path: polygon(var(--bevel-sm)); animation: bp-player-pulse 1.1s ease-in-out infinite; }
 .loading-mark span { color: rgba(255,255,255,.86); font-size: 13px; letter-spacing: 1px; }
