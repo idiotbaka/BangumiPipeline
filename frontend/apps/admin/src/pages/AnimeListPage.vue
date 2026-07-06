@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Delete, EditPen, FolderOpened, Link, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
+import { Delete, EditPen, FolderOpened, Link, Plus, Refresh, Search, Setting, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api, type AnimeListItem, type AnimeListSort, type EpisodeBindingIdentity, type MediaStorageSettings } from '../api'
 import AnimeDetailPanel from '../components/AnimeDetailPanel.vue'
@@ -17,7 +17,11 @@ const refreshingId = ref<number | null>(null)
 const movingStorageId = ref<number | null>(null)
 const syncingHistoryId = ref<number | null>(null)
 const syncingEpisodeId = ref<number | null>(null)
+const savingAnimeSettingsId = ref<number | null>(null)
 const storageSettings = ref<MediaStorageSettings | null>(null)
+const animeSettingsVisible = ref(false)
+const animeSettingsTarget = ref<AnimeListItem | null>(null)
+const animeSettingsForm = reactive({ subscriptionEpisodeOffset: 0 })
 const storageMoveVisible = ref(false)
 const storageMoveTarget = ref<AnimeListItem | null>(null)
 const storageMoveRoot = ref('')
@@ -92,6 +96,10 @@ const storageTargets = computed(() => {
   return [storageSettings.value.defaultRoot, ...storageSettings.value.extraRoots]
 })
 const storageMoveDisabled = computed(() => storageMoveTarget.value === null || storageMoveRoot.value === '' || storageMoveRoot.value === storageMoveTarget.value.storageRoot)
+const animeSettingsDisabled = computed(() => {
+  if (animeSettingsTarget.value === null) return true
+  return !Number.isInteger(Number(animeSettingsForm.subscriptionEpisodeOffset))
+})
 const emptyDescription = computed(() => animeQuery.value.trim() === '' ? '尚未抓取到番剧数据' : '未找到匹配的番剧')
 
 async function load() {
@@ -288,6 +296,41 @@ function openStorageMoveDialog(anime: AnimeListItem) {
   storageMoveTarget.value = anime
   storageMoveRoot.value = anime.storageRoot
   storageMoveVisible.value = true
+}
+
+function openAnimeSettingsDialog(anime: AnimeListItem) {
+  animeSettingsTarget.value = anime
+  animeSettingsForm.subscriptionEpisodeOffset = anime.subscriptionEpisodeOffset || 0
+  animeSettingsVisible.value = true
+}
+
+function clearAnimeSettingsDialog() {
+  animeSettingsTarget.value = null
+  animeSettingsForm.subscriptionEpisodeOffset = 0
+}
+
+async function saveAnimeSettings() {
+  if (animeSettingsTarget.value === null || animeSettingsDisabled.value) {
+    return
+  }
+  const anime = animeSettingsTarget.value
+  const offset = Number(animeSettingsForm.subscriptionEpisodeOffset)
+  savingAnimeSettingsId.value = anime.bangumiId
+  try {
+    const { settings } = await api.updateAnimeSettings(anime.bangumiId, {
+      subscriptionEpisodeOffset: offset,
+    })
+    const current = items.value.find((item) => item.bangumiId === anime.bangumiId)
+    if (current) {
+      current.subscriptionEpisodeOffset = settings.subscriptionEpisodeOffset
+    }
+    ElMessage.success('番剧设置已保存')
+    animeSettingsVisible.value = false
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '番剧设置保存失败')
+  } finally {
+    savingAnimeSettingsId.value = null
+  }
 }
 
 function clearStorageMoveDialog() {
@@ -597,6 +640,13 @@ onBeforeUnmount(stopFilterLoading)
             <el-button size="small" :icon="View" type="primary" plain @click="showDetail(anime)">详情</el-button>
             <el-button
               size="small"
+              :icon="Setting"
+              plain
+              :loading="savingAnimeSettingsId === anime.bangumiId"
+              @click="openAnimeSettingsDialog(anime)"
+            >设置</el-button>
+            <el-button
+              size="small"
               :icon="Refresh"
               plain
               :loading="refreshingId === anime.bangumiId"
@@ -657,6 +707,37 @@ onBeforeUnmount(stopFilterLoading)
       <template #footer>
         <el-button @click="addVisible = false">取消</el-button>
         <el-button type="primary" :loading="adding" @click="addAnime">添加</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="animeSettingsVisible"
+      title="番剧设置"
+      width="min(460px, calc(100vw - 32px))"
+      destroy-on-close
+      append-to-body
+      @closed="clearAnimeSettingsDialog"
+    >
+      <el-form class="anime-settings-dialog" label-position="top" @submit.prevent>
+        <el-form-item label="番剧索引偏移">
+          <el-input-number
+            v-model="animeSettingsForm.subscriptionEpisodeOffset"
+            :step="1"
+            step-strictly
+            controls-position="right"
+            size="large"
+          />
+          <div class="form-help">仅影响后续自动订阅匹配；例如 -12 会把 13 匹配为 1。</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="animeSettingsVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="animeSettingsDisabled"
+          :loading="animeSettingsTarget !== null && savingAnimeSettingsId === animeSettingsTarget.bangumiId"
+          @click="saveAnimeSettings"
+        >保存</el-button>
       </template>
     </el-dialog>
 

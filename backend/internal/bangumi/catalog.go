@@ -38,20 +38,21 @@ func NewCatalog(db *sql.DB, mediaDir ...string) *Catalog {
 }
 
 type AnimeListItem struct {
-	BangumiID       int64                 `json:"bangumiId"`
-	Name            string                `json:"name"`
-	NameCN          string                `json:"nameCN"`
-	AirDate         string                `json:"airDate"`
-	AirWeekday      int                   `json:"airWeekday"`
-	Episodes        int                   `json:"episodes"`
-	Platform        string                `json:"platform"`
-	ImageStatus     string                `json:"imageStatus"`
-	HasCover        bool                  `json:"hasCover"`
-	DetailStatus    string                `json:"detailStatus"`
-	StorageRoot     string                `json:"storageRoot"`
-	StoragePath     string                `json:"storagePath"`
-	MatchedEpisodes []AnimeMatchedEpisode `json:"matchedEpisodes"`
-	CreatedAt       int64                 `json:"createdAt"`
+	BangumiID                 int64                 `json:"bangumiId"`
+	Name                      string                `json:"name"`
+	NameCN                    string                `json:"nameCN"`
+	AirDate                   string                `json:"airDate"`
+	AirWeekday                int                   `json:"airWeekday"`
+	Episodes                  int                   `json:"episodes"`
+	Platform                  string                `json:"platform"`
+	ImageStatus               string                `json:"imageStatus"`
+	HasCover                  bool                  `json:"hasCover"`
+	DetailStatus              string                `json:"detailStatus"`
+	StorageRoot               string                `json:"storageRoot"`
+	StoragePath               string                `json:"storagePath"`
+	SubscriptionEpisodeOffset int                   `json:"subscriptionEpisodeOffset"`
+	MatchedEpisodes           []AnimeMatchedEpisode `json:"matchedEpisodes"`
+	CreatedAt                 int64                 `json:"createdAt"`
 }
 
 type AnimePage struct {
@@ -59,6 +60,11 @@ type AnimePage struct {
 	Total    int             `json:"total"`
 	Page     int             `json:"page"`
 	PageSize int             `json:"pageSize"`
+}
+
+type AnimeSettings struct {
+	BangumiID                 int64 `json:"bangumiId"`
+	SubscriptionEpisodeOffset int   `json:"subscriptionEpisodeOffset"`
 }
 
 type AnimeListSort string
@@ -219,7 +225,8 @@ WHERE %s`, where), args...).Scan(&result.Total); err != nil {
 	rows, err := c.db.QueryContext(ctx, `
 SELECT bangumi_id, name, name_cn, air_date, air_weekday,
        CASE WHEN total_episodes > 0 THEN total_episodes ELSE eps END,
-       platform, image_status, image_local_path != '', detail_status, media_storage_root, created_at
+       platform, image_status, image_local_path != '', detail_status, media_storage_root,
+       subscription_episode_offset, created_at
 FROM anime_metadata am
 WHERE `+where+`
 ORDER BY `+animeListOrderBy(option.Sort)+`
@@ -232,7 +239,7 @@ LIMIT ? OFFSET ?`, queryArgs...)
 		if err := rows.Scan(
 			&item.BangumiID, &item.Name, &item.NameCN, &item.AirDate, &item.AirWeekday,
 			&item.Episodes, &item.Platform, &item.ImageStatus, &item.HasCover,
-			&item.DetailStatus, &item.StorageRoot, &item.CreatedAt,
+			&item.DetailStatus, &item.StorageRoot, &item.SubscriptionEpisodeOffset, &item.CreatedAt,
 		); err != nil {
 			rows.Close()
 			return result, err
@@ -568,6 +575,30 @@ WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID)
 		return ErrAnimeNotFound
 	}
 	return nil
+}
+
+func (c *Catalog) UpdateSettings(ctx context.Context, bangumiID int64, settings AnimeSettings) (AnimeSettings, error) {
+	if bangumiID < 1 {
+		return AnimeSettings{}, ErrAnimeNotFound
+	}
+	result, err := c.db.ExecContext(ctx, `
+UPDATE anime_metadata
+SET subscription_episode_offset = ?
+WHERE bangumi_id = ? AND deleted_at IS NULL`, settings.SubscriptionEpisodeOffset, bangumiID)
+	if err != nil {
+		return AnimeSettings{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return AnimeSettings{}, err
+	}
+	if affected == 0 {
+		return AnimeSettings{}, ErrAnimeNotFound
+	}
+	return AnimeSettings{
+		BangumiID:                 bangumiID,
+		SubscriptionEpisodeOffset: settings.SubscriptionEpisodeOffset,
+	}, nil
 }
 
 func (c *Catalog) tags(ctx context.Context, bangumiID int64) ([]AnimeTag, error) {

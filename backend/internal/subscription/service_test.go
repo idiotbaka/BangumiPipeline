@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,14 +17,72 @@ import (
 	"bangumipipeline.local/server/internal/system"
 )
 
-type testSettingsProvider struct{}
-
-func (testSettingsProvider) GetNetworkSettings(context.Context) (system.NetworkSettings, error) {
-	return system.NetworkSettings{}, nil
+type testSettingsProvider struct {
+	network      system.NetworkSettings
+	subscription system.SubscriptionSettings
 }
 
-func (testSettingsProvider) GetSubscriptionSettings(context.Context) (system.SubscriptionSettings, error) {
-	return system.SubscriptionSettings{}, nil
+func (p testSettingsProvider) GetNetworkSettings(context.Context) (system.NetworkSettings, error) {
+	return p.network, nil
+}
+
+func (p testSettingsProvider) GetSubscriptionSettings(context.Context) (system.SubscriptionSettings, error) {
+	return p.subscription, nil
+}
+
+func TestExecuteAppliesSubscriptionEpisodeOffset(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	insertAnime(t, ctx, db, 1001, now)
+	setAnimeEpisodeOffset(t, ctx, db, 1001, -12)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<item><guid isPermaLink="false">ep13</guid><title>[字幕组] 原作标题 [13][MP4][AVC AAC]</title><link>https://mikanani.me/Home/Episode/ep13</link><enclosure type="application/x-bittorrent" length="100" url="https://mikanani.me/Download/ep13.torrent"/></item>
+</channel></rss>`)
+	}))
+	t.Cleanup(server.Close)
+
+	service := NewService(db, testSettingsProvider{
+		subscription: system.SubscriptionSettings{RSSURL: server.URL + "/rss.xml"},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.now = func() time.Time { return now }
+
+	if err := service.Execute(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var episodeNumber, reason string
+	if err := db.QueryRowContext(ctx, `
+SELECT episode_number, match_reason
+FROM subscription_items
+WHERE item_key = 'ep13' AND match_status = ?`, matchStatusMatched).Scan(&episodeNumber, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if episodeNumber != "1" {
+		t.Fatalf("expected offset episode 1, got %q", episodeNumber)
+	}
+	if reason == "" || !strings.Contains(reason, "番剧索引偏移 -12") {
+		t.Fatalf("expected offset in match reason, got %q", reason)
+	}
+}
+
+func TestOffsetEpisodeNumberClampsToOne(t *testing.T) {
+	got, ok := offsetEpisodeNumber("03", -12)
+	if !ok {
+		t.Fatal("expected numeric episode to be offset")
+	}
+	if got != "1" {
+		t.Fatalf("expected clamped episode 1, got %q", got)
+	}
 }
 
 func TestSyncHistoryManualRSSAllowsChangedTitleWithFilters(t *testing.T) {
@@ -220,6 +279,16 @@ func insertAnime(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64,
 INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, created_at)
 VALUES (?, ?, ?, ?, ?)`, bangumiID, "https://bgm.tv/subject/1001", "Original Anime", "原作标题", now.Unix())
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setAnimeEpisodeOffset(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64, offset int) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `
+UPDATE anime_metadata
+SET subscription_episode_offset = ?
+WHERE bangumi_id = ?`, offset, bangumiID); err != nil {
 		t.Fatal(err)
 	}
 }

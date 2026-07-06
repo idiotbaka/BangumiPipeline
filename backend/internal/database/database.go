@@ -160,6 +160,7 @@ CREATE TABLE IF NOT EXISTS anime_metadata (
     episodes_fetched_at INTEGER,
     last_media_refresh_at INTEGER,
     media_storage_root TEXT NOT NULL DEFAULT '',
+    subscription_episode_offset INTEGER NOT NULL DEFAULT 0,
     deleted_at       INTEGER,
     created_at       INTEGER NOT NULL
 );
@@ -968,6 +969,14 @@ VALUES (25, unixepoch());`); err != nil {
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (26, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 26 migration: %w", err)
+	}
+	if err := ensureColumn(ctx, db, "anime_metadata", "subscription_episode_offset", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (27, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 27 migration: %w", err)
 	}
 	return nil
 }

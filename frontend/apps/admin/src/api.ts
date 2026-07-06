@@ -311,8 +311,14 @@ export interface AnimeListItem {
   detailStatus: string
   storageRoot: string
   storagePath: string
+  subscriptionEpisodeOffset: number
   matchedEpisodes: AnimeMatchedEpisode[]
   createdAt: number
+}
+
+export interface AnimeSettings {
+  bangumiId: number
+  subscriptionEpisodeOffset: number
 }
 
 export type AnimeListSort = 'created' | 'airDate'
@@ -737,6 +743,11 @@ export const api = {
     request<{ result: StorageMoveResult }>(`/api/anime/${bangumiId}/storage`, {
       method: 'POST',
       body: JSON.stringify({ storageRoot }),
+    }),
+  updateAnimeSettings: (bangumiId: number, settings: Pick<AnimeSettings, 'subscriptionEpisodeOffset'>) =>
+    request<{ settings: AnimeSettings }>(`/api/anime/${bangumiId}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
     }),
   deleteAnime: (bangumiId: number) =>
     request<void>(`/api/anime/${bangumiId}`, { method: 'DELETE' }),

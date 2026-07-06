@@ -101,6 +101,7 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/anime/search", api.searchAnime)
 	mux.HandleFunc("GET /api/anime/{bangumiID}", api.animeDetail)
 	mux.HandleFunc("DELETE /api/anime/{bangumiID}", api.deleteAnime)
+	mux.HandleFunc("PATCH /api/anime/{bangumiID}/settings", api.updateAnimeSettings)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/refresh", api.refreshAnime)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/sync-history", api.syncAnimeHistory)
 	mux.HandleFunc("POST /api/anime/{bangumiID}/sync-episode", api.syncAnimeEpisode)
@@ -799,6 +800,35 @@ func (a *AdminAPI) syncAnimeEpisode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"result": result, "cleanup": cleanup})
+}
+
+func (a *AdminAPI) updateAnimeSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	var input struct {
+		SubscriptionEpisodeOffset int `json:"subscriptionEpisodeOffset"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	settings, err := a.catalog.UpdateSettings(r.Context(), id, bangumi.AnimeSettings{
+		SubscriptionEpisodeOffset: input.SubscriptionEpisodeOffset,
+	})
+	if err != nil {
+		if errors.Is(err, bangumi.ErrAnimeNotFound) {
+			writeError(w, http.StatusNotFound, "anime_not_found", "番剧不存在")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
 }
 
 func (a *AdminAPI) updateAnimeEpisodeBinding(w http.ResponseWriter, r *http.Request) {

@@ -259,6 +259,10 @@ func (s *Service) Execute(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("应用订阅标题记忆失败: %w", err)
 		}
+		result, err = s.applyEpisodeOffset(ctx, result)
+		if err != nil {
+			return fmt.Errorf("应用番剧索引偏移失败: %w", err)
+		}
 		result, err = s.rejectDuplicateMatch(ctx, "", result)
 		if err != nil {
 			return fmt.Errorf("检查重复订阅条目失败: %w", err)
@@ -342,6 +346,10 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 		if requireSourceKey && titleMemoryKey(item.Title) != sourceKey {
 			result.SkippedUnmatched++
 			continue
+		}
+		identity, err = s.applyEpisodeOffsetToIdentity(ctx, bangumiID, identity)
+		if err != nil {
+			return result, err
 		}
 		if _, ok := existing[identity]; ok {
 			result.SkippedExisting++
@@ -1488,6 +1496,10 @@ ORDER BY created_at DESC, id DESC`, matchStatusUnmatched, BindingStatusPending)
 		if err != nil {
 			return matched, err
 		}
+		result, err = s.applyEpisodeOffset(ctx, result)
+		if err != nil {
+			return matched, err
+		}
 		result, err = s.rejectDuplicateMatch(ctx, item.key, result)
 		if err != nil {
 			return matched, err
@@ -1612,6 +1624,88 @@ WHERE title_key = ?`, key).Scan(&rule.BangumiID, &rule.AnimeName, &rule.SeasonNu
 	result.BoundEpisodeNumber = result.EpisodeNumber
 	result.BindingNote = "标题记忆自动绑定"
 	return result, nil
+}
+
+func (s *Service) applyEpisodeOffset(ctx context.Context, result matchResult) (matchResult, error) {
+	if result.Status != matchStatusMatched || result.BangumiID == nil {
+		return result, nil
+	}
+	if normalizeEpisodeType(result.EpisodeType) != "episode" || strings.TrimSpace(result.EpisodeNumber) == "" {
+		return result, nil
+	}
+	offset, err := s.subscriptionEpisodeOffset(ctx, *result.BangumiID)
+	if err != nil {
+		return result, err
+	}
+	if offset == 0 {
+		return result, nil
+	}
+	adjusted, ok := offsetEpisodeNumber(result.EpisodeNumber, offset)
+	if !ok {
+		return result, nil
+	}
+	if adjusted == result.EpisodeNumber {
+		return result, nil
+	}
+	result.EpisodeNumber = adjusted
+	if strings.TrimSpace(result.BoundEpisodeNumber) != "" {
+		result.BoundEpisodeNumber = adjusted
+	}
+	note := fmt.Sprintf("番剧索引偏移 %+d", offset)
+	if strings.TrimSpace(result.Reason) == "" {
+		result.Reason = note
+	} else if !strings.Contains(result.Reason, note) {
+		result.Reason += "，" + note
+	}
+	return result, nil
+}
+
+func (s *Service) applyEpisodeOffsetToIdentity(ctx context.Context, bangumiID int64, identity episodeIdentity) (episodeIdentity, error) {
+	if normalizeEpisodeType(identity.EpisodeType) != "episode" || strings.TrimSpace(identity.EpisodeNumber) == "" {
+		return identity, nil
+	}
+	offset, err := s.subscriptionEpisodeOffset(ctx, bangumiID)
+	if err != nil {
+		return identity, err
+	}
+	if offset == 0 {
+		return identity, nil
+	}
+	if adjusted, ok := offsetEpisodeNumber(identity.EpisodeNumber, offset); ok {
+		identity.EpisodeNumber = adjusted
+	}
+	return identity, nil
+}
+
+func (s *Service) subscriptionEpisodeOffset(ctx context.Context, bangumiID int64) (int, error) {
+	var offset int
+	err := s.db.QueryRowContext(ctx, `
+SELECT subscription_episode_offset
+FROM anime_metadata
+WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(&offset)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return offset, err
+}
+
+func offsetEpisodeNumber(value string, offset int) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return "", false
+	}
+	number += float64(offset)
+	if number < 1 {
+		number = 1
+	}
+	if math.Mod(number, 1) == 0 {
+		return strconv.FormatInt(int64(number), 10), true
+	}
+	return strconv.FormatFloat(number, 'f', -1, 64), true
 }
 
 func formatParsedEpisode(result matchResult) string {
