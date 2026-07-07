@@ -8,12 +8,21 @@ import volumeMutedIcon from '../assets/player-icons/volume-muted.svg?raw'
 import webFullscreenIcon from '../assets/player-icons/web-fullscreen.svg?raw'
 import webFullscreenExitIcon from '../assets/player-icons/web-fullscreen-exit.svg?raw'
 
+interface OPSkipSegment {
+  startSeconds: number
+  endSeconds: number
+  promptStartSeconds: number
+  promptEndSeconds: number
+  seekToSeconds: number
+}
+
 interface Props {
   mediaId: number
   src: string
   poster: string
   title: string
   startTime: number
+  opSkip: OPSkipSegment | null
 }
 
 const props = defineProps<Props>()
@@ -41,6 +50,7 @@ const resumeApplied = ref(false)
 const hasPlayed = ref(false)
 const mediaReady = ref(false)
 const bufferEnd = ref(0)
+const opSkipDismissed = ref(false)
 let previousBodyOverflow = ''
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
@@ -48,12 +58,23 @@ let bufferTimer: ReturnType<typeof setInterval> | null = null
 let volumeBubbleTimer: ReturnType<typeof setTimeout> | null = null
 const bufferRangeToleranceSeconds = 0.5
 
+const activeOPSkip = computed(() => normalizeOPSkip(props.opSkip))
 const progressStyle = computed(() => {
   const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
   const buffered = duration.value > 0 ? (bufferEnd.value / duration.value) * 100 : progress
+  const clampedProgress = clampPercent(progress)
+  const clampedBuffered = Math.max(clampedProgress, clampPercent(buffered))
+  const opStart =
+    activeOPSkip.value && duration.value > 0 ? clampPercent((activeOPSkip.value.startSeconds / duration.value) * 100) : 0
+  const opEnd =
+    activeOPSkip.value && duration.value > 0 ? clampPercent((activeOPSkip.value.endSeconds / duration.value) * 100) : 0
   return {
-    '--progress': `${Math.max(0, Math.min(100, progress))}%`,
-    '--buffered': `${Math.max(progress, Math.min(100, buffered))}%`,
+    '--progress': `${clampedProgress}%`,
+    '--buffered': `${clampedBuffered}%`,
+    '--op-start': `${opStart}%`,
+    '--op-width': `${Math.max(0, opEnd - opStart)}%`,
+    '--op-end': `${opEnd}%`,
+    '--op-opacity': activeOPSkip.value && opEnd > opStart ? '1' : '0',
   }
 })
 const volumeStyle = computed(() => {
@@ -65,6 +86,15 @@ const timelineBubbleStyle = computed(() => ({ '--timeline-hover': `${timelineBub
 const timelineBubbleLabel = computed(() => formatTime(timelineBubbleTime.value))
 const playerLoading = computed(() => Boolean(props.src) && !mediaReady.value && !errorMessage.value)
 const canControlPlayback = computed(() => mediaReady.value && !errorMessage.value)
+const withinOPSkipPrompt = computed(() => {
+  const segment = activeOPSkip.value
+  return Boolean(
+    segment &&
+      currentTime.value >= segment.promptStartSeconds &&
+      currentTime.value < segment.promptEndSeconds,
+  )
+})
+const opSkipVisible = computed(() => canControlPlayback.value && withinOPSkipPrompt.value && !opSkipDismissed.value)
 const volumeIconSrc = computed(() => muted.value ? volumeMutedIcon : volumeIcon)
 const volumeLabel = computed(() => muted.value ? '取消静音' : '静音')
 const webFullscreenIconSrc = computed(() => webFullscreen.value ? webFullscreenExitIcon : webFullscreenIcon)
@@ -84,6 +114,7 @@ watch(
     resumeApplied.value = false
     hasPlayed.value = false
     mediaReady.value = false
+    opSkipDismissed.value = false
     stopProgressTimer()
     stopBufferTimer()
     showControls()
@@ -91,6 +122,17 @@ watch(
     video.value?.load()
   },
 )
+
+watch(
+  () => props.opSkip,
+  () => {
+    opSkipDismissed.value = false
+  },
+)
+
+watch(withinOPSkipPrompt, (inside) => {
+  if (!inside) opSkipDismissed.value = false
+})
 
 onMounted(() => {
   window.addEventListener('keydown', handleWindowKeydown)
@@ -347,6 +389,19 @@ function seek(event: Event) {
   updateBuffered()
 }
 
+function skipOP() {
+  const element = video.value
+  const segment = activeOPSkip.value
+  if (!element || !segment) return
+  const maxSeek = duration.value > 0 ? Math.max(duration.value - 0.1, 0) : segment.seekToSeconds
+  const target = Math.max(0, Math.min(segment.seekToSeconds, maxSeek))
+  opSkipDismissed.value = true
+  element.currentTime = target
+  currentTime.value = target
+  updateBuffered()
+  showControls()
+}
+
 function changeVolume(event: Event) {
   const value = Number((event.target as HTMLInputElement).value)
   if (!video.value || !Number.isFinite(value)) return
@@ -428,6 +483,31 @@ function formatTime(value: number) {
   const base = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
   return hours > 0 ? `${String(hours).padStart(2, '0')}:${base}` : base
 }
+
+function clampPercent(value: number) {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(100, value))
+}
+
+function normalizeOPSkip(segment: OPSkipSegment | null) {
+  if (!segment) return null
+  const startSeconds = Math.max(0, segment.startSeconds)
+  const endSeconds = Math.max(0, segment.endSeconds)
+  if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds <= startSeconds) return null
+  const fallbackPromptStart = Math.max(0, startSeconds - 2)
+  const fallbackSeekTo = Math.max(0, endSeconds - 2)
+  const promptStartSeconds = Number.isFinite(segment.promptStartSeconds)
+    ? Math.max(0, segment.promptStartSeconds)
+    : fallbackPromptStart
+  const seekToSeconds = Number.isFinite(segment.seekToSeconds)
+    ? Math.max(0, Math.min(segment.seekToSeconds, endSeconds))
+    : fallbackSeekTo
+  const promptEndSeconds = Number.isFinite(segment.promptEndSeconds)
+    ? Math.max(promptStartSeconds, Math.min(segment.promptEndSeconds, endSeconds))
+    : Math.max(promptStartSeconds, seekToSeconds)
+  if (promptEndSeconds <= promptStartSeconds) return null
+  return { startSeconds, endSeconds, promptStartSeconds, promptEndSeconds, seekToSeconds }
+}
 </script>
 
 <template>
@@ -487,9 +567,17 @@ function formatTime(value: number) {
       <p>{{ title }}</p>
     </div>
 
+    <Transition name="op-skip">
+      <button v-if="opSkipVisible" class="op-skip-button" type="button" aria-label="跳过 OP" @click.stop="skipOP">
+        <span>跳过 OP</span>
+        <i aria-hidden="true" />
+      </button>
+    </Transition>
+
     <div class="player-controls">
       <div
         class="timeline-wrap"
+        :style="progressStyle"
         @pointerenter="showTimelineBubble"
         @pointermove="updateTimelineBubble"
         @pointerleave="hideTimelineBubble"
@@ -589,12 +677,18 @@ function formatTime(value: number) {
 .player-heading { position: absolute; top: 24px; left: 28px; max-width: 70%; text-shadow: 0 2px 8px rgba(0,0,0,.7); pointer-events: none; transition: opacity 180ms ease, transform 180ms ease; }
 .player-heading span { color: var(--cyan-300); font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; }
 .player-heading p { margin-top: 3px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.op-skip-button { position: absolute; right: 32px; bottom: 104px; z-index: 5; min-width: 116px; height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 10px; padding: 0 17px 0 18px; color: #fff; font-size: 14px; font-weight: 700; border: 1px solid rgba(255,255,255,.48); border-radius: 8px; background: linear-gradient(135deg, rgba(255,95,158,.92), rgba(255,189,77,.9)); box-shadow: 0 12px 28px rgba(0,0,0,.34), 0 0 0 1px rgba(255,255,255,.12) inset; backdrop-filter: blur(12px); }
+.op-skip-button:hover { border-color: rgba(255,255,255,.72); box-shadow: 0 16px 34px rgba(0,0,0,.4), 0 0 18px rgba(255,189,77,.22); transform: translateY(-1px); }
+.op-skip-button i { width: 0; height: 0; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 9px solid currentColor; filter: drop-shadow(0 1px 3px rgba(0,0,0,.25)); }
+.op-skip-enter-active, .op-skip-leave-active { transition: opacity 180ms ease, transform 180ms ease; }
+.op-skip-enter-from, .op-skip-leave-to { opacity: 0; transform: translateX(24px) scale(.98); }
 .player-controls { position: absolute; right: 24px; bottom: 20px; left: 24px; transition: opacity 180ms ease, transform 180ms ease; }
-.timeline-wrap { position: relative; height: 18px; display: flex; align-items: center; }
+.timeline-wrap { position: relative; height: 18px; display: flex; align-items: center; --op-start: 0%; --op-width: 0%; --op-opacity: 0; }
+.timeline-wrap::before { content: ''; position: absolute; left: var(--op-start); z-index: 1; width: var(--op-width); height: 8px; border-radius: 999px; pointer-events: none; opacity: var(--op-opacity); background: linear-gradient(90deg, rgba(255,241,170,.88), rgba(255,189,77,.88)); box-shadow: 0 0 12px rgba(255,189,77,.38), 0 0 0 1px rgba(255,255,255,.22) inset; }
 .timeline-bubble { position: absolute; bottom: calc(100% + 8px); left: var(--timeline-hover); z-index: 4; min-width: 58px; padding: 6px 10px 7px; color: rgba(255,255,255,.94); font-family: var(--font-mono); font-size: 12px; line-height: 1; text-align: center; pointer-events: none; opacity: 0; background: rgba(78,82,92,.92); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; box-shadow: 0 10px 22px rgba(0,0,0,.24); transform: translate(-50%, 4px); transition: opacity 140ms ease, transform 140ms ease; }
 .timeline-bubble::after { content: ''; position: absolute; top: 100%; left: 50%; width: 8px; height: 8px; background: rgba(78,82,92,.92); border-right: 1px solid rgba(255,255,255,.14); border-bottom: 1px solid rgba(255,255,255,.14); transform: translate(-50%, -4px) rotate(45deg); }
 .timeline-bubble.visible { opacity: 1; transform: translate(-50%, 0); }
-.timeline { width: 100%; height: 4px; display: block; appearance: none; cursor: pointer; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(142,232,242,.58) var(--progress) var(--buffered), rgba(255,255,255,.28) var(--buffered) 100%); }
+.timeline { position: relative; z-index: 2; width: 100%; height: 4px; display: block; appearance: none; cursor: pointer; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(142,232,242,.58) var(--progress) var(--buffered), rgba(255,255,255,.28) var(--buffered) 100%); }
 .timeline:disabled { cursor: wait; opacity: .62; }
 .timeline::-webkit-slider-thumb { width: 13px; height: 13px; appearance: none; background: #fff; border: 3px solid var(--pink-400); transform: rotate(45deg); box-shadow: 0 2px 8px rgba(0,0,0,.3); }
 .control-row { height: 48px; display: flex; align-items: center; gap: 12px; padding-top: 4px; }
@@ -626,7 +720,7 @@ function formatTime(value: number) {
 .buffering-mark span { font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; }
 .player-error span { width: 42px; height: 42px; display: grid; place-items: center; color: var(--pink-300); font-family: var(--font-mono); font-size: 22px; border: 1px solid var(--pink-300); transform: rotate(45deg); }
 .player-error p { font-size: 13px; }
-.hidden-progress { position: absolute; right: 0; bottom: 0; left: 0; z-index: 2; height: 3px; pointer-events: none; opacity: 0; background: linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(142,232,242,.5) var(--progress) var(--buffered), transparent var(--buffered) 100%); filter: drop-shadow(0 -1px 3px rgba(255,95,158,.42)) drop-shadow(0 -1px 4px rgba(142,232,242,.26)); transition: opacity 180ms ease; }
+.hidden-progress { position: absolute; right: 0; bottom: 0; left: 0; z-index: 2; height: 3px; pointer-events: none; opacity: 0; background: linear-gradient(90deg, transparent 0 var(--op-start), rgba(255,189,77,.72) var(--op-start) var(--op-end), transparent var(--op-end) 100%), linear-gradient(90deg, var(--pink-400) 0 var(--progress), rgba(142,232,242,.5) var(--progress) var(--buffered), transparent var(--buffered) 100%); filter: drop-shadow(0 -1px 3px rgba(255,95,158,.42)) drop-shadow(0 -1px 4px rgba(142,232,242,.26)); transition: opacity 180ms ease; }
 .anime-player.ui-hidden { cursor: none; }
 .anime-player.ui-hidden video { cursor: none; }
 .anime-player.ui-hidden .screen-shade,
@@ -637,6 +731,8 @@ function formatTime(value: number) {
 .anime-player.ui-hidden .player-controls { transform: translateY(8px); }
 .anime-player.ui-hidden .hidden-progress { opacity: 1; }
 .anime-player:fullscreen { clip-path: none; }
+.anime-player:fullscreen .op-skip-button,
+.anime-player.web-fullscreen .op-skip-button { right: 44px; bottom: 118px; }
 .anime-player.web-fullscreen { position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh; height: 100dvh; min-height: 0; clip-path: none; }
 @keyframes bp-player-pulse { 0%, 100% { opacity: .52; transform: scale(.92); } 50% { opacity: 1; transform: scale(1); } }
 </style>

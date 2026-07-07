@@ -199,3 +199,53 @@ INSERT INTO media_jobs(
 		t.Fatalf("recent updates were not sorted and limited as expected: first=%+v last=%+v", home.RecentUpdates[0], home.RecentUpdates[23])
 	}
 }
+
+func TestViewerAnimeDetailIncludesDetectedOPSkipSegment(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openDatabase(t, ctx)
+	_, err := db.ExecContext(ctx, `
+INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, air_date, created_at)
+VALUES (6789, 'https://bgm.tv/subject/6789', 'OP Anime', '片头番剧', '2026-07-01', 100);
+INSERT INTO anime_episodes(
+    bangumi_id, episode_id, ep_number, sort_number, type, airdate,
+    name, name_cn, duration, duration_seconds, description, comment_count,
+    created_at, updated_at
+) VALUES (6789, 9901, 1, 1, 0, '2026-07-01', 'Episode 1', '第一话', '00:24:00', 1440, '', 0, 101, 101);
+INSERT INTO subscription_items(
+    item_key, title, match_status, bangumi_id, season_number, episode_type, episode_number,
+    binding_status, bound_bangumi_id, bound_anime_name, bound_season_number,
+    bound_episode_type, bound_episode_number, created_at, updated_at
+) VALUES ('op-1', 'OP Anime 01', 'matched', 6789, 1, 'episode', '1', 'bound', 6789, '片头番剧', 1, 'episode', '1', 102, 102);
+INSERT INTO download_jobs(subscription_item_id, status, source_url, created_at, updated_at)
+VALUES (1, 'completed', 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567', 103, 103);
+INSERT INTO media_jobs(
+    id, download_job_id, subscription_item_id, bangumi_id, anime_name, season_number,
+    episode_type, episode_number, status, output_path, created_at, updated_at, completed_at
+) VALUES (501, 1, 1, 6789, '片头番剧', 1, 'episode', '1', 'completed', '/media/op-1.mp4', 104, 104, 104);
+INSERT INTO media_op_segments(
+    media_job_id, bangumi_id, season_number, episode_type, episode_number, status,
+    start_seconds, end_seconds, confidence, analyzed_group_size, created_at, updated_at
+) VALUES (501, 6789, 1, 'episode', '1', 'detected', 56.25, 144.5, 0.91, 3, 105, 105);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := bangumi.NewCatalog(db).ViewerAnimeDetail(ctx, 6789)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Episodes) != 1 {
+		t.Fatalf("expected one episode, got %+v", detail.Episodes)
+	}
+	opSkip := detail.Episodes[0].OPSkip
+	if opSkip == nil {
+		t.Fatalf("expected OP skip segment on playable episode: %+v", detail.Episodes[0])
+	}
+	if opSkip.StartSeconds != 56.25 || opSkip.EndSeconds != 144.5 {
+		t.Fatalf("unexpected OP skip bounds: %+v", opSkip)
+	}
+	if opSkip.PromptStartSeconds != 54.25 || opSkip.PromptEndSeconds != 142.5 || opSkip.SeekToSeconds != 142.5 {
+		t.Fatalf("unexpected OP skip prompt window: %+v", opSkip)
+	}
+}

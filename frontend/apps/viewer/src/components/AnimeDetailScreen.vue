@@ -269,6 +269,7 @@ function formatInfoValue(value: unknown): string {
             poster=""
             :title="`${selectedEpisode.label} · ${selectedEpisode.title || anime.title}`"
             :start-time="resumePosition"
+            :op-skip="selectedEpisode.opSkip"
             @progress="saveProgress"
           />
           <div v-else class="player-empty">

@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
 )
+
+const viewerOPSkipReserveSeconds = 2
 
 type ViewerAnimeDetail struct {
 	BangumiID     int64                 `json:"bangumiId"`
@@ -29,19 +32,28 @@ type ViewerAnimeDetail struct {
 }
 
 type ViewerDetailEpisode struct {
-	Key           string  `json:"key"`
-	EpisodeID     int64   `json:"episodeId"`
-	MediaID       int64   `json:"mediaId"`
-	Label         string  `json:"label"`
-	Title         string  `json:"title"`
-	OriginalTitle string  `json:"originalTitle"`
-	Summary       string  `json:"summary"`
-	AirDate       string  `json:"airDate"`
-	Duration      string  `json:"duration"`
-	SortNumber    float64 `json:"sortNumber"`
-	Type          int     `json:"type"`
-	HasMedia      bool    `json:"hasMedia"`
-	HasCover      bool    `json:"hasCover"`
+	Key           string               `json:"key"`
+	EpisodeID     int64                `json:"episodeId"`
+	MediaID       int64                `json:"mediaId"`
+	Label         string               `json:"label"`
+	Title         string               `json:"title"`
+	OriginalTitle string               `json:"originalTitle"`
+	Summary       string               `json:"summary"`
+	AirDate       string               `json:"airDate"`
+	Duration      string               `json:"duration"`
+	SortNumber    float64              `json:"sortNumber"`
+	Type          int                  `json:"type"`
+	HasMedia      bool                 `json:"hasMedia"`
+	HasCover      bool                 `json:"hasCover"`
+	OPSkip        *ViewerOPSkipSegment `json:"opSkip"`
+}
+
+type ViewerOPSkipSegment struct {
+	StartSeconds       float64 `json:"startSeconds"`
+	EndSeconds         float64 `json:"endSeconds"`
+	PromptStartSeconds float64 `json:"promptStartSeconds"`
+	PromptEndSeconds   float64 `json:"promptEndSeconds"`
+	SeekToSeconds      float64 `json:"seekToSeconds"`
 }
 
 type viewerDetailMedia struct {
@@ -52,6 +64,7 @@ type viewerDetailMedia struct {
 	coverPath     string
 	coverStatus   string
 	updatedAt     int64
+	opSkip        *ViewerOPSkipSegment
 }
 
 func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (ViewerAnimeDetail, error) {
@@ -128,6 +141,7 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 			Type:          episode.Type,
 			HasMedia:      hasMedia,
 			HasCover:      hasMedia && media.coverStatus == "completed" && strings.TrimSpace(media.coverPath) != "",
+			OPSkip:        media.opSkip,
 		})
 	}
 
@@ -155,6 +169,7 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 			Type:       episodeType,
 			HasMedia:   true,
 			HasCover:   media.coverStatus == "completed" && strings.TrimSpace(media.coverPath) != "",
+			OPSkip:     media.opSkip,
 		})
 	}
 	sort.SliceStable(result.Episodes, func(i, j int) bool {
@@ -196,12 +211,16 @@ func (c *Catalog) viewerMediaFilePath(ctx context.Context, query string, args ..
 
 func (c *Catalog) viewerDetailMedia(ctx context.Context, bangumiID int64) ([]viewerDetailMedia, error) {
 	rows, err := c.db.QueryContext(ctx, `
-SELECT id, season_number, COALESCE(NULLIF(episode_type, ''), 'episode'),
-       episode_number, cover_path, cover_status,
-       COALESCE(completed_at, updated_at, created_at, 0)
-FROM media_jobs
-WHERE bangumi_id = ? AND status = 'completed' AND output_path != ''
-ORDER BY COALESCE(completed_at, updated_at, created_at, 0) DESC, id DESC`, bangumiID)
+SELECT mj.id, mj.season_number, COALESCE(NULLIF(mj.episode_type, ''), 'episode'),
+       mj.episode_number, mj.cover_path, mj.cover_status,
+       COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0),
+       mos.start_seconds, mos.end_seconds
+FROM media_jobs mj
+LEFT JOIN media_op_segments mos ON mos.media_job_id = mj.id
+  AND mos.status = 'detected'
+  AND mos.end_seconds > mos.start_seconds
+WHERE mj.bangumi_id = ? AND mj.status = 'completed' AND mj.output_path != ''
+ORDER BY COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0) DESC, mj.id DESC`, bangumiID)
 	if err != nil {
 		return nil, err
 	}
@@ -209,15 +228,43 @@ ORDER BY COALESCE(completed_at, updated_at, created_at, 0) DESC, id DESC`, bangu
 	items := make([]viewerDetailMedia, 0)
 	for rows.Next() {
 		var item viewerDetailMedia
+		var opStartSeconds, opEndSeconds sql.NullFloat64
 		if err := rows.Scan(
 			&item.id, &item.season, &item.episodeType, &item.episodeNumber,
 			&item.coverPath, &item.coverStatus, &item.updatedAt,
+			&opStartSeconds, &opEndSeconds,
 		); err != nil {
 			return nil, err
+		}
+		if opStartSeconds.Valid && opEndSeconds.Valid {
+			item.opSkip = viewerOPSkipSegment(opStartSeconds.Float64, opEndSeconds.Float64)
 		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func viewerOPSkipSegment(startSeconds, endSeconds float64) *ViewerOPSkipSegment {
+	if !isFiniteNonNegative(startSeconds) || !isFiniteNonNegative(endSeconds) || endSeconds <= startSeconds {
+		return nil
+	}
+	seekToSeconds := math.Max(0, endSeconds-viewerOPSkipReserveSeconds)
+	promptStartSeconds := math.Max(0, startSeconds-viewerOPSkipReserveSeconds)
+	promptEndSeconds := seekToSeconds
+	if promptEndSeconds < promptStartSeconds {
+		promptEndSeconds = promptStartSeconds
+	}
+	return &ViewerOPSkipSegment{
+		StartSeconds:       startSeconds,
+		EndSeconds:         endSeconds,
+		PromptStartSeconds: promptStartSeconds,
+		PromptEndSeconds:   promptEndSeconds,
+		SeekToSeconds:      seekToSeconds,
+	}
+}
+
+func isFiniteNonNegative(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
 }
 
 func viewerDetailEpisodeKey(episodeType, number string) string {
