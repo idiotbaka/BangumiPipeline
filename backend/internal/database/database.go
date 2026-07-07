@@ -978,6 +978,64 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (27, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 27 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS media_op_fingerprints (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_job_id            INTEGER NOT NULL UNIQUE REFERENCES media_jobs(id) ON DELETE CASCADE,
+    file_size               INTEGER NOT NULL DEFAULT 0,
+    file_mtime              INTEGER NOT NULL DEFAULT 0,
+    duration_seconds        REAL NOT NULL DEFAULT 0,
+    fingerprint_end_seconds REAL NOT NULL DEFAULT 0,
+    fingerprint_points      BLOB NOT NULL,
+    chromaprint_version     TEXT NOT NULL DEFAULT 'ffmpeg-chromaprint-raw-v1',
+    created_at              INTEGER NOT NULL,
+    updated_at              INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_op_fingerprints_updated
+ON media_op_fingerprints(updated_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS media_op_segments (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_job_id        INTEGER NOT NULL UNIQUE REFERENCES media_jobs(id) ON DELETE CASCADE,
+    bangumi_id          INTEGER NOT NULL,
+    season_number       INTEGER NOT NULL,
+    episode_type        TEXT NOT NULL DEFAULT 'episode',
+    episode_number      TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'detected', 'not_found', 'failed')),
+    start_seconds       REAL NOT NULL DEFAULT 0,
+    end_seconds         REAL NOT NULL DEFAULT 0,
+    confidence          REAL NOT NULL DEFAULT 0,
+    analyzed_group_size INTEGER NOT NULL DEFAULT 0,
+    matched_media_job_id INTEGER REFERENCES media_jobs(id) ON DELETE SET NULL,
+    error_message       TEXT NOT NULL DEFAULT '',
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_op_segments_anime_episode
+ON media_op_segments(bangumi_id, season_number, episode_type, episode_number);
+
+CREATE INDEX IF NOT EXISTS idx_media_op_segments_status
+ON media_op_segments(status, updated_at DESC, id DESC);
+
+INSERT OR IGNORE INTO scheduled_tasks(
+    task_key, name, description, schedule, enabled, interval_minutes, created_at, updated_at
+) VALUES (
+    'detect-media-openings',
+    '识别产物视频的片头曲（OP）',
+    '扫描已完成的正片成品视频，使用 ffmpeg Chromaprint 分析音频指纹并交叉识别可跳过的片头曲片段。',
+    'interval',
+    0,
+    1440,
+    unixepoch(),
+    unixepoch()
+);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (28, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 28 migration: %w", err)
+	}
 	return nil
 }
 

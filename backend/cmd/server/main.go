@@ -18,6 +18,7 @@ import (
 	"bangumipipeline.local/server/internal/download"
 	"bangumipipeline.local/server/internal/httpapi"
 	"bangumipipeline.local/server/internal/media"
+	"bangumipipeline.local/server/internal/opskip"
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
 	"bangumipipeline.local/server/internal/translation"
@@ -67,6 +68,9 @@ func run(logger *slog.Logger) error {
 		MediaDir: cfg.MediaDir, FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
 		DownloadCleaner: downloadService, MetadataRefresher: metadataSyncer,
 	})
+	opSkipService := opskip.NewService(db, logger, opskip.Config{
+		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
+	})
 	catalog := bangumi.NewCatalog(db, mediaService.DefaultMediaDir())
 	translationService := translation.NewService(db, systemService, logger)
 	scheduler := system.NewScheduler(systemService, logger, cfg.SchedulerPoll)
@@ -74,6 +78,7 @@ func run(logger *slog.Logger) error {
 	scheduler.Register(subscription.TaskKey, subscriptionService)
 	scheduler.Register(download.TaskKey, downloadService)
 	scheduler.Register(media.TaskKey, mediaService)
+	scheduler.Register(opskip.TaskKey, opSkipService)
 	scheduler.Register(translation.TaskKey, translationService)
 	if err := scheduler.Start(ctx); err != nil {
 		return err

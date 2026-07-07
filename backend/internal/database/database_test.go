@@ -269,6 +269,40 @@ SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 26)`).Scan(&applie
 	}
 }
 
+func TestVersion28MigrationAddsOpeningSkipTablesAndTask(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	assertTableExists(t, db, "media_op_fingerprints")
+	assertTableExists(t, db, "media_op_segments")
+
+	var name string
+	var interval int
+	var enabled bool
+	if err := db.QueryRowContext(ctx, `
+SELECT name, interval_minutes, enabled
+FROM scheduled_tasks
+WHERE task_key = 'detect-media-openings'`).Scan(&name, &interval, &enabled); err != nil {
+		t.Fatal(err)
+	}
+	if name != "识别产物视频的片头曲（OP）" || interval != 1440 || enabled {
+		t.Fatalf("unexpected opening skip task seed: name=%q interval=%d enabled=%v", name, interval, enabled)
+	}
+	var applied bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 28)`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("expected version 28 migration to be recorded")
+	}
+}
+
 func assertTableExists(t *testing.T, db *sql.DB, table string) {
 	t.Helper()
 	var exists bool

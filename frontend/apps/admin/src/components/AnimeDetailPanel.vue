@@ -69,6 +69,39 @@ function episodeEmptyDescription(status: string): string {
   return '分集元数据尚未抓取'
 }
 
+function opSkipStatusLabel(status: AnimeDetail['episodes'][number]['opSkip']['status']): string {
+  const labels: Record<string, string> = {
+    no_media: '无成品视频',
+    pending: '待识别',
+    detected: '成功',
+    not_found: '未识别到',
+    failed: '识别失败',
+    unsupported: '不适用',
+  }
+  return labels[status] ?? '未知'
+}
+
+function opSkipTagType(status: AnimeDetail['episodes'][number]['opSkip']['status']): 'success' | 'danger' | 'warning' | 'info' {
+  if (status === 'detected') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'pending') return 'warning'
+  return 'info'
+}
+
+function formatOPRange(episode: AnimeDetail['episodes'][number]): string {
+  return `${formatDuration(episode.opSkip.startSeconds)} - ${formatDuration(episode.opSkip.endSeconds)}`
+}
+
+function formatDuration(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return '00:00'
+  const total = Math.floor(value)
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  const base = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  return hours > 0 ? `${String(hours).padStart(2, '0')}:${base}` : base
+}
+
 async function load(bangumiId: number) {
   const token = ++loadToken
   anime.value = null
@@ -158,6 +191,13 @@ watch(() => props.bangumiId, (bangumiId) => {
                   <div class="episode-meta-line">
                     <span v-if="episode.duration">{{ episode.duration }}</span>
                     <span v-if="episode.commentCount > 0">{{ episode.commentCount }} 条评论</span>
+                    <el-tag size="small" effect="plain" :type="opSkipTagType(episode.opSkip.status)">
+                      OP {{ opSkipStatusLabel(episode.opSkip.status) }}
+                    </el-tag>
+                    <span v-if="episode.opSkip.status === 'detected'">片头 {{ formatOPRange(episode) }}</span>
+                    <span v-else-if="episode.opSkip.status === 'failed' && episode.opSkip.errorMessage">
+                      {{ episode.opSkip.errorMessage }}
+                    </span>
                   </div>
                 </div>
               </article>

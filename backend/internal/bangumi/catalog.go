@@ -21,6 +21,12 @@ var (
 	ErrInvalidSearchTags  = errors.New("invalid bangumi search tags")
 )
 
+const (
+	opSkipStatusNoMedia     = "no_media"
+	opSkipStatusPending     = "pending"
+	opSkipStatusUnsupported = "unsupported"
+)
+
 type Catalog struct {
 	db       *sql.DB
 	mediaDir string
@@ -165,6 +171,16 @@ type AnimeEpisode struct {
 	DurationSeconds int     `json:"durationSeconds"`
 	Description     string  `json:"description"`
 	CommentCount    int     `json:"commentCount"`
+	OPSkip          OPSkip  `json:"opSkip"`
+}
+
+type OPSkip struct {
+	MediaID      int64   `json:"mediaId"`
+	Status       string  `json:"status"`
+	StartSeconds float64 `json:"startSeconds"`
+	EndSeconds   float64 `json:"endSeconds"`
+	ErrorMessage string  `json:"errorMessage"`
+	UpdatedAt    *int64  `json:"updatedAt"`
 }
 
 type AnimeDetail struct {
@@ -556,6 +572,9 @@ FROM anime_metadata WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Sca
 	if detail.Episodes, err = c.episodes(ctx, bangumiID); err != nil {
 		return AnimeDetail{}, err
 	}
+	if err := c.attachEpisodeOPSkips(ctx, bangumiID, detail.Episodes); err != nil {
+		return AnimeDetail{}, err
+	}
 	return detail, nil
 }
 
@@ -718,6 +737,97 @@ ORDER BY sort_number,
 		result = append(result, episode)
 	}
 	return result, rows.Err()
+}
+
+func (c *Catalog) attachEpisodeOPSkips(ctx context.Context, bangumiID int64, episodes []AnimeEpisode) error {
+	if len(episodes) == 0 {
+		return nil
+	}
+	indexByNumber := make(map[string]int, len(episodes))
+	for index := range episodes {
+		if episodes[index].Type != 0 {
+			episodes[index].OPSkip = OPSkip{Status: opSkipStatusUnsupported}
+			continue
+		}
+		episodes[index].OPSkip = OPSkip{Status: opSkipStatusNoMedia}
+		indexByNumber[animeEpisodeMediaNumber(episodes[index])] = index
+	}
+	if len(indexByNumber) == 0 {
+		return nil
+	}
+
+	rows, err := c.db.QueryContext(ctx, `
+SELECT mj.id, mj.episode_number,
+       mos.status, mos.start_seconds, mos.end_seconds, mos.error_message, mos.updated_at
+FROM media_jobs mj
+LEFT JOIN media_op_segments mos ON mos.media_job_id = mj.id
+WHERE mj.bangumi_id = ?
+  AND mj.status = 'completed'
+  AND mj.output_path != ''
+  AND LOWER(COALESCE(NULLIF(mj.episode_type, ''), 'episode')) = 'episode'
+ORDER BY COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0) DESC, mj.id DESC`, bangumiID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	attached := make(map[string]struct{}, len(indexByNumber))
+	for rows.Next() {
+		var mediaID int64
+		var episodeNumber string
+		var status, errorMessage sql.NullString
+		var startSeconds, endSeconds sql.NullFloat64
+		var updatedAt sql.NullInt64
+		if err := rows.Scan(&mediaID, &episodeNumber, &status, &startSeconds, &endSeconds, &errorMessage, &updatedAt); err != nil {
+			return err
+		}
+		key := normalizeEpisodeNumber(episodeNumber)
+		index, ok := indexByNumber[key]
+		if !ok {
+			continue
+		}
+		if _, exists := attached[key]; exists {
+			continue
+		}
+		opSkip := OPSkip{
+			MediaID: mediaID,
+			Status:  opSkipStatusPending,
+		}
+		if status.Valid && strings.TrimSpace(status.String) != "" {
+			opSkip.Status = status.String
+		}
+		if startSeconds.Valid {
+			opSkip.StartSeconds = startSeconds.Float64
+		}
+		if endSeconds.Valid {
+			opSkip.EndSeconds = endSeconds.Float64
+		}
+		if errorMessage.Valid {
+			opSkip.ErrorMessage = errorMessage.String
+		}
+		if updatedAt.Valid {
+			opSkip.UpdatedAt = ptrInt64(updatedAt.Int64)
+		}
+		episodes[index].OPSkip = opSkip
+		attached[key] = struct{}{}
+	}
+	return rows.Err()
+}
+
+func animeEpisodeMediaNumber(episode AnimeEpisode) string {
+	number := episode.SortNumber
+	if episode.Type == 0 && episode.EpNumber > 0 {
+		number = float64(episode.EpNumber)
+	}
+	return normalizeEpisodeNumber(strconv.FormatFloat(number, 'f', -1, 64))
+}
+
+func normalizeEpisodeNumber(value string) string {
+	value = strings.TrimSpace(value)
+	if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+		return strconv.FormatFloat(parsed, 'f', -1, 64)
+	}
+	return value
 }
 
 func (c *Catalog) AnimeImagePath(ctx context.Context, bangumiID int64) (string, error) {

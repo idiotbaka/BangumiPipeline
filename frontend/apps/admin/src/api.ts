@@ -469,6 +469,16 @@ export interface AnimeEpisode {
   durationSeconds: number
   description: string
   commentCount: number
+  opSkip: AnimeEpisodeOPSkip
+}
+
+export interface AnimeEpisodeOPSkip {
+  mediaId: number
+  status: 'no_media' | 'pending' | 'detected' | 'not_found' | 'failed' | 'unsupported'
+  startSeconds: number
+  endSeconds: number
+  errorMessage: string
+  updatedAt: number | null
 }
 
 export interface AnimeDetail {
