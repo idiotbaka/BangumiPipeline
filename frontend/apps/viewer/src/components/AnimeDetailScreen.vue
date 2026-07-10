@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import {
   api,
@@ -32,6 +32,7 @@ const followed = ref(false)
 const followSaving = ref(false)
 const followError = ref('')
 const failedImages = ref<Set<string>>(new Set())
+const episodeList = ref<HTMLElement | null>(null)
 let progressSaving = false
 let queuedProgress: { mediaId: number; positionSeconds: number; durationSeconds: number } | null = null
 
@@ -96,6 +97,7 @@ onMounted(loadDetail)
 watch(() => props.bangumiId, loadDetail)
 
 async function loadDetail() {
+  let scrollToRequestedEpisode = false
   loading.value = true
   errorMessage.value = ''
   followError.value = ''
@@ -109,6 +111,7 @@ async function loadDetail() {
     )
     const defaultEpisode = requestedEpisode ?? result.anime.episodes.find((episode) => episode.hasMedia)
     selectedEpisodeKey.value = defaultEpisode?.key ?? ''
+    scrollToRequestedEpisode = Boolean(requestedEpisode && props.initialMediaId > 0)
     if (requestedEpisode && props.initialMediaId) {
       resumePosition.value = Math.max(props.initialPosition, 0)
     } else if (requestedEpisode && result.watchProgress) {
@@ -121,6 +124,10 @@ async function loadDetail() {
     errorMessage.value = error instanceof Error ? error.message : '番剧详情加载失败'
   } finally {
     loading.value = false
+    if (scrollToRequestedEpisode) {
+      await nextTick()
+      scrollSelectedEpisodeIntoView()
+    }
   }
 }
 
@@ -146,6 +153,16 @@ async function toggleFollow() {
 function selectEpisode(episode: Pick<ViewerDetailEpisode, 'key'>) {
   selectedEpisodeKey.value = episode.key
   resumePosition.value = 0
+}
+
+function scrollSelectedEpisodeIntoView() {
+  const list = episodeList.value
+  const selectedItem = list?.querySelector<HTMLElement>('.episode-item.selected')
+  if (!list || !selectedItem) return
+  const listBounds = list.getBoundingClientRect()
+  const itemBounds = selectedItem.getBoundingClientRect()
+  const target = list.scrollTop + itemBounds.top - listBounds.top - (list.clientHeight - itemBounds.height) / 2
+  list.scrollTo({ top: Math.max(target, 0), behavior: 'smooth' })
 }
 
 async function saveProgress(progress: { mediaId: number; positionSeconds: number; durationSeconds: number }) {
@@ -303,7 +320,7 @@ function formatInfoValue(value: unknown): string {
             <div><p>EPISODE LIST</p><h2>选集</h2></div>
             <span>{{ playableEpisodes.length }} EPISODES</span>
           </header>
-          <div v-if="playableEpisodes.length" class="episode-list">
+          <div v-if="playableEpisodes.length" ref="episodeList" class="episode-list">
             <button
               v-for="episode in playableEpisodes"
               :key="episode.key"
