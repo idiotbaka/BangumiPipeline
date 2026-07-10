@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import fullscreenIcon from '../assets/player-icons/fullscreen.svg?raw'
 import fullscreenExitIcon from '../assets/player-icons/fullscreen-exit.svg?raw'
+import episodePickerIcon from '../assets/player-icons/episode-picker.svg?raw'
 import volumeIcon from '../assets/player-icons/volume.svg?raw'
 import volumeMutedIcon from '../assets/player-icons/volume-muted.svg?raw'
 import webFullscreenIcon from '../assets/player-icons/web-fullscreen.svg?raw'
@@ -16,6 +17,16 @@ interface OPSkipSegment {
   seekToSeconds: number
 }
 
+interface SelectableEpisode {
+  key: string
+  mediaId: number
+  label: string
+  title: string
+  summary: string
+  hasCover: boolean
+  coverURL: string
+}
+
 interface Props {
   mediaId: number
   src: string
@@ -23,11 +34,14 @@ interface Props {
   title: string
   startTime: number
   opSkip: OPSkipSegment | null
+  episodes: SelectableEpisode[]
+  selectedEpisodeKey: string
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (event: 'progress', value: { mediaId: number; positionSeconds: number; durationSeconds: number }): void
+  (event: 'select-episode', episode: SelectableEpisode): void
 }>()
 const player = ref<HTMLElement | null>(null)
 const video = ref<HTMLVideoElement | null>(null)
@@ -51,6 +65,8 @@ const hasPlayed = ref(false)
 const mediaReady = ref(false)
 const bufferEnd = ref(0)
 const opSkipDismissed = ref(false)
+const episodePickerOpen = ref(false)
+const failedEpisodeCovers = ref<Set<string>>(new Set())
 let previousBodyOverflow = ''
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
@@ -101,6 +117,7 @@ const webFullscreenIconSrc = computed(() => webFullscreen.value ? webFullscreenE
 const webFullscreenLabel = computed(() => webFullscreen.value ? '退出网页全屏' : '网页全屏')
 const fullscreenIconSrc = computed(() => fullscreenActive.value ? fullscreenExitIcon : fullscreenIcon)
 const fullscreenLabel = computed(() => fullscreenActive.value ? '退出全屏' : '全屏')
+const hasEpisodes = computed(() => props.episodes.length > 0)
 
 watch(
   () => props.src,
@@ -115,6 +132,7 @@ watch(
     hasPlayed.value = false
     mediaReady.value = false
     opSkipDismissed.value = false
+    episodePickerOpen.value = false
     stopProgressTimer()
     stopBufferTimer()
     showControls()
@@ -291,9 +309,9 @@ function showControls() {
 
 function scheduleControlsHide() {
   stopControlsTimer()
-  if (!playing.value || buffering.value || errorMessage.value) return
+  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value) return
   controlsTimer = setTimeout(() => {
-    if (playing.value && !buffering.value && !errorMessage.value) controlsVisible.value = false
+    if (playing.value && !buffering.value && !errorMessage.value && !episodePickerOpen.value) controlsVisible.value = false
     controlsTimer = null
   }, 3_000)
 }
@@ -447,6 +465,29 @@ async function toggleFullscreen() {
   }
 }
 
+function toggleEpisodePicker() {
+  if (!hasEpisodes.value) return
+  episodePickerOpen.value = !episodePickerOpen.value
+  showControls()
+  if (!episodePickerOpen.value) scheduleControlsHide()
+}
+
+function selectEpisode(episode: SelectableEpisode) {
+  episodePickerOpen.value = false
+  emit('select-episode', episode)
+  scheduleControlsHide()
+}
+
+function episodeCoverAvailable(episode: SelectableEpisode) {
+  return episode.hasCover && Boolean(episode.coverURL) && !failedEpisodeCovers.value.has(episode.key)
+}
+
+function markEpisodeCoverFailed(key: string) {
+  const failed = new Set(failedEpisodeCovers.value)
+  failed.add(key)
+  failedEpisodeCovers.value = failed
+}
+
 function toggleWebFullscreen() {
   if (webFullscreen.value) {
     exitWebFullscreen()
@@ -471,6 +512,12 @@ function handleFullscreenChange() {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && episodePickerOpen.value) {
+    episodePickerOpen.value = false
+    scheduleControlsHide()
+    event.preventDefault()
+    return
+  }
   if (event.key === 'Escape' && webFullscreen.value) exitWebFullscreen()
 }
 
@@ -615,6 +662,19 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
         </button>
         <span class="time-code">{{ formatTime(currentTime) }} <i>/</i> {{ formatTime(duration) }}</span>
         <div class="control-spacer" />
+        <button
+          class="icon-control episode-picker-control"
+          :class="{ active: episodePickerOpen }"
+          type="button"
+          :disabled="!hasEpisodes"
+          :aria-expanded="episodePickerOpen"
+          aria-controls="episode-picker"
+          aria-label="选集"
+          title="选集"
+          @click="toggleEpisodePicker"
+        >
+          <i aria-hidden="true" v-html="episodePickerIcon" />
+        </button>
         <div class="volume-cluster">
           <div class="volume-bubble" :class="{ visible: volumeBubbleVisible }" :aria-hidden="!volumeBubbleVisible" aria-live="polite">{{ volumePercent }}%</div>
           <button class="icon-control volume-control" type="button" :aria-label="volumeLabel" :title="volumeLabel" @click="toggleMute">
@@ -655,6 +715,42 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
           <i aria-hidden="true" v-html="fullscreenIconSrc" />
         </button>
       </div>
+      <Transition name="episode-picker">
+        <aside v-if="episodePickerOpen" id="episode-picker" class="episode-picker" aria-label="选集">
+          <header>
+            <div><span>EPISODES</span><strong>选集</strong></div>
+            <small>{{ episodes.length }} 集可播放</small>
+          </header>
+          <div class="episode-picker-list">
+            <button
+              v-for="episode in episodes"
+              :key="episode.key"
+              class="episode-picker-item"
+              :class="{ selected: selectedEpisodeKey === episode.key }"
+              type="button"
+              :aria-current="selectedEpisodeKey === episode.key ? 'true' : undefined"
+              @click="selectEpisode(episode)"
+            >
+              <div class="episode-picker-thumb">
+                <img
+                  v-if="episodeCoverAvailable(episode)"
+                  :src="episode.coverURL"
+                  :alt="episode.title || episode.label"
+                  loading="lazy"
+                  @error="markEpisodeCoverFailed(episode.key)"
+                />
+                <span v-else>{{ episode.label }}</span>
+              </div>
+              <div class="episode-picker-copy">
+                <span class="episode-picker-label">{{ episode.label }}</span>
+                <strong>{{ episode.title || episode.label }}</strong>
+                <p>{{ episode.summary || '该话暂无剧情简介。' }}</p>
+              </div>
+              <i v-if="selectedEpisodeKey === episode.key" class="episode-playing" aria-label="正在播放" />
+            </button>
+          </div>
+        </aside>
+      </Transition>
     </div>
     <div class="hidden-progress" :style="progressStyle" aria-hidden="true" />
   </section>
@@ -695,6 +791,7 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
 .play-control, .icon-control { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 36px; color: rgba(255,255,255,.86); border: 1px solid transparent; border-radius: 8px; background: rgba(9,13,23,.2); transition: color 160ms ease, border-color 160ms ease, background 160ms ease, transform 160ms ease; }
 .play-control:hover:not(:disabled), .icon-control:hover, .icon-control.active { color: #fff; border-color: rgba(142,232,242,.44); background: rgba(73,214,233,.16); box-shadow: 0 0 0 1px rgba(255,255,255,.06) inset; transform: translateY(-1px); }
 .play-control:disabled { cursor: wait; opacity: .45; transform: none; }
+.icon-control:disabled { cursor: not-allowed; opacity: .4; transform: none; }
 .play-control i:not(.pause) { width: 0; height: 0; margin-left: 3px; border-top: 7px solid transparent; border-bottom: 7px solid transparent; border-left: 11px solid currentColor; }
 .play-control i.pause { width: 11px; height: 14px; border-right: 4px solid currentColor; border-left: 4px solid currentColor; }
 .time-code { min-width: 104px; color: rgba(255,255,255,.82); font-family: var(--font-mono); font-size: 13px; white-space: nowrap; }
@@ -708,11 +805,35 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
 .icon-control :deep(svg) { width: 100%; height: 100%; display: block; }
 .icon-control :deep(path) { fill: currentColor; }
 .volume-control > i { width: 22px; height: 22px; }
+.episode-picker-control { border-radius: 0; clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px)); }
+.episode-picker-control > i { width: 18px; height: 18px; }
 .text-control { height: 32px; min-width: 42px; padding: 0 8px; color: rgba(255,255,255,.78); font-family: var(--font-mono); font-size: 13px; letter-spacing: .2px; border: 1px solid transparent; border-radius: 8px; background: rgba(9,13,23,.2); transition: color 160ms ease, border-color 160ms ease, background 160ms ease; }
 .text-control:hover { color: #fff; border-color: rgba(255,95,158,.42); background: rgba(255,95,158,.14); }
 .text-control.rate { min-width: 46px; }
 .volume-range { width: 84px; height: 3px; appearance: none; cursor: pointer; background: linear-gradient(90deg, rgba(142,232,242,.86) 0 var(--volume), rgba(255,255,255,.3) var(--volume) 100%); }
 .volume-range::-webkit-slider-thumb { width: 9px; height: 9px; appearance: none; background: var(--cyan-300); transform: rotate(45deg); }
+.episode-picker { position: absolute; right: 0; bottom: calc(100% + 12px); z-index: 6; width: min(430px, calc(100vw - 48px)); max-height: min(390px, calc(100vh - 176px)); display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; color: rgba(255,255,255,.94); border: 1px solid rgba(142,232,242,.34); border-radius: 0; background: linear-gradient(145deg, rgba(24,32,50,.97), rgba(13,18,31,.96)); box-shadow: 0 20px 48px rgba(0,0,0,.48), 0 0 0 1px rgba(255,255,255,.05) inset; clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px)); }
+.episode-picker::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .35; background: linear-gradient(rgba(142,232,242,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,159,189,.07) 1px, transparent 1px); background-size: 28px 28px; }
+.episode-picker::after { content: ''; position: absolute; inset: 11px; z-index: 0; pointer-events: none; border: 1px solid rgba(255,255,255,.1); clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 9px 100%, 0 calc(100% - 9px)); }
+.episode-picker > header { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px 12px; border-bottom: 1px solid rgba(255,255,255,.1); background: rgba(8,12,22,.36); }
+.episode-picker > header div { display: grid; gap: 2px; }
+.episode-picker > header span { color: var(--cyan-300); font-family: var(--font-mono); font-size: 11px; letter-spacing: 1.4px; }
+.episode-picker > header strong { font-size: 15px; }
+.episode-picker > header small { color: rgba(255,255,255,.54); font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+.episode-picker-list { position: relative; z-index: 1; min-height: 0; overflow-y: auto; padding: 7px; }
+.episode-picker-item { position: relative; width: 100%; display: grid; grid-template-columns: 102px minmax(0, 1fr); gap: 11px; padding: 8px; color: inherit; text-align: left; border: 1px solid transparent; border-radius: 0; background: transparent; clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 9px 100%, 0 calc(100% - 9px)); transition: border-color 160ms ease, background 160ms ease; }
+.episode-picker-item:hover { border-color: rgba(142,232,242,.36); background: rgba(142,232,242,.09); }
+.episode-picker-item.selected { border-color: rgba(255,159,189,.58); background: linear-gradient(100deg, rgba(255,95,158,.22), rgba(73,214,233,.11)); }
+.episode-picker-item.selected::before { content: ''; position: absolute; top: 50%; left: 4px; width: 7px; height: 7px; background: var(--pink-300); box-shadow: 0 0 0 3px rgba(255,159,189,.15); transform: translateY(-50%) rotate(45deg); }
+.episode-picker-thumb { aspect-ratio: 16 / 9; overflow: hidden; display: grid; place-items: center; color: var(--pink-200); font-family: var(--font-mono); font-size: 12px; text-align: center; background: linear-gradient(135deg, rgba(255,95,158,.2), rgba(73,214,233,.15)); border-radius: 0; clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); }
+.episode-picker-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.episode-picker-copy { min-width: 0; align-self: center; padding-right: 16px; }
+.episode-picker-label { color: var(--pink-200); font-family: var(--font-mono); font-size: 12px; }
+.episode-picker-copy strong { display: block; margin-top: 2px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.episode-picker-copy p { margin-top: 4px; display: -webkit-box; overflow: hidden; color: rgba(255,255,255,.56); font-size: 12px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.episode-playing { position: absolute; top: 50%; right: 12px; width: 8px; height: 8px; background: var(--cyan-300); box-shadow: 0 0 0 3px rgba(142,232,242,.12), 0 0 12px var(--cyan-300); transform: translateY(-50%) rotate(45deg); }
+.episode-picker-enter-active, .episode-picker-leave-active { transition: opacity 160ms ease, transform 160ms ease; }
+.episode-picker-enter-from, .episode-picker-leave-to { opacity: 0; transform: translateY(10px) scale(.98); }
 .loading-mark, .buffering-mark, .player-error { position: absolute; top: 50%; left: 50%; display: grid; place-items: center; gap: 10px; transform: translate(-50%, -50%); }
 .loading-mark i { width: 46px; height: 46px; border: 1px solid rgba(142,232,242,.35); box-shadow: inset 0 0 0 6px rgba(142,232,242,.08), 0 0 18px rgba(142,232,242,.22); clip-path: polygon(var(--bevel-sm)); animation: bp-player-pulse 1.1s ease-in-out infinite; }
 .loading-mark span { color: rgba(255,255,255,.86); font-size: 13px; letter-spacing: 1px; }
@@ -733,6 +854,8 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
 .anime-player:fullscreen { clip-path: none; }
 .anime-player:fullscreen .op-skip-button,
 .anime-player.web-fullscreen .op-skip-button { right: 44px; bottom: 118px; }
+.anime-player:fullscreen .episode-picker,
+.anime-player.web-fullscreen .episode-picker { width: min(470px, calc(100vw - 88px)); max-height: min(470px, calc(100vh - 220px)); }
 .anime-player.web-fullscreen { position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh; height: 100dvh; min-height: 0; clip-path: none; }
 @keyframes bp-player-pulse { 0%, 100% { opacity: .52; transform: scale(.92); } 50% { opacity: 1; transform: scale(1); } }
 </style>

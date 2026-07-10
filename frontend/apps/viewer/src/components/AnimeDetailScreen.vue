@@ -39,6 +39,17 @@ const selectedEpisode = computed(() =>
   anime.value?.episodes.find((episode) => episode.key === selectedEpisodeKey.value) ?? null,
 )
 const playableEpisodes = computed(() => anime.value?.episodes.filter((episode) => episode.hasMedia) ?? [])
+const playerEpisodes = computed(() =>
+  playableEpisodes.value.map((episode) => ({
+    key: episode.key,
+    mediaId: episode.mediaId,
+    label: episode.label,
+    title: episode.title,
+    summary: episode.summary,
+    hasCover: episode.hasCover,
+    coverURL: episodeCoverURL(episode),
+  })),
+)
 const streamURL = computed(() => {
   const episode = selectedEpisode.value
   return episode?.hasMedia ? `/api/anime/${props.bangumiId}/media/${episode.mediaId}/stream` : ''
@@ -127,8 +138,7 @@ async function toggleFollow() {
   }
 }
 
-function selectEpisode(episode: ViewerDetailEpisode) {
-  if (!episode.hasMedia) return
+function selectEpisode(episode: Pick<ViewerDetailEpisode, 'key'>) {
   selectedEpisodeKey.value = episode.key
   resumePosition.value = 0
 }
@@ -270,7 +280,10 @@ function formatInfoValue(value: unknown): string {
             :title="`${selectedEpisode.label} · ${selectedEpisode.title || anime.title}`"
             :start-time="resumePosition"
             :op-skip="selectedEpisode.opSkip"
+            :episodes="playerEpisodes"
+            :selected-episode-key="selectedEpisodeKey"
             @progress="saveProgress"
+            @select-episode="selectEpisode"
           />
           <div v-else class="player-empty">
             <div class="empty-symbol"><i /><i /></div>
@@ -282,16 +295,15 @@ function formatInfoValue(value: unknown): string {
         <aside class="episode-panel">
           <header>
             <div><p>EPISODE LIST</p><h2>选集</h2></div>
-            <span>{{ playableEpisodes.length }} / {{ anime.episodes.length }}</span>
+            <span>{{ playableEpisodes.length }} EPISODES</span>
           </header>
-          <div v-if="anime.episodes.length" class="episode-list">
+          <div v-if="playableEpisodes.length" class="episode-list">
             <button
-              v-for="episode in anime.episodes"
+              v-for="episode in playableEpisodes"
               :key="episode.key"
               class="episode-item"
-              :class="{ selected: selectedEpisodeKey === episode.key, unavailable: !episode.hasMedia }"
+              :class="{ selected: selectedEpisodeKey === episode.key }"
               type="button"
-              :disabled="!episode.hasMedia"
               @click="selectEpisode(episode)"
             >
               <div class="episode-thumb">
@@ -303,7 +315,6 @@ function formatInfoValue(value: unknown): string {
                   @error="markImageFailed(`episode-${episode.mediaId}`)"
                 />
                 <div v-else class="episode-thumb-fallback"><span>{{ episode.label }}</span></div>
-                <span v-if="!episode.hasMedia" class="availability-badge">{{ episodeAvailability(episode) }}</span>
               </div>
               <div class="episode-copy">
                 <span class="episode-label">{{ episode.label }}</span>
@@ -316,7 +327,7 @@ function formatInfoValue(value: unknown): string {
               </p>
             </button>
           </div>
-          <div v-else class="episode-list-empty">暂无分集信息</div>
+          <div v-else class="episode-list-empty">暂无可播放的成品视频</div>
         </aside>
       </section>
 
