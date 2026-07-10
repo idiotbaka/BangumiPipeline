@@ -200,6 +200,20 @@ export interface ViewerFollowedAnime {
   followedAt: number
 }
 
+export interface ViewerPushConfig {
+  supported: boolean
+  publicKey: string
+}
+
+export interface ViewerPushSubscriptionInput {
+  endpoint: string
+  expirationTime: number | null
+  keys: {
+    p256dh: string
+    auth: string
+  }
+}
+
 interface ErrorPayload {
   error?: {
     code?: string
@@ -273,6 +287,17 @@ export const api = {
     request<{ followed: boolean }>(`/api/anime/${bangumiId}/follow`, {
       method: 'PUT',
       body: JSON.stringify({ followed }),
+    }),
+  pushConfig: () => request<{ config: ViewerPushConfig }>('/api/push/config'),
+  upsertPushSubscription: (subscription: ViewerPushSubscriptionInput) =>
+    request<void>('/api/push/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify(subscription),
+    }),
+  removePushSubscription: (endpoint: string) =>
+    request<void>('/api/push/subscriptions', {
+      method: 'DELETE',
+      body: JSON.stringify({ endpoint }),
     }),
   followedAnime: () => request<{ items: ViewerFollowedAnime[] }>('/api/follows'),
   watchHistory: () => request<{ items: ViewerWatchHistoryItem[] }>('/api/watch-history'),

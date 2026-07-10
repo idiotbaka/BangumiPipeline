@@ -64,11 +64,12 @@ var (
 )
 
 type Config struct {
-	MediaDir          string
-	FFmpegPath        string
-	FFprobePath       string
-	DownloadCleaner   DownloadCleaner
-	MetadataRefresher MetadataRefresher
+	MediaDir           string
+	FFmpegPath         string
+	FFprobePath        string
+	DownloadCleaner    DownloadCleaner
+	MetadataRefresher  MetadataRefresher
+	CompletionNotifier CompletionNotifier
 }
 
 type DownloadCleaner interface {
@@ -83,16 +84,21 @@ type MetadataRefresher interface {
 	RefreshSubject(context.Context, int64) error
 }
 
+type CompletionNotifier interface {
+	NotifyMediaCompleted(context.Context, int64, int64) error
+}
+
 type Service struct {
-	db                *sql.DB
-	logger            *slog.Logger
-	mediaDir          string
-	ffmpegPath        string
-	ffprobePath       string
-	cleaner           DownloadCleaner
-	metadataRefresher MetadataRefresher
-	now               func() time.Time
-	storageMu         sync.Mutex
+	db                 *sql.DB
+	logger             *slog.Logger
+	mediaDir           string
+	ffmpegPath         string
+	ffprobePath        string
+	cleaner            DownloadCleaner
+	metadataRefresher  MetadataRefresher
+	completionNotifier CompletionNotifier
+	now                func() time.Time
+	storageMu          sync.Mutex
 }
 
 type JobPage struct {
@@ -332,7 +338,8 @@ func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
 	return &Service{
 		db: db, logger: logger, mediaDir: mediaDir,
 		ffmpegPath: ffmpegPath, ffprobePath: ffprobePath,
-		cleaner: config.DownloadCleaner, metadataRefresher: config.MetadataRefresher, now: time.Now,
+		cleaner: config.DownloadCleaner, metadataRefresher: config.MetadataRefresher,
+		completionNotifier: config.CompletionNotifier, now: time.Now,
 	}
 }
 
@@ -1500,6 +1507,11 @@ func (s *Service) processPlannedJob(ctx context.Context, job plannedJob) (proces
 	}
 	if err := s.markCompleted(ctx, job.ID); err != nil {
 		return result, err
+	}
+	if s.completionNotifier != nil {
+		if err := s.completionNotifier.NotifyMediaCompleted(ctx, job.ID, job.BangumiID); err != nil {
+			s.logger.Warn("创建观看端新集通知失败", "source", "media", "media_job_id", job.ID, "error", err)
+		}
 	}
 	if err := s.cleanupDownload(ctx, job.pendingJob); err != nil {
 		message := completionCleanupWarningPrefix + " " + err.Error()

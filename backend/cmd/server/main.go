@@ -57,6 +57,7 @@ func run(logger *slog.Logger) error {
 	if err := viewerAuthService.DeleteExpiredSessions(ctx); err != nil {
 		return err
 	}
+	viewerPushService := viewer.NewPushService(db, logger, cfg.WebPushContactEmail)
 	systemService := system.NewService(db)
 	metadataSyncer := bangumi.NewSyncer(db, systemService, logger, bangumi.SyncerConfig{
 		APIBaseURL: cfg.BangumiAPIURL, UserAgent: cfg.BangumiUserAgent, CoverDir: cfg.CoverDir,
@@ -66,7 +67,7 @@ func run(logger *slog.Logger) error {
 	downloadService := download.NewService(db, systemService, logger, download.Config{DownloadDir: cfg.DownloadDir})
 	mediaService := media.NewService(db, logger, media.Config{
 		MediaDir: cfg.MediaDir, FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
-		DownloadCleaner: downloadService, MetadataRefresher: metadataSyncer,
+		DownloadCleaner: downloadService, MetadataRefresher: metadataSyncer, CompletionNotifier: viewerPushService,
 	})
 	opSkipService := opskip.NewService(db, logger, opskip.Config{
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
@@ -80,6 +81,7 @@ func run(logger *slog.Logger) error {
 	scheduler.Register(media.TaskKey, mediaService)
 	scheduler.Register(opskip.TaskKey, opSkipService)
 	scheduler.Register(translation.TaskKey, translationService)
+	scheduler.Register(viewer.PushDeliveryTaskKey, viewerPushService)
 	if err := scheduler.Start(ctx); err != nil {
 		return err
 	}
@@ -94,7 +96,7 @@ func run(logger *slog.Logger) error {
 	}
 	viewerServer := &http.Server{
 		Addr:              cfg.ViewerAddr,
-		Handler:           httpapi.NewViewerHandler(viewerAuthService, catalog, logger, cfg.CookieSecure, cfg.ViewerWebDir),
+		Handler:           httpapi.NewViewerHandler(viewerAuthService, viewerPushService, catalog, logger, cfg.CookieSecure, cfg.ViewerWebDir),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

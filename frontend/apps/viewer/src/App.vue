@@ -4,6 +4,7 @@ import { onMounted, ref } from 'vue'
 import { APIError, api, type SiteSettings, type ViewerUser } from './api'
 import AuthScreen from './components/AuthScreen.vue'
 import HomeScreen from './components/HomeScreen.vue'
+import { initializePushNotifications, removePushNotifications } from './pushNotifications'
 
 const defaultSiteName = 'BangumiPipeline Viewer'
 const user = ref<ViewerUser | null>(null)
@@ -24,6 +25,7 @@ onMounted(async () => {
   try {
     const result = await api.me()
     user.value = result.user
+    void initializePushNotifications()
   } catch (error) {
     if (!(error instanceof APIError) || error.status !== 401) {
       message.value = error instanceof Error ? error.message : '无法连接观看端'
@@ -55,6 +57,7 @@ function applySiteSettings(settings: SiteSettings) {
 function onAuthSuccess(nextUser: ViewerUser) {
   user.value = nextUser
   message.value = ''
+  void initializePushNotifications()
 }
 
 async function logout() {
@@ -63,6 +66,7 @@ async function logout() {
   }
   loading.value = true
   try {
+    await removePushNotifications()
     await api.logout()
     user.value = null
   } catch (error) {

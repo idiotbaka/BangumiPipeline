@@ -1036,6 +1036,63 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (28, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 28 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_web_push_settings (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    vapid_public_key  TEXT NOT NULL DEFAULT '',
+    vapid_private_key TEXT NOT NULL DEFAULT '',
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS viewer_web_push_subscriptions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES viewer_users(id) ON DELETE CASCADE,
+    endpoint    TEXT NOT NULL UNIQUE,
+    p256dh      TEXT NOT NULL,
+    auth        TEXT NOT NULL,
+    expires_at  INTEGER,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_web_push_subscriptions_user
+ON viewer_web_push_subscriptions(user_id, updated_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS viewer_web_push_deliveries (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    subscription_id INTEGER NOT NULL REFERENCES viewer_web_push_subscriptions(id) ON DELETE CASCADE,
+    media_job_id    INTEGER NOT NULL REFERENCES media_jobs(id) ON DELETE CASCADE,
+    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'failed')),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL,
+    error_message   TEXT NOT NULL DEFAULT '',
+    delivered_at    INTEGER,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    UNIQUE(subscription_id, media_job_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_web_push_deliveries_pending
+ON viewer_web_push_deliveries(status, next_attempt_at, id);
+
+INSERT OR IGNORE INTO scheduled_tasks(
+    task_key, name, description, schedule, enabled, interval_minutes, created_at, updated_at
+) VALUES (
+    'deliver-viewer-push-notifications',
+    '投递观看端新集通知',
+    '向已授权浏览器通知其追番的新成品视频；网络异常时会自动重试。',
+    'interval',
+    1,
+    5,
+    unixepoch(),
+    unixepoch()
+);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (29, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 29 migration: %w", err)
+	}
 	return nil
 }
 

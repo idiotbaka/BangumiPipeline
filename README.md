@@ -33,6 +33,8 @@ docker compose up --build
 
 部署到 HTTPS 环境时，应在反向代理后设置 `BP_COOKIE_SECURE=true`。不要直接将管理端暴露到公网，建议使用 Caddy 或 Nginx 提供 TLS 和访问控制。
 
+观看端的追番更新通知采用浏览器标准 Web Push：VAPID 密钥会首次使用时自动生成并保存在 SQLite。该功能需要 HTTPS（`localhost` 开发环境除外）；用户首次登录进入观看端或点击“追番”时会由浏览器请求通知权限。
+
 ## 配置
 
 | 环境变量 | 默认值 | 用途 |
@@ -45,4 +47,5 @@ docker compose up --build
 | `BP_COVER_DIR` | `./data/images/bangumi` | Bangumi 大图与角色/声优图片保存目录 |
 | `BP_BANGUMI_API_URL` | `https://api.bgm.tv` | Bangumi API 地址 |
 | `BP_BANGUMI_USER_AGENT` | 项目默认值 | Bangumi API 请求 User-Agent，部署时应覆盖 |
+| `BP_WEB_PUSH_CONTACT_EMAIL` | `noreply@localhost` | Web Push VAPID 联系邮箱，可按部署域名修改 |
 | `BP_COOKIE_SECURE` | `false` | 是否仅通过 HTTPS 发送登录 Cookie |

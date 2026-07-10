@@ -8,6 +8,7 @@ import {
   type ViewerAnimeDetail,
   type ViewerDetailEpisode,
 } from '../api'
+import { requestPushNotificationsForFollow } from '../pushNotifications'
 import AnimeVideoPlayer from './AnimeVideoPlayer.vue'
 import ParticleField from './ParticleField.vue'
 
@@ -125,10 +126,14 @@ async function loadDetail() {
 
 async function toggleFollow() {
   if (followSaving.value) return
+  const nextFollowed = !followed.value
+  if (nextFollowed) {
+    void requestPushNotificationsForFollow()
+  }
   followSaving.value = true
   followError.value = ''
   try {
-    const result = await api.updateAnimeFollow(props.bangumiId, !followed.value)
+    const result = await api.updateAnimeFollow(props.bangumiId, nextFollowed)
     followed.value = result.followed
     emit('follow-changed')
   } catch (error) {

@@ -17,13 +17,14 @@ const viewerSessionCookie = "bp_viewer_session"
 
 type ViewerAPI struct {
 	auth         *viewer.Service
+	push         *viewer.PushService
 	catalog      *bangumi.Catalog
 	logger       *slog.Logger
 	cookieSecure bool
 }
 
-func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
-	api := &ViewerAPI{auth: authService, catalog: catalog, logger: logger, cookieSecure: cookieSecure}
+func NewViewerHandler(authService *viewer.Service, pushService *viewer.PushService, catalog *bangumi.Catalog, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
+	api := &ViewerAPI{auth: authService, push: pushService, catalog: catalog, logger: logger, cookieSecure: cookieSecure}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
 	mux.HandleFunc("GET /api/site-settings", api.siteSettings)
@@ -31,6 +32,9 @@ func NewViewerHandler(authService *viewer.Service, catalog *bangumi.Catalog, log
 	mux.HandleFunc("POST /api/auth/login", api.login)
 	mux.HandleFunc("GET /api/auth/me", api.me)
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
+	mux.HandleFunc("GET /api/push/config", api.pushConfig)
+	mux.HandleFunc("POST /api/push/subscriptions", api.upsertPushSubscription)
+	mux.HandleFunc("DELETE /api/push/subscriptions", api.removePushSubscription)
 	mux.HandleFunc("GET /api/home", api.home)
 	mux.HandleFunc("GET /api/anime-schedule", api.animeSchedule)
 	mux.HandleFunc("GET /api/library/filters", api.libraryFilters)
@@ -384,6 +388,58 @@ func (a *ViewerAPI) updateAnimeFollow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"followed": followed})
 }
 
+func (a *ViewerAPI) pushConfig(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	config, err := a.push.Config(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"config": config})
+}
+
+func (a *ViewerAPI) upsertPushSubscription(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
+		return
+	}
+	var input viewer.PushSubscriptionInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_push_subscription", "浏览器推送订阅信息无效")
+		return
+	}
+	if err := a.push.UpsertSubscription(r.Context(), user.ID, input); err != nil {
+		if errors.Is(err, viewer.ErrInvalidPushSubscription) {
+			writeError(w, http.StatusBadRequest, "invalid_push_subscription", "浏览器推送订阅信息无效")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *ViewerAPI) removePushSubscription(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil || strings.TrimSpace(input.Endpoint) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_push_subscription", "浏览器推送订阅信息无效")
+		return
+	}
+	if err := a.push.RemoveSubscription(r.Context(), user.ID, input.Endpoint); err != nil {
+		a.internalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *ViewerAPI) watchHistory(w http.ResponseWriter, r *http.Request) {
 	user, ok := a.authenticatedViewer(w, r)
 	if !ok {
@@ -612,7 +668,7 @@ func viewerCORSMiddleware(next http.Handler) http.Handler {
 		if r.Header.Get("Origin") != "" {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		if r.Method == http.MethodOptions && strings.HasPrefix(r.URL.Path, "/api/") {

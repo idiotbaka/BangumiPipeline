@@ -98,6 +98,16 @@ ON CONFLICT(user_id, bangumi_id) DO UPDATE SET updated_at = excluded.updated_at`
 DELETE FROM viewer_anime_follows
 WHERE user_id = ? AND bangumi_id = ?`, userID, bangumiID); err != nil {
 		return false, err
+	} else if _, err := tx.ExecContext(ctx, `
+DELETE FROM viewer_web_push_deliveries
+WHERE status = ?
+  AND subscription_id IN (
+      SELECT id FROM viewer_web_push_subscriptions WHERE user_id = ?
+  )
+  AND media_job_id IN (
+      SELECT id FROM media_jobs WHERE bangumi_id = ?
+  )`, pushDeliveryPending, userID, bangumiID); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
