@@ -195,13 +195,22 @@ func (s *Service) FollowedAnime(ctx context.Context, userID int64) ([]FollowedAn
 		}
 		items = append(items, item)
 	}
+	sortFollowedAnime(items)
+	return items, nil
+}
+
+func sortFollowedAnime(items []FollowedAnime) {
 	sort.SliceStable(items, func(i, j int) bool {
+		leftFinished := items[i].WatchCompleted && items[i].CaughtUp
+		rightFinished := items[j].WatchCompleted && items[j].CaughtUp
+		if leftFinished != rightFinished {
+			return !leftFinished
+		}
 		if items[i].LastWatchedAt != items[j].LastWatchedAt {
 			return items[i].LastWatchedAt > items[j].LastWatchedAt
 		}
 		return items[i].FollowedAt > items[j].FollowedAt
 	})
-	return items, nil
 }
 
 func (s *Service) followedAnimeBases(ctx context.Context, userID int64) ([]followedAnimeBase, error) {
