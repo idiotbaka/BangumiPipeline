@@ -220,9 +220,10 @@ INSERT INTO subscription_items(
 INSERT INTO download_jobs(subscription_item_id, status, source_url, created_at, updated_at)
 VALUES (1, 'completed', 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567', 103, 103);
 INSERT INTO media_jobs(
-    id, download_job_id, subscription_item_id, bangumi_id, anime_name, season_number,
-    episode_type, episode_number, status, output_path, created_at, updated_at, completed_at
-) VALUES (501, 1, 1, 6789, '片头番剧', 1, 'episode', '1', 'completed', '/media/op-1.mp4', 104, 104, 104);
+	 id, download_job_id, subscription_item_id, bangumi_id, anime_name, season_number,
+	 episode_type, episode_number, status, output_path, video_codec, audio_codec,
+	 has_internal_subtitles, has_external_subtitles, action, created_at, updated_at, completed_at
+) VALUES (501, 1, 1, 6789, '片头番剧', 1, 'episode', '1', 'completed', '/media/op-1.mp4', 'hevc', 'opus', 1, 0, 'burn_subtitles', 104, 104, 104);
 INSERT INTO media_op_segments(
     media_job_id, bangumi_id, season_number, episode_type, episode_number, status,
     start_seconds, end_seconds, confidence, analyzed_group_size, created_at, updated_at
@@ -247,5 +248,15 @@ INSERT INTO media_op_segments(
 	}
 	if opSkip.PromptStartSeconds != 54.25 || opSkip.PromptEndSeconds != 142.5 || opSkip.SeekToSeconds != 142.5 {
 		t.Fatalf("unexpected OP skip prompt window: %+v", opSkip)
+	}
+	mediaInfo := detail.Episodes[0].MediaInfo
+	if mediaInfo == nil {
+		t.Fatalf("expected media information on playable episode: %+v", detail.Episodes[0])
+	}
+	if mediaInfo.Format != "mp4" || mediaInfo.VideoCodec != "h264" || mediaInfo.AudioCodec != "aac" {
+		t.Fatalf("unexpected output media information: %+v", mediaInfo)
+	}
+	if !mediaInfo.HasInternalSubtitles || mediaInfo.HasExternalSubtitles || mediaInfo.Action != "burn_subtitles" {
+		t.Fatalf("unexpected media attributes: %+v", mediaInfo)
 	}
 }

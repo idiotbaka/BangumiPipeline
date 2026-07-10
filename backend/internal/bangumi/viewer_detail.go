@@ -45,7 +45,19 @@ type ViewerDetailEpisode struct {
 	Type          int                  `json:"type"`
 	HasMedia      bool                 `json:"hasMedia"`
 	HasCover      bool                 `json:"hasCover"`
+	MediaInfo     *ViewerMediaInfo     `json:"mediaInfo"`
 	OPSkip        *ViewerOPSkipSegment `json:"opSkip"`
+}
+
+// ViewerMediaInfo contains completed-output metadata safe to expose to viewer clients.
+// It deliberately excludes source and output paths so local server paths stay private.
+type ViewerMediaInfo struct {
+	Format               string `json:"format"`
+	VideoCodec           string `json:"videoCodec"`
+	AudioCodec           string `json:"audioCodec"`
+	HasInternalSubtitles bool   `json:"hasInternalSubtitles"`
+	HasExternalSubtitles bool   `json:"hasExternalSubtitles"`
+	Action               string `json:"action"`
 }
 
 type ViewerOPSkipSegment struct {
@@ -57,14 +69,20 @@ type ViewerOPSkipSegment struct {
 }
 
 type viewerDetailMedia struct {
-	id            int64
-	season        int
-	episodeType   string
-	episodeNumber string
-	coverPath     string
-	coverStatus   string
-	updatedAt     int64
-	opSkip        *ViewerOPSkipSegment
+	id                   int64
+	season               int
+	episodeType          string
+	episodeNumber        string
+	coverPath            string
+	coverStatus          string
+	format               string
+	videoCodec           string
+	audioCodec           string
+	hasInternalSubtitles bool
+	hasExternalSubtitles bool
+	action               string
+	updatedAt            int64
+	opSkip               *ViewerOPSkipSegment
 }
 
 func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (ViewerAnimeDetail, error) {
@@ -141,6 +159,7 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 			Type:          episode.Type,
 			HasMedia:      hasMedia,
 			HasCover:      hasMedia && media.coverStatus == "completed" && strings.TrimSpace(media.coverPath) != "",
+			MediaInfo:     viewerMediaInfo(media, hasMedia),
 			OPSkip:        media.opSkip,
 		})
 	}
@@ -169,6 +188,7 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 			Type:       episodeType,
 			HasMedia:   true,
 			HasCover:   media.coverStatus == "completed" && strings.TrimSpace(media.coverPath) != "",
+			MediaInfo:  viewerMediaInfo(media, true),
 			OPSkip:     media.opSkip,
 		})
 	}
@@ -211,9 +231,10 @@ func (c *Catalog) viewerMediaFilePath(ctx context.Context, query string, args ..
 
 func (c *Catalog) viewerDetailMedia(ctx context.Context, bangumiID int64) ([]viewerDetailMedia, error) {
 	rows, err := c.db.QueryContext(ctx, `
-SELECT mj.id, mj.season_number, COALESCE(NULLIF(mj.episode_type, ''), 'episode'),
-       mj.episode_number, mj.cover_path, mj.cover_status,
-       COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0),
+	SELECT mj.id, mj.season_number, COALESCE(NULLIF(mj.episode_type, ''), 'episode'),
+	       mj.episode_number, mj.cover_path, mj.cover_status, mj.output_path,
+	       mj.video_codec, mj.audio_codec, mj.has_internal_subtitles, mj.has_external_subtitles, mj.action,
+	       COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0),
        mos.start_seconds, mos.end_seconds
 FROM media_jobs mj
 LEFT JOIN media_op_segments mos ON mos.media_job_id = mj.id
@@ -228,10 +249,13 @@ ORDER BY COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0) DESC, mj.id 
 	items := make([]viewerDetailMedia, 0)
 	for rows.Next() {
 		var item viewerDetailMedia
+		var outputPath string
 		var opStartSeconds, opEndSeconds sql.NullFloat64
 		if err := rows.Scan(
 			&item.id, &item.season, &item.episodeType, &item.episodeNumber,
-			&item.coverPath, &item.coverStatus, &item.updatedAt,
+			&item.coverPath, &item.coverStatus, &outputPath,
+			&item.videoCodec, &item.audioCodec, &item.hasInternalSubtitles, &item.hasExternalSubtitles, &item.action,
+			&item.updatedAt,
 			&opStartSeconds, &opEndSeconds,
 		); err != nil {
 			return nil, err
@@ -239,9 +263,43 @@ ORDER BY COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0) DESC, mj.id 
 		if opStartSeconds.Valid && opEndSeconds.Valid {
 			item.opSkip = viewerOPSkipSegment(opStartSeconds.Float64, opEndSeconds.Float64)
 		}
+		item.format = viewerMediaFormat(outputPath)
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func viewerMediaInfo(media viewerDetailMedia, available bool) *ViewerMediaInfo {
+	if !available {
+		return nil
+	}
+	videoCodec := media.videoCodec
+	audioCodec := media.audioCodec
+	if media.action == "transcode" || media.action == "burn_subtitles" {
+		videoCodec = "h264"
+		audioCodec = "aac"
+	}
+	return &ViewerMediaInfo{
+		Format:               media.format,
+		VideoCodec:           videoCodec,
+		AudioCodec:           audioCodec,
+		HasInternalSubtitles: media.hasInternalSubtitles,
+		HasExternalSubtitles: media.hasExternalSubtitles,
+		Action:               media.action,
+	}
+}
+
+func viewerMediaFormat(outputPath string) string {
+	outputPath = strings.TrimSpace(outputPath)
+	if outputPath == "" {
+		return ""
+	}
+	filename := outputPath[strings.LastIndexAny(outputPath, `/\\`)+1:]
+	lastDot := strings.LastIndex(filename, ".")
+	if lastDot < 0 || lastDot == len(filename)-1 {
+		return ""
+	}
+	return strings.ToLower(filename[lastDot+1:])
 }
 
 func viewerOPSkipSegment(startSeconds, endSeconds float64) *ViewerOPSkipSegment {

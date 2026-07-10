@@ -280,6 +280,7 @@ function formatInfoValue(value: unknown): string {
             :title="`${selectedEpisode.label} · ${selectedEpisode.title || anime.title}`"
             :start-time="resumePosition"
             :op-skip="selectedEpisode.opSkip"
+            :media-info="selectedEpisode.mediaInfo"
             :episodes="playerEpisodes"
             :selected-episode-key="selectedEpisodeKey"
             @progress="saveProgress"

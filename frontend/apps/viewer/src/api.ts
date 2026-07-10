@@ -110,6 +110,15 @@ export interface ViewerOPSkipSegment {
   seekToSeconds: number
 }
 
+export interface ViewerMediaInfo {
+  format: string
+  videoCodec: string
+  audioCodec: string
+  hasInternalSubtitles: boolean
+  hasExternalSubtitles: boolean
+  action: string
+}
+
 export interface ViewerDetailEpisode {
   key: string
   episodeId: number
@@ -124,6 +133,7 @@ export interface ViewerDetailEpisode {
   type: number
   hasMedia: boolean
   hasCover: boolean
+  mediaInfo: ViewerMediaInfo | null
   opSkip: ViewerOPSkipSegment | null
 }
 
