@@ -524,6 +524,59 @@ function syncDetailFromLocation() {
           </div>
         </section>
 
+        <!-- ===== 最近更新（统一大竖版卡 + NEW + 时间角标） ===== -->
+        <section class="anime-section recent-section">
+          <div class="section-head">
+            <div class="section-title">
+              <p class="section-kicker">RECENT DROPS</p>
+              <h2>最近更新</h2>
+              <i class="section-bar" aria-hidden="true" />
+            </div>
+          </div>
+
+          <div v-if="homeLoading" class="recent-grid">
+            <article v-for="n in recentSkeletonCount" :key="n" class="poster-card">
+              <div class="skeleton-poster skeleton-block" />
+              <div class="skeleton-title skeleton-block" />
+            </article>
+          </div>
+          <div v-else-if="!homeError && recentItems.length === 0" class="state-panel compact">
+            <strong>暂无最近更新</strong>
+          </div>
+          <div v-else-if="!homeError" class="recent-grid">
+            <article
+              v-for="(item, index) in recentItems"
+              :key="item.bangumiId"
+              class="poster-card recent-card"
+              :style="{ '--stagger': stagger(index) }"
+              role="link"
+              tabindex="0"
+              @click="openAnime(item.bangumiId)"
+              @keydown.enter="openAnime(item.bangumiId)"
+            >
+              <div class="poster-frame">
+                <span class="new-tag">NEW</span>
+                <img
+                  v-if="hasCover(item)"
+                  :src="coverURL(item)"
+                  :alt="item.title"
+                  loading="lazy"
+                  @error="markCoverFailed(item)"
+                />
+                <div v-else class="cover-fallback">
+                  <span>{{ item.title.slice(0, 2) }}</span>
+                </div>
+                <span class="time-pill">{{ formatUpdatedAt(item.updatedAt) }}</span>
+              </div>
+              <h3 class="poster-title">{{ item.title }}</h3>
+              <p class="poster-sub">{{ updateText(item) }}</p>
+              <p class="episode-title" :title="item.latestEpisodeTitle || '暂无分集标题'">
+                {{ item.latestEpisodeTitle || '暂无分集标题' }}
+              </p>
+            </article>
+          </div>
+        </section>
+
         <!-- ===== 热播推荐 ===== -->
         <section class="anime-section">
           <div class="section-head">
@@ -591,59 +644,6 @@ function syncDetailFromLocation() {
               <h3 class="poster-title">{{ item.title }}</h3>
               <p class="poster-sub">{{ updateText(item) }}</p>
               <p class="poster-sub">{{ formatPremiereDate(item.airDate) }}</p>
-            </article>
-          </div>
-        </section>
-
-        <!-- ===== 最近更新（统一大竖版卡 + NEW + 时间角标） ===== -->
-        <section class="anime-section recent-section">
-          <div class="section-head">
-            <div class="section-title">
-              <p class="section-kicker">RECENT DROPS</p>
-              <h2>最近更新</h2>
-              <i class="section-bar" aria-hidden="true" />
-            </div>
-          </div>
-
-          <div v-if="homeLoading" class="recent-grid">
-            <article v-for="n in recentSkeletonCount" :key="n" class="poster-card">
-              <div class="skeleton-poster skeleton-block" />
-              <div class="skeleton-title skeleton-block" />
-            </article>
-          </div>
-          <div v-else-if="!homeError && recentItems.length === 0" class="state-panel compact">
-            <strong>暂无最近更新</strong>
-          </div>
-          <div v-else-if="!homeError" class="recent-grid">
-            <article
-              v-for="(item, index) in recentItems"
-              :key="item.bangumiId"
-              class="poster-card recent-card"
-              :style="{ '--stagger': stagger(index) }"
-              role="link"
-              tabindex="0"
-              @click="openAnime(item.bangumiId)"
-              @keydown.enter="openAnime(item.bangumiId)"
-            >
-              <div class="poster-frame">
-                <span class="new-tag">NEW</span>
-                <img
-                  v-if="hasCover(item)"
-                  :src="coverURL(item)"
-                  :alt="item.title"
-                  loading="lazy"
-                  @error="markCoverFailed(item)"
-                />
-                <div v-else class="cover-fallback">
-                  <span>{{ item.title.slice(0, 2) }}</span>
-                </div>
-                <span class="time-pill">{{ formatUpdatedAt(item.updatedAt) }}</span>
-              </div>
-              <h3 class="poster-title">{{ item.title }}</h3>
-              <p class="poster-sub">{{ updateText(item) }}</p>
-              <p class="episode-title" :title="item.latestEpisodeTitle || '暂无分集标题'">
-                {{ item.latestEpisodeTitle || '暂无分集标题' }}
-              </p>
             </article>
           </div>
         </section>

@@ -40,7 +40,9 @@ function normalizedWeekday(value: number) {
 }
 
 function itemsForDay(weekday: number) {
-  return (schedule.value?.items ?? []).filter((item) => normalizedWeekday(item.airWeekday) === weekday)
+  return (schedule.value?.items ?? [])
+    .filter((item) => normalizedWeekday(item.airWeekday) === weekday)
+    .sort((left, right) => Number(isUnavailable(left)) - Number(isUnavailable(right)))
 }
 
 async function loadSchedule() {
@@ -101,13 +103,23 @@ function progressText(item: ViewerScheduleCard) {
   if (item.latestEpisodeLabel) {
     return `更新至 ${item.latestEpisodeLabel}`
   }
-  if (!item.airDate) {
-    return '开播时间未定'
-  }
+  const status = availabilityStatus(item)
+  if (status === 'unknown') return '开播时间未定'
+  return status === 'not-aired' ? '尚未开播' : '尚未放流'
+}
+
+function availabilityStatus(item: ViewerScheduleCard) {
+  if (item.latestEpisodeLabel) return 'available'
+  if (!item.airDate) return 'unknown'
   const premiere = new Date(`${item.airDate}T00:00:00`)
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  return !Number.isNaN(premiere.getTime()) && premiere > today ? '尚未开播' : '尚未放流'
+  return !Number.isNaN(premiere.getTime()) && premiere > today ? 'not-aired' : 'not-released'
+}
+
+function isUnavailable(item: ViewerScheduleCard) {
+  const status = availabilityStatus(item)
+  return status === 'not-aired' || status === 'not-released'
 }
 
 function stagger(index: number) {
@@ -195,6 +207,7 @@ function stagger(index: number) {
           v-for="(item, index) in selectedItems"
           :key="item.bangumiId"
           class="schedule-card"
+          :class="{ unavailable: isUnavailable(item) }"
           :style="{ '--stagger': stagger(index) }"
           role="link"
           tabindex="0"
@@ -343,6 +356,8 @@ function stagger(index: number) {
 .card-cover { position: relative; aspect-ratio: 2 / 3; overflow: hidden; background: var(--pink-50); border: 1px solid rgba(255,255,255,.9); box-shadow: 0 15px 32px rgba(85,119,217,.1); clip-path: polygon(0 0, calc(100% - 15px) 0, 100% 15px, 100% 100%, 15px 100%, 0 calc(100% - 15px)); transition: transform 220ms var(--ease-soft), box-shadow 220ms var(--ease-soft); }
 .schedule-card:hover .card-cover { transform: translateY(-6px); box-shadow: 0 24px 48px rgba(255,95,158,.18); }
 .card-cover img { width: 100%; height: 100%; object-fit: unset; }
+.schedule-card.unavailable .card-cover img,
+.schedule-card.unavailable .cover-fallback { filter: grayscale(1) contrast(.88); }
 .cover-fallback { display: grid; place-items: center; width: 100%; height: 100%; padding: 16px; color: var(--pink-600); font-size: 21px; background: linear-gradient(145deg, rgba(255,244,248,.96), rgba(236,253,255,.9)), repeating-linear-gradient(135deg, rgba(255,95,158,.1) 0 2px, transparent 2px 12px); }
 .episode-total { position: absolute; top: 9px; right: 8px; z-index: 2; height: 23px; padding: 0 9px; display: inline-flex; align-items: center; color: var(--ink-700); font-size: 10px; white-space: nowrap; background: rgba(255,255,255,.88); box-shadow: 0 5px 13px rgba(32,40,62,.12); backdrop-filter: blur(8px); clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px)); }
 .progress-shade { position: absolute; right: 0; bottom: 0; left: 0; z-index: 2; min-height: 66px; display: flex; align-items: flex-end; gap: 7px; padding: 24px 10px 9px; color: #fff; font-size: 12px; background: linear-gradient(to top, rgba(25,32,53,.84), rgba(25,32,53,0)); text-shadow: 0 2px 5px rgba(0,0,0,.65); }
