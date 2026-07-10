@@ -195,6 +195,11 @@ func (a *ViewerAPI) animeLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_query", "搜索关键词不能超过 100 个字符")
 		return
 	}
+	page, pageSize, err := parseViewerLibraryPage(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_pagination", "分页参数无效")
+		return
+	}
 	selections := make(map[int64][]string)
 	rawFilters := r.URL.Query()["filter"]
 	if len(rawFilters) > 1000 {
@@ -223,12 +228,36 @@ func (a *ViewerAPI) animeLibrary(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, err)
 		return
 	}
-	library, err := a.catalog.ViewerLibrary(r.Context(), query, groups)
+	library, err := a.catalog.ViewerLibraryPage(r.Context(), query, groups, page, pageSize)
 	if err != nil {
 		a.internalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"library": library})
+}
+
+func parseViewerLibraryPage(r *http.Request) (int, int, error) {
+	pageValue := strings.TrimSpace(r.URL.Query().Get("page"))
+	pageSizeValue := strings.TrimSpace(r.URL.Query().Get("page_size"))
+	if pageValue == "" && pageSizeValue == "" {
+		return 0, 0, nil
+	}
+	page := 1
+	pageSize := 16
+	var err error
+	if pageValue != "" {
+		page, err = strconv.Atoi(pageValue)
+		if err != nil || page < 1 {
+			return 0, 0, errors.New("invalid page")
+		}
+	}
+	if pageSizeValue != "" {
+		pageSize, err = strconv.Atoi(pageSizeValue)
+		if err != nil || pageSize < 1 || pageSize > 100 {
+			return 0, 0, errors.New("invalid page size")
+		}
+	}
+	return page, pageSize, nil
 }
 
 func parseAnimeSeason(value string) (int, int, bool) {

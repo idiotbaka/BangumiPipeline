@@ -26,11 +26,27 @@ const filtersError = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
 const failedCovers = ref<Set<number>>(new Set())
+const currentPage = ref(1)
 let requestID = 0
+const libraryPageSize = 16
 
 const selectedTagCount = computed(() =>
   Object.values(selectedFilters.value).reduce((total, tags) => total + tags.length, 0),
 )
+const totalPages = computed(() => Math.max(1, Math.ceil(library.value.total / libraryPageSize)))
+const visiblePages = computed<(number | 'ellipsis')[]>(() => {
+  const total = totalPages.value
+  if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1)
+  const pageNumbers = new Set([1, total, currentPage.value - 1, currentPage.value, currentPage.value + 1])
+  const ordered = [...pageNumbers].filter((page) => page >= 1 && page <= total).sort((left, right) => left - right)
+  const result: Array<number | 'ellipsis'> = []
+  for (const page of ordered) {
+    const previous = result.at(-1)
+    if (typeof previous === 'number' && page - previous > 1) result.push('ellipsis')
+    result.push(page)
+  }
+  return result
+})
 
 onMounted(async () => {
   await Promise.all([loadFilters(), loadLibrary()])
@@ -42,6 +58,7 @@ watch(
     const query = props.initialQuery.trim()
     searchDraft.value = props.initialQuery
     appliedQuery.value = query
+    currentPage.value = 1
     void loadLibrary()
   },
 )
@@ -64,8 +81,14 @@ async function loadLibrary() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const result = await api.animeLibrary(appliedQuery.value, selectedFilters.value)
+    const result = await api.animeLibrary(appliedQuery.value, selectedFilters.value, currentPage.value, libraryPageSize)
     if (currentRequest === requestID) {
+      const lastPage = Math.max(1, Math.ceil(result.library.total / libraryPageSize))
+      if (currentPage.value > lastPage) {
+        currentPage.value = lastPage
+        void loadLibrary()
+        return
+      }
       library.value = result.library
       failedCovers.value = new Set()
     }
@@ -91,17 +114,20 @@ function toggleTag(dimensionID: number, tag: string) {
   if (tags.length) next[dimensionID] = tags
   else delete next[dimensionID]
   selectedFilters.value = next
+  currentPage.value = 1
   void loadLibrary()
 }
 
 function resetFilters() {
   if (selectedTagCount.value === 0) return
   selectedFilters.value = {}
+  currentPage.value = 1
   void loadLibrary()
 }
 
 function submitSearch() {
   appliedQuery.value = searchDraft.value.trim()
+  currentPage.value = 1
   void loadLibrary()
 }
 
@@ -109,6 +135,14 @@ function clearSearch() {
   if (!searchDraft.value && !appliedQuery.value) return
   searchDraft.value = ''
   appliedQuery.value = ''
+  currentPage.value = 1
+  void loadLibrary()
+}
+
+function goToPage(page: number) {
+  const target = Math.max(1, Math.min(page, totalPages.value))
+  if (target === currentPage.value || loading.value) return
+  currentPage.value = target
   void loadLibrary()
 }
 
@@ -216,7 +250,7 @@ function stagger(index: number) {
           <p>ARCHIVE RESULTS</p>
           <h2>{{ appliedQuery ? `「${appliedQuery}」的搜索结果` : '全部收录番剧' }}</h2>
         </div>
-        <span class="result-count">共 {{ library.total }} 部</span>
+        <span class="result-count">共 {{ library.total }} 部 · 第 {{ currentPage }} / {{ totalPages }} 页</span>
       </div>
 
       <div v-if="loading" class="library-cards" aria-label="加载中">
@@ -239,35 +273,55 @@ function stagger(index: number) {
         <small>NO TITLES MATCHED THE CURRENT FILTERS</small>
       </div>
 
-      <div v-else class="library-cards">
-        <article
-          v-for="(item, index) in library.items"
-          :key="item.bangumiId"
-          class="library-card"
-          :style="{ '--stagger': stagger(index) }"
-          role="link"
-          tabindex="0"
-          @click="emit('open-anime', item.bangumiId)"
-          @keydown.enter="emit('open-anime', item.bangumiId)"
-        >
-          <div class="card-cover">
-            <img
-              v-if="hasCover(item)"
-              :src="coverURL(item)"
-              :alt="item.title"
-              loading="lazy"
-              @error="markCoverFailed(item)"
-            />
-            <div v-else class="cover-fallback"><span>{{ item.title.slice(0, 2) }}</span></div>
-            <span class="episode-total">{{ totalEpisodesText(item.totalEpisodes) }}</span>
-            <div class="progress-shade">
-              <i aria-hidden="true" />
-              <span>{{ progressText(item) }}</span>
+      <div v-else class="library-result-page">
+        <div class="library-cards">
+          <article
+            v-for="(item, index) in library.items"
+            :key="item.bangumiId"
+            class="library-card"
+            :style="{ '--stagger': stagger(index) }"
+            role="link"
+            tabindex="0"
+            @click="emit('open-anime', item.bangumiId)"
+            @keydown.enter="emit('open-anime', item.bangumiId)"
+          >
+            <div class="card-cover">
+              <img
+                v-if="hasCover(item)"
+                :src="coverURL(item)"
+                :alt="item.title"
+                loading="lazy"
+                @error="markCoverFailed(item)"
+              />
+              <div v-else class="cover-fallback"><span>{{ item.title.slice(0, 2) }}</span></div>
+              <span class="episode-total">{{ totalEpisodesText(item.totalEpisodes) }}</span>
+              <div class="progress-shade">
+                <i aria-hidden="true" />
+                <span>{{ progressText(item) }}</span>
+              </div>
             </div>
+            <h3 :title="item.title">{{ item.title }}</h3>
+            <p class="air-date"><i aria-hidden="true" />{{ formatAirDate(item.airDate) }}</p>
+          </article>
+        </div>
+        <nav v-if="totalPages > 1" class="library-pagination" aria-label="番剧图书馆分页">
+          <button type="button" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
+          <div class="page-numbers">
+            <template v-for="(page, index) in visiblePages" :key="page === 'ellipsis' ? `ellipsis-${index}` : page">
+              <span v-if="page === 'ellipsis'" class="page-ellipsis">···</span>
+              <button
+                v-else
+                type="button"
+                :class="{ active: currentPage === page }"
+                :aria-current="currentPage === page ? 'page' : undefined"
+                @click="goToPage(page)"
+              >
+                {{ String(page).padStart(2, '0') }}
+              </button>
+            </template>
           </div>
-          <h3 :title="item.title">{{ item.title }}</h3>
-          <p class="air-date"><i aria-hidden="true" />{{ formatAirDate(item.airDate) }}</p>
-        </article>
+          <button type="button" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">下一页</button>
+        </nav>
       </div>
     </div>
   </section>
@@ -328,6 +382,7 @@ function stagger(index: number) {
 .result-heading h2 { max-width: 760px; margin-top: 2px; overflow: hidden; color: var(--ink-900); font-size: 22px; letter-spacing: 1px; text-overflow: ellipsis; white-space: nowrap; }
 .result-count { padding: 5px 13px; color: var(--ink-400); font-size: 11px; border-left: 2px solid var(--cyan-400); background: rgba(255,255,255,.65); }
 
+.library-result-page { display: grid; gap: 30px; }
 .library-cards { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 22px 18px; }
 .library-card { min-width: 0; cursor: pointer; outline: 0; animation: bp-rise .42s var(--ease-out) both; animation-delay: var(--stagger, 0s); }
 .library-card:focus-visible .card-cover { box-shadow: 0 0 0 3px rgba(255,95,158,.24), 0 24px 48px rgba(255,95,158,.18); }
@@ -341,6 +396,13 @@ function stagger(index: number) {
 .library-card h3 { margin-top: 11px; overflow: hidden; color: var(--ink-900); font-size: 14px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .air-date { display: flex; align-items: center; gap: 7px; margin-top: 5px; overflow: hidden; color: var(--ink-400); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .air-date i { width: 13px; height: 1px; flex: 0 0 auto; background: linear-gradient(90deg, var(--pink-400), var(--cyan-400)); }
+.library-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 42px; }
+.library-pagination button { min-width: 40px; height: 36px; padding: 0 12px; color: var(--ink-500); font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--line); background: rgba(255,255,255,.78); clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); transition: color 160ms ease, background 160ms ease, border-color 160ms ease; }
+.library-pagination button:hover:not(:disabled) { color: var(--pink-600); border-color: var(--pink-300); background: var(--pink-50); }
+.library-pagination button.active { color: #fff; border-color: transparent; background: linear-gradient(135deg, var(--pink-400), var(--pink-600)); box-shadow: 0 7px 16px rgba(255,95,158,.2); }
+.library-pagination button:disabled { cursor: not-allowed; opacity: .42; }
+.page-numbers { display: flex; align-items: center; gap: 7px; }
+.page-ellipsis { min-width: 28px; color: var(--ink-400); font-family: var(--font-mono); font-size: 14px; text-align: center; letter-spacing: 1px; }
 
 .library-state { min-height: 270px; display: grid; place-items: center; align-content: center; gap: 5px; color: var(--ink-400); background: rgba(255,255,255,.62); border: 1px dashed var(--line); clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 20px, 100% 100%, 20px 100%, 0 calc(100% - 20px)); }
 .library-state span { color: rgba(255,95,158,.22); font-family: var(--font-mono); font-size: 46px; line-height: 1; }

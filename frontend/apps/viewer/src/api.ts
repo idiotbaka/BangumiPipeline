@@ -255,9 +255,11 @@ export const api = {
   animeSchedule: (season: string) =>
     request<{ schedule: ViewerSchedule }>(`/api/anime-schedule?season=${encodeURIComponent(season)}`),
   libraryFilters: () => request<{ items: ViewerFilterDimension[] }>('/api/library/filters'),
-  animeLibrary: (query: string, filters: Record<number, string[]>) => {
+  animeLibrary: (query: string, filters: Record<number, string[]>, page?: number, pageSize?: number) => {
     const params = new URLSearchParams()
     if (query.trim()) params.set('q', query.trim())
+    if (page !== undefined) params.set('page', String(page))
+    if (pageSize !== undefined) params.set('page_size', String(pageSize))
     for (const [dimensionID, tags] of Object.entries(filters)) {
       for (const tag of tags) params.append('filter', `${dimensionID}:${tag}`)
     }

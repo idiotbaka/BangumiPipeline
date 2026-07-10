@@ -15,6 +15,12 @@ type ViewerLibrary struct {
 // between groups. Completed media is used only for ordering and progress; no
 // filesystem path is exposed to the viewer client.
 func (c *Catalog) ViewerLibrary(ctx context.Context, query string, filterGroups [][]string) (ViewerLibrary, error) {
+	return c.ViewerLibraryPage(ctx, query, filterGroups, 0, 0)
+}
+
+// ViewerLibraryPage returns a page when pageSize is positive. Passing a zero
+// pageSize preserves the legacy unpaginated behavior for existing clients.
+func (c *Catalog) ViewerLibraryPage(ctx context.Context, query string, filterGroups [][]string, page, pageSize int) (ViewerLibrary, error) {
 	where := []string{"am.deleted_at IS NULL"}
 	args := make([]any, 0)
 	query = strings.TrimSpace(query)
@@ -46,7 +52,17 @@ func (c *Catalog) ViewerLibrary(ctx context.Context, query string, filterGroups 
 )`, strings.Join(placeholders, ",")))
 	}
 
-	rows, err := c.db.QueryContext(ctx, `
+	whereSQL := strings.Join(where, "\n  AND ")
+	var total int
+	if err := c.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM anime_metadata am
+WHERE `+whereSQL, args...).Scan(&total); err != nil {
+		return ViewerLibrary{}, err
+	}
+
+	queryArgs := append([]any{}, args...)
+	querySQL := `
 SELECT am.bangumi_id,
        COALESCE(NULLIF(am.name_cn, ''), am.name),
        am.air_date,
@@ -55,7 +71,7 @@ SELECT am.bangumi_id,
        am.image_local_path != '',
        am.image_status
 FROM anime_metadata am
-WHERE `+strings.Join(where, "\n  AND ")+`
+WHERE ` + whereSQL + `
 ORDER BY EXISTS (
              SELECT 1 FROM media_jobs media
              WHERE media.bangumi_id = am.bangumi_id
@@ -65,7 +81,15 @@ ORDER BY EXISTS (
          CASE WHEN am.air_date = '' THEN 1 ELSE 0 END,
          am.air_date DESC,
          COALESCE(NULLIF(am.name_cn, ''), am.name),
-         am.bangumi_id DESC`, args...)
+	         am.bangumi_id DESC`
+	if pageSize > 0 {
+		if page < 1 {
+			page = 1
+		}
+		querySQL += "\nLIMIT ? OFFSET ?"
+		queryArgs = append(queryArgs, pageSize, (page-1)*pageSize)
+	}
+	rows, err := c.db.QueryContext(ctx, querySQL, queryArgs...)
 	if err != nil {
 		return ViewerLibrary{}, err
 	}
@@ -91,5 +115,5 @@ ORDER BY EXISTS (
 	if err := c.attachViewerScheduleProgress(ctx, items); err != nil {
 		return ViewerLibrary{}, err
 	}
-	return ViewerLibrary{Items: items, Total: len(items)}, nil
+	return ViewerLibrary{Items: items, Total: total}, nil
 }
