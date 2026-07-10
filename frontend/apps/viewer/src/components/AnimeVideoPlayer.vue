@@ -76,6 +76,7 @@ const mediaReady = ref(false)
 const bufferEnd = ref(0)
 const opSkipDismissed = ref(false)
 const episodePickerOpen = ref(false)
+const episodePickerList = ref<HTMLElement | null>(null)
 const failedEpisodeCovers = ref<Set<string>>(new Set())
 const contextMenuVisible = ref(false)
 const contextMenuPosition = ref({ left: 16, top: 16 })
@@ -535,17 +536,33 @@ async function toggleFullscreen() {
   }
 }
 
-function toggleEpisodePicker() {
+async function toggleEpisodePicker() {
   if (!hasEpisodes.value) return
   episodePickerOpen.value = !episodePickerOpen.value
   showControls()
-  if (!episodePickerOpen.value) scheduleControlsHide()
+  if (!episodePickerOpen.value) {
+    scheduleControlsHide()
+    return
+  }
+  await nextTick()
+  scrollSelectedPickerEpisodeIntoView()
 }
 
 function selectEpisode(episode: SelectableEpisode) {
   episodePickerOpen.value = false
   emit('select-episode', episode)
   scheduleControlsHide()
+}
+
+function scrollSelectedPickerEpisodeIntoView() {
+  const list = episodePickerList.value
+  const selectedItem = list?.querySelector<HTMLElement>('.episode-picker-item.selected')
+  if (!list || !selectedItem) return
+
+  const listBounds = list.getBoundingClientRect()
+  const itemBounds = selectedItem.getBoundingClientRect()
+  const target = list.scrollTop + itemBounds.top - listBounds.top - (list.clientHeight - itemBounds.height) / 2
+  list.scrollTo({ top: Math.max(target, 0), behavior: 'smooth' })
 }
 
 function openContextMenu(event: MouseEvent) {
@@ -1020,7 +1037,7 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
             <div><span>EPISODES</span><strong>选集</strong></div>
             <small>{{ episodes.length }} 集可播放</small>
           </header>
-          <div class="episode-picker-list">
+          <div ref="episodePickerList" class="episode-picker-list">
             <button
               v-for="episode in episodes"
               :key="episode.key"
