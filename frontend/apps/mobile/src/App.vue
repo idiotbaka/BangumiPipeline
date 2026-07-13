@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import { APIError, api, configureAPI, currentAPIBaseURL, type SiteSettings, type ViewerUser } from './api'
-import { loadAppConfig, saveAPIBaseURL } from './config'
+import { APIError, api, clearAuthSession, configureAPI, currentAPIBaseURL, type SiteSettings, type ViewerUser } from './api'
+import { loadAppConfig, normalizeAPIBaseURL, saveAPIBaseURL } from './config'
 import MobileShell from './components/MobileShell.vue'
 import charaImage from '../../viewer/src/assets/chara.png'
 
@@ -142,6 +142,30 @@ async function logout() {
   }
 }
 
+async function changeServerAddress(nextBaseURL: string) {
+  const normalizedBaseURL = normalizeAPIBaseURL(nextBaseURL)
+  const serverChanged = normalizedBaseURL !== currentAPIBaseURL()
+  saveAPIBaseURL(normalizedBaseURL)
+  configureAPI(normalizedBaseURL)
+  apiBaseUrl.value = currentAPIBaseURL()
+  if (!serverChanged) {
+    return
+  }
+
+  clearAuthSession()
+  user.value = null
+  mode.value = 'login'
+  password.value = ''
+  confirmPassword.value = ''
+  inviteCode.value = ''
+  registrationEnabled.value = true
+  inviteRequired.value = false
+  serverMessage.value = ''
+  message.value = '服务器地址已更新，请登录新服务器'
+  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.remove()
+  await refreshSiteSettings(false)
+}
+
 function applySiteSettings(settings: SiteSettings) {
   registrationEnabled.value = settings.registrationEnabled
   inviteRequired.value = settings.inviteRequired
@@ -188,7 +212,14 @@ function saveAndApplyAPIBaseURL() {
     <img class="boot-chara" :src="charaImage" alt="" draggable="false" />
   </main>
 
-  <MobileShell v-else-if="user" :user="user" :loading="loading" @logout="logout" />
+  <MobileShell
+    v-else-if="user"
+    :user="user"
+    :loading="loading"
+    :api-base-url="apiBaseUrl"
+    @logout="logout"
+    @server-address-change="changeServerAddress"
+  />
 
   <main v-else class="auth-screen">
     <div class="grid-layer" aria-hidden="true" />

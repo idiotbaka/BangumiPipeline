@@ -22,19 +22,29 @@ export function saveAPIBaseURL(value: string) {
 }
 
 export function normalizeAPIBaseURL(value: string): string {
+  return parseAPIBaseURL(value) ?? defaultAPIBaseURL
+}
+
+export function parseAPIBaseURL(value: string): string | null {
   const trimmed = value.trim()
   if (!trimmed) {
-    return defaultAPIBaseURL
+    return null
+  }
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) && !/^https?:\/\//i.test(trimmed)) {
+    return null
   }
   const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
   try {
     const url = new URL(withProtocol)
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || !url.hostname || url.username || url.password) {
+      return null
+    }
     url.pathname = url.pathname.replace(/\/+$/, '')
     url.search = ''
     url.hash = ''
     return `${url.toString().replace(/\/+$/, '')}/`
   } catch {
-    return defaultAPIBaseURL
+    return null
   }
 }
 

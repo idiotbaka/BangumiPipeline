@@ -14,7 +14,9 @@ import {
   type ViewerUser,
   type ViewerWatchHistoryItem,
 } from '../api'
+import { normalizeAPIBaseURL, parseAPIBaseURL } from '../config'
 import appIcon from '../../../../../src-tauri/icons/icon.png'
+import tauriConfig from '../../../../../src-tauri/tauri.conf.json'
 import homeNavIcon from '../assets/nav-home.svg?raw'
 import libraryNavIcon from '../assets/nav-library.svg?raw'
 import profileNavIcon from '../assets/nav-profile.svg?raw'
@@ -25,13 +27,17 @@ import MobileAnimeDetailScreen from './MobileAnimeDetailScreen.vue'
 interface Props {
   user: ViewerUser
   loading: boolean
+  apiBaseUrl: string
 }
 
 const props = defineProps<Props>()
-const emit = defineEmits<{ (event: 'logout'): void }>()
+const emit = defineEmits<{
+  (event: 'logout'): void
+  (event: 'server-address-change', value: string): void
+}>()
 
 type MainTab = 'home' | 'schedule' | 'library' | 'profile'
-type RoutePage = 'search' | 'follows' | 'history' | 'detail' | null
+type RoutePage = 'search' | 'follows' | 'history' | 'settings' | 'server-address' | 'about' | 'detail' | null
 type SubRoutePage = Exclude<RoutePage, 'detail' | null>
 type DetailReturnPage = Exclude<RoutePage, 'detail'>
 type PageTransitionName = 'page-slide-forward' | 'page-slide-back' | 'page-none'
@@ -50,6 +56,7 @@ interface MobileShellHistoryState {
 }
 
 const appName = 'BakaVip2'
+const appVersion = tauriConfig.version
 const now = new Date()
 const tabs: Array<{ key: MainTab; label: string; icon: string }> = [
   { key: 'home', label: '首页', icon: homeNavIcon },
@@ -81,6 +88,9 @@ const detailMediaId = ref(0)
 const detailPosition = ref(0)
 const relativeTimeNow = ref(Date.now())
 const failedImages = ref<Set<string>>(new Set())
+const serverAddressDraft = ref(props.apiBaseUrl)
+const serverAddressError = ref('')
+const serverAddressSaving = ref(false)
 
 const home = ref<ViewerHome>({
   hotRecommendations: [],
@@ -151,6 +161,9 @@ const pageTitle = computed(() => {
   if (routePage.value === 'search') return '搜索结果'
   if (routePage.value === 'follows') return '我的追番'
   if (routePage.value === 'history') return '观看历史'
+  if (routePage.value === 'settings') return '系统设置'
+  if (routePage.value === 'server-address') return '服务器地址'
+  if (routePage.value === 'about') return '关于'
   if (routePage.value === 'detail') return '番剧详情'
   return ''
 })
@@ -346,7 +359,16 @@ function isMainTab(value: unknown): value is MainTab {
 }
 
 function isRoutePage(value: unknown): value is RoutePage {
-  return value === null || value === 'search' || value === 'follows' || value === 'history' || value === 'detail'
+  return (
+    value === null ||
+    value === 'search' ||
+    value === 'follows' ||
+    value === 'history' ||
+    value === 'settings' ||
+    value === 'server-address' ||
+    value === 'about' ||
+    value === 'detail'
+  )
 }
 
 function navigateBackOrClose() {
@@ -432,6 +454,43 @@ function openRoute(page: SubRoutePage) {
   }
   pushShellHistoryState()
   schedulePendingTransitionScroll()
+}
+
+function openServerAddressSettings() {
+  serverAddressDraft.value = props.apiBaseUrl
+  serverAddressError.value = ''
+  serverAddressSaving.value = false
+  openRoute('server-address')
+}
+
+function saveServerAddress() {
+  if (serverAddressSaving.value) {
+    return
+  }
+  serverAddressError.value = ''
+  const normalizedBaseURL = parseAPIBaseURL(serverAddressDraft.value)
+  if (!normalizedBaseURL) {
+    serverAddressError.value = '请输入有效的 HTTP 或 HTTPS 服务器地址'
+    return
+  }
+
+  const serverChanged = normalizedBaseURL !== normalizeAPIBaseURL(props.apiBaseUrl)
+  serverAddressDraft.value = normalizedBaseURL
+  if (!serverChanged) {
+    emit('server-address-change', normalizedBaseURL)
+    closeRoute()
+    return
+  }
+
+  serverAddressSaving.value = true
+  if (shellHistoryIndex <= 0) {
+    emit('server-address-change', normalizedBaseURL)
+    return
+  }
+
+  const returnSteps = shellHistoryIndex
+  window.addEventListener('popstate', () => emit('server-address-change', normalizedBaseURL), { once: true })
+  window.history.go(-returnSteps)
 }
 
 function closeRoute() {
@@ -956,6 +1015,81 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
         </div>
       </div>
 
+      <div v-else-if="routePage === 'settings'" class="page-stack settings-page">
+        <section class="menu-list settings-list">
+          <button type="button" @click="openServerAddressSettings">
+            <span class="settings-option-copy">
+              <strong>服务器地址</strong>
+              <small>{{ props.apiBaseUrl }}</small>
+            </span>
+            <span class="chevron" aria-hidden="true">&gt;</span>
+          </button>
+          <button type="button" @click="openRoute('about')">
+            <span class="settings-option-copy">
+              <strong>关于 APP</strong>
+              <small>{{ appName }} · v{{ appVersion }}</small>
+            </span>
+            <span class="chevron" aria-hidden="true">&gt;</span>
+          </button>
+        </section>
+      </div>
+
+      <div v-else-if="routePage === 'server-address'" class="page-stack settings-page">
+        <section class="settings-editor-card">
+          <div class="settings-editor-head">
+            <span class="settings-kicker">SERVER</span>
+            <h2>服务器地址</h2>
+            <p>设置 APP 用于登录、加载番剧和播放视频的观看端地址。</p>
+          </div>
+
+          <form class="server-address-form" @submit.prevent="saveServerAddress">
+            <label class="server-address-field">
+              <span>地址</span>
+              <input
+                v-model.trim="serverAddressDraft"
+                autocomplete="url"
+                inputmode="url"
+                placeholder="https://example.com/"
+                required
+                type="text"
+                :disabled="serverAddressSaving"
+              />
+              <small>未填写协议时将自动使用 HTTPS。</small>
+            </label>
+            <p v-if="serverAddressError" class="settings-error" role="alert">{{ serverAddressError }}</p>
+            <button class="save-settings-button" :disabled="serverAddressSaving" type="submit">
+              {{ serverAddressSaving ? '正在应用' : '保存并应用' }}
+            </button>
+          </form>
+        </section>
+        <p class="settings-note">更换服务器后，当前登录状态会被安全清除，需要使用新服务器的账号重新登录。</p>
+      </div>
+
+      <div v-else-if="routePage === 'about'" class="page-stack about-page">
+        <section class="about-hero-card">
+          <div class="about-decoration about-decoration-one" aria-hidden="true" />
+          <div class="about-decoration about-decoration-two" aria-hidden="true" />
+          <div class="about-logo-shell">
+            <img :src="appIcon" :alt="`${appName} Logo`" />
+          </div>
+          <span class="about-kicker">MOBILE VIEWER</span>
+          <h1>{{ appName }}</h1>
+          <p>随时随地，继续你的番剧时光。</p>
+          <span class="about-version">Version {{ appVersion }}</span>
+        </section>
+
+        <section class="about-info-card">
+          <div>
+            <span>开发者</span>
+            <strong>idiotbaka</strong>
+          </div>
+          <div>
+            <span>APP 版本</span>
+            <strong>v{{ appVersion }}</strong>
+          </div>
+        </section>
+      </div>
+
       <div v-else-if="routePage === 'follows'" class="page-stack">
         <div v-if="profileLoading" class="state-card">正在加载追番...</div>
         <div v-else-if="profileError" class="state-card error">{{ profileError }}</div>
@@ -1329,6 +1463,10 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             <div v-if="profileError" class="state-card error">{{ profileError }}</div>
 
             <section class="menu-list">
+              <button type="button" @click="openRoute('settings')">
+                <span>系统设置</span>
+                <span class="chevron" aria-hidden="true">&gt;</span>
+              </button>
               <button type="button" @click="openRoute('follows')">
                 <span>我的追番</span>
                 <span class="menu-tail">
@@ -1692,6 +1830,9 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 .library-filter-card,
 .profile-head,
 .menu-list,
+.settings-editor-card,
+.about-hero-card,
+.about-info-card,
 .state-card,
 .list-row {
   background: #ffffff;
@@ -2407,6 +2548,269 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 .profile-page {
   gap: 14px;
+}
+
+.settings-page {
+  gap: 12px;
+}
+
+.menu-list.settings-list button {
+  min-height: 68px;
+}
+
+.menu-list .settings-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.menu-list .settings-option-copy strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.menu-list .settings-option-copy small {
+  max-width: min(72vw, 390px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-editor-card {
+  padding: 18px;
+}
+
+.settings-editor-head {
+  display: grid;
+  gap: 5px;
+}
+
+.settings-kicker {
+  color: var(--pink-600);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.settings-editor-head h2 {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.settings-editor-head p,
+.settings-note {
+  color: var(--ink-400);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.server-address-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.server-address-field {
+  display: grid;
+  gap: 8px;
+}
+
+.server-address-field > span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.server-address-field input {
+  width: 100%;
+  height: 46px;
+  padding: 0 12px;
+  color: var(--ink-900);
+  font-size: 15px;
+  background: #f5f7fb;
+  border: 1px solid rgba(32, 40, 62, 0.1);
+  border-radius: 8px;
+  outline: 0;
+  transition: border-color 120ms var(--ease-soft), box-shadow 120ms var(--ease-soft);
+}
+
+.server-address-field input:focus {
+  border-color: var(--pink-500);
+  box-shadow: 0 0 0 3px rgba(244, 114, 153, 0.12);
+}
+
+.server-address-field input:disabled {
+  opacity: 0.68;
+}
+
+.server-address-field small {
+  color: var(--ink-400);
+  font-size: 12px;
+}
+
+.settings-error {
+  color: var(--pink-600);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.save-settings-button {
+  width: 100%;
+  height: 46px;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  background: var(--pink-600);
+  border-radius: 8px;
+  box-shadow: 0 10px 22px rgba(229, 82, 130, 0.2);
+  transition: transform 120ms var(--ease-soft), filter 120ms var(--ease-soft);
+}
+
+.save-settings-button:active {
+  transform: scale(0.98);
+  filter: brightness(0.98);
+}
+
+.save-settings-button:disabled {
+  cursor: default;
+  opacity: 0.68;
+  box-shadow: none;
+}
+
+.settings-note {
+  padding: 0 4px;
+}
+
+.about-page {
+  gap: 14px;
+}
+
+.about-hero-card {
+  position: relative;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  min-height: 350px;
+  padding: 42px 24px 34px;
+  overflow: hidden;
+  text-align: center;
+  background:
+    radial-gradient(circle at 15% 12%, rgba(255, 181, 207, 0.36), transparent 34%),
+    radial-gradient(circle at 88% 82%, rgba(152, 225, 239, 0.34), transparent 34%),
+    linear-gradient(145deg, #ffffff, #fff8fb 52%, #f4fbff);
+}
+
+.about-decoration {
+  position: absolute;
+  border: 1px solid rgba(229, 82, 130, 0.13);
+  transform: rotate(24deg);
+  pointer-events: none;
+}
+
+.about-decoration-one {
+  top: -46px;
+  right: -36px;
+  width: 142px;
+  height: 142px;
+  border-radius: 34px;
+}
+
+.about-decoration-two {
+  bottom: -58px;
+  left: -42px;
+  width: 174px;
+  height: 174px;
+  border-color: rgba(61, 184, 207, 0.14);
+  border-radius: 50%;
+}
+
+.about-logo-shell {
+  position: relative;
+  z-index: 1;
+  width: 112px;
+  height: 112px;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.96);
+  border-radius: 26px;
+  box-shadow:
+    0 18px 34px rgba(229, 82, 130, 0.18),
+    0 0 0 7px rgba(255, 255, 255, 0.58);
+}
+
+.about-logo-shell img {
+  width: 100%;
+  height: 100%;
+  border-radius: 20px;
+}
+
+.about-kicker {
+  position: relative;
+  z-index: 1;
+  margin-top: 24px;
+  color: var(--pink-600);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.about-hero-card h1 {
+  position: relative;
+  z-index: 1;
+  margin-top: 7px;
+  font-size: 30px;
+  line-height: 1.15;
+}
+
+.about-hero-card > p {
+  position: relative;
+  z-index: 1;
+  margin-top: 8px;
+  color: var(--ink-400);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.about-version {
+  position: relative;
+  z-index: 1;
+  margin-top: 18px;
+  padding: 7px 12px;
+  color: var(--pink-600);
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(229, 82, 130, 0.12);
+  border-radius: 999px;
+}
+
+.about-info-card {
+  overflow: hidden;
+}
+
+.about-info-card > div {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(32, 40, 62, 0.06);
+}
+
+.about-info-card > div:last-child {
+  border-bottom: 0;
+}
+
+.about-info-card span {
+  color: var(--ink-400);
+  font-size: 13px;
+}
+
+.about-info-card strong {
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .profile-head {
