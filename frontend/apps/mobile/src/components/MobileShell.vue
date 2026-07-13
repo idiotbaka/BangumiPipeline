@@ -139,7 +139,7 @@ const selectedDay = computed(() => weekdays.find((day) => day.value === selected
 const scheduleItems = computed(() =>
   (schedule.value?.items ?? []).filter((item) => normalizedWeekday(item.airWeekday) === selectedWeekday.value),
 )
-const homeFollows = computed(() => home.value.myFollows.slice(0, 10))
+const homeFollows = computed(() => home.value.myFollows.filter((item) => !item.caughtUp).slice(0, 10))
 const recentItems = computed(() => home.value.recentUpdates.slice(0, 9))
 const hotItems = computed(() => home.value.hotRecommendations.slice(0, 9))
 const selectedLibraryTagCount = computed(() =>
@@ -1023,7 +1023,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
               <div class="skeleton-line short skeleton-block" />
             </article>
           </div>
-          <div v-else-if="homeFollows.length === 0" class="state-card">还没有追番</div>
+          <div v-else-if="homeFollows.length === 0" class="state-card">暂无待观看的追番</div>
           <div v-else class="follow-rail">
             <article
               v-for="item in homeFollows"

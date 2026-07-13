@@ -29,6 +29,8 @@ type FollowedAnime struct {
 	CaughtUp            bool    `json:"caughtUp"`
 	LastWatchedAt       int64   `json:"lastWatchedAt"`
 	FollowedAt          int64   `json:"followedAt"`
+	hasNewEpisode       bool
+	latestUpdatedAt     int64
 }
 
 type followedAnimeBase struct {
@@ -155,6 +157,7 @@ func (s *Service) FollowedAnime(ctx context.Context, userID int64) ([]FollowedAn
 			item.LatestEpisodeLabel = watchEpisodeLabel(
 				latest.ref.season, latest.ref.episodeType, latest.ref.episodeNumber,
 			)
+			item.latestUpdatedAt = latest.ref.updatedAt
 		}
 		watch, hasWatch := progress[base.BangumiID]
 		item.HasWatchProgress = hasWatch
@@ -173,6 +176,7 @@ func (s *Service) FollowedAnime(ctx context.Context, userID int64) ([]FollowedAn
 				item.ProgressPercent = max(0, min(item.ProgressPercent, 100))
 			}
 			item.CaughtUp = len(mediaItems) > 0 && watch.completed && sameFollowEpisode(watch.ref, latest.ref)
+			item.hasNewEpisode = len(mediaItems) > 0 && historyEpisodeLess(watch.ref, latest.ref)
 		}
 
 		var target followedMedia
@@ -207,6 +211,35 @@ func (s *Service) FollowedAnime(ctx context.Context, userID int64) ([]FollowedAn
 	}
 	sortFollowedAnime(items)
 	return items, nil
+}
+
+// HomeFollowedAnime returns only follows that still have something to watch.
+// The complete follows endpoint deliberately continues to return every follow.
+func (s *Service) HomeFollowedAnime(ctx context.Context, userID int64) ([]FollowedAnime, error) {
+	items, err := s.FollowedAnime(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return homeFollowedAnime(items), nil
+}
+
+func homeFollowedAnime(items []FollowedAnime) []FollowedAnime {
+	homeItems := make([]FollowedAnime, 0, len(items))
+	for _, item := range items {
+		if !item.CaughtUp {
+			homeItems = append(homeItems, item)
+		}
+	}
+	sort.SliceStable(homeItems, func(i, j int) bool {
+		if homeItems[i].hasNewEpisode != homeItems[j].hasNewEpisode {
+			return homeItems[i].hasNewEpisode
+		}
+		if homeItems[i].hasNewEpisode && homeItems[i].latestUpdatedAt != homeItems[j].latestUpdatedAt {
+			return homeItems[i].latestUpdatedAt > homeItems[j].latestUpdatedAt
+		}
+		return false
+	})
+	return homeItems
 }
 
 func sortFollowedAnime(items []FollowedAnime) {

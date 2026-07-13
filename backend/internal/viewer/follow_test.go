@@ -19,3 +19,27 @@ func TestSortFollowedAnimePlacesCompletedFollowsLast(t *testing.T) {
 		}
 	}
 }
+
+func TestHomeFollowedAnimeFiltersCaughtUpAndPrioritizesNewEpisodes(t *testing.T) {
+	items := []FollowedAnime{
+		{BangumiID: 1, LastWatchedAt: 500},
+		{BangumiID: 2, hasNewEpisode: true, latestUpdatedAt: 200},
+		{BangumiID: 3, CaughtUp: true, LastWatchedAt: 600},
+		{BangumiID: 4, hasNewEpisode: true, latestUpdatedAt: 300},
+	}
+
+	homeItems := homeFollowedAnime(items)
+
+	want := []int64{4, 2, 1}
+	if len(homeItems) != len(want) {
+		t.Fatalf("unexpected home follow count: got %+v, want %d items", homeItems, len(want))
+	}
+	for index, bangumiID := range want {
+		if homeItems[index].BangumiID != bangumiID {
+			t.Fatalf("unexpected home follow order: got %+v, want bangumi ID %d at index %d", homeItems, bangumiID, index)
+		}
+	}
+	if len(items) != 4 {
+		t.Fatalf("home filtering changed the complete follows list: got %+v", items)
+	}
+}

@@ -148,7 +148,7 @@ func (a *ViewerAPI) home(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, err)
 		return
 	}
-	follows, err := a.auth.FollowedAnime(r.Context(), user.ID)
+	follows, err := a.auth.HomeFollowedAnime(r.Context(), user.ID)
 	if err != nil {
 		a.internalError(w, err)
 		return
