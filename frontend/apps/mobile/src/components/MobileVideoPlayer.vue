@@ -2,8 +2,19 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import type { ViewerOPSkipSegment } from '../api'
+import episodePickerIcon from '../assets/episode-picker.svg?raw'
 import fullscreenIcon from '../assets/fullscreen.svg?raw'
 import { enterNativeFullscreen, exitNativeFullscreen, setNativeKeepScreenOn } from '../native/player'
+
+interface SelectableEpisode {
+  key: string
+  mediaId: number
+  label: string
+  title: string
+  summary: string
+  hasCover: boolean
+  coverURL: string
+}
 
 interface Props {
   mediaId: number
@@ -12,11 +23,15 @@ interface Props {
   title: string
   startTime: number
   opSkip: ViewerOPSkipSegment | null
+  episodes: SelectableEpisode[]
+  selectedEpisodeKey: string
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (event: 'progress', value: { mediaId: number; positionSeconds: number; durationSeconds: number }): void
+  (event: 'open-episode-sheet'): void
+  (event: 'select-episode', episodeKey: string): void
 }>()
 
 const video = ref<HTMLVideoElement | null>(null)
@@ -33,6 +48,9 @@ const resumeApplied = ref(false)
 const hasPlayed = ref(false)
 const autoplayAttempted = ref(false)
 const nativeFullscreen = ref(false)
+const episodePickerOpen = ref(false)
+const episodePickerList = ref<HTMLElement | null>(null)
+const failedEpisodeCovers = ref<Set<string>>(new Set())
 const opSkipDismissed = ref(false)
 const seekGestureActive = ref(false)
 const seekGestureDelta = ref(0)
@@ -72,6 +90,7 @@ const maxSeekGestureSeconds = 600
 
 const playerLoading = computed(() => Boolean(props.src) && !mediaReady.value && !errorMessage.value)
 const canControlPlayback = computed(() => Boolean(props.src) && mediaReady.value && !errorMessage.value)
+const hasEpisodes = computed(() => props.episodes.length > 0)
 const activeOPSkip = computed(() => normalizeOPSkip(props.opSkip))
 const progressStyle = computed(() => {
   const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
@@ -106,8 +125,9 @@ const seekGestureDirection = computed(() => (seekGestureDelta.value >= 0 ? 'forw
 const seekGestureTargetText = computed(() => formatTime(seekGestureTarget.value))
 
 watch(
-  () => props.src,
-  async () => {
+  () => [props.src, props.mediaId] as const,
+  async (_current, previous) => {
+    reportProgress(previous[1])
     resetMediaState()
     await nextTick()
     video.value?.load()
@@ -169,6 +189,7 @@ async function requestPlayback(silent: boolean) {
 
 function resetMediaState() {
   cancelSeekGesture()
+  episodePickerOpen.value = false
   playing.value = false
   buffering.value = false
   currentTime.value = 0
@@ -393,7 +414,10 @@ function canStartSeekGesture(event: PointerEvent) {
 }
 
 function isInteractiveTarget(target: EventTarget | null) {
-  return target instanceof Element && Boolean(target.closest('button, input, a, [role="button"], .player-controls'))
+  return (
+    target instanceof Element &&
+    Boolean(target.closest('button, input, a, [role="button"], .player-controls, .fullscreen-episode-picker'))
+  )
 }
 
 function updateSeekGesturePreview(deltaX: number) {
@@ -484,9 +508,9 @@ function showControls() {
 
 function scheduleControlsHide() {
   stopControlsTimer()
-  if (!playing.value || buffering.value || errorMessage.value) return
+  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value) return
   controlsTimer = setTimeout(() => {
-    if (playing.value && !buffering.value && !errorMessage.value) {
+    if (playing.value && !buffering.value && !errorMessage.value && !episodePickerOpen.value) {
       controlsVisible.value = false
     }
     controlsTimer = null
@@ -532,10 +556,10 @@ function stopBufferTimer() {
   }
 }
 
-function reportProgress() {
-  if (!hasPlayed.value || props.mediaId < 1 || currentTime.value <= 0 || duration.value <= 0) return
+function reportProgress(mediaId = props.mediaId) {
+  if (!hasPlayed.value || mediaId < 1 || currentTime.value <= 0 || duration.value <= 0) return
   emit('progress', {
-    mediaId: props.mediaId,
+    mediaId,
     positionSeconds: currentTime.value,
     durationSeconds: duration.value,
   })
@@ -562,6 +586,59 @@ function skipOP() {
   showControls()
 }
 
+async function toggleEpisodePicker() {
+  if (!hasEpisodes.value) return
+  if (!nativeFullscreen.value) {
+    emit('open-episode-sheet')
+    return
+  }
+
+  episodePickerOpen.value = !episodePickerOpen.value
+  showControls()
+  if (!episodePickerOpen.value) {
+    scheduleControlsHide()
+    return
+  }
+
+  await nextTick()
+  window.requestAnimationFrame(() => scrollSelectedPickerEpisodeIntoView('auto'))
+}
+
+function closeFullscreenEpisodePicker() {
+  if (!episodePickerOpen.value) return
+  episodePickerOpen.value = false
+  showControls()
+  scheduleControlsHide()
+}
+
+function selectFullscreenEpisode(episode: SelectableEpisode) {
+  closeFullscreenEpisodePicker()
+  if (episode.key !== props.selectedEpisodeKey) {
+    emit('select-episode', episode.key)
+  }
+}
+
+function scrollSelectedPickerEpisodeIntoView(behavior: ScrollBehavior) {
+  const list = episodePickerList.value
+  const selectedItem = list?.querySelector<HTMLElement>('.fullscreen-episode-item.selected')
+  if (!list || !selectedItem) return
+
+  const listBounds = list.getBoundingClientRect()
+  const itemBounds = selectedItem.getBoundingClientRect()
+  const target = list.scrollTop + itemBounds.top - listBounds.top - (list.clientHeight - itemBounds.height) / 2
+  list.scrollTo({ top: Math.max(target, 0), behavior })
+}
+
+function episodeCoverAvailable(episode: SelectableEpisode) {
+  return episode.hasCover && Boolean(episode.coverURL) && !failedEpisodeCovers.value.has(episode.key)
+}
+
+function markEpisodeCoverFailed(key: string) {
+  const failed = new Set(failedEpisodeCovers.value)
+  failed.add(key)
+  failedEpisodeCovers.value = failed
+}
+
 async function toggleFullscreen() {
   if (nativeFullscreen.value) {
     await exitFullscreen()
@@ -585,6 +662,7 @@ async function enterFullscreen() {
 
 async function exitFullscreen(options: { fromPopState?: boolean; fromUnmount?: boolean } = {}) {
   if (!nativeFullscreen.value) return
+  episodePickerOpen.value = false
   nativeFullscreen.value = false
   document.body.classList.remove('mobile-player-fullscreen')
   await exitNativeFullscreen()
@@ -736,11 +814,72 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
           <i :class="{ pause: playing }" aria-hidden="true" />
         </button>
         <span>{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
+        <button
+          type="button"
+          class="episode-picker-button"
+          :class="{ active: episodePickerOpen }"
+          :disabled="!hasEpisodes"
+          :aria-expanded="nativeFullscreen ? episodePickerOpen : undefined"
+          aria-controls="mobile-player-episode-picker"
+          aria-label="选集"
+          @click="toggleEpisodePicker"
+        >
+          <i aria-hidden="true" v-html="episodePickerIcon" />
+        </button>
         <button type="button" class="fullscreen-button" :aria-label="nativeFullscreen ? '退出全屏' : '横屏全屏'" @click="toggleFullscreen">
           <i aria-hidden="true" v-html="fullscreenIcon" />
         </button>
       </div>
     </div>
+
+    <Transition name="fullscreen-episode-picker">
+      <div
+        v-if="nativeFullscreen && episodePickerOpen"
+        class="fullscreen-episode-picker"
+        role="presentation"
+        @click.self="closeFullscreenEpisodePicker"
+      >
+        <aside id="mobile-player-episode-picker" role="dialog" aria-modal="true" aria-label="选集">
+          <header>
+            <div>
+              <span>EPISODES</span>
+              <h2>选集</h2>
+            </div>
+            <small>{{ episodes.length }} 集可播放</small>
+            <button type="button" aria-label="关闭选集列表" @click="closeFullscreenEpisodePicker">×</button>
+          </header>
+
+          <div ref="episodePickerList" class="fullscreen-episode-list">
+            <button
+              v-for="episode in episodes"
+              :key="episode.key"
+              class="fullscreen-episode-item"
+              :class="{ selected: selectedEpisodeKey === episode.key }"
+              type="button"
+              :aria-current="selectedEpisodeKey === episode.key ? 'true' : undefined"
+              @click="selectFullscreenEpisode(episode)"
+            >
+              <div class="fullscreen-episode-thumb">
+                <img
+                  v-if="episodeCoverAvailable(episode)"
+                  :src="episode.coverURL"
+                  :alt="episode.title || episode.label"
+                  loading="lazy"
+                  @error="markEpisodeCoverFailed(episode.key)"
+                />
+                <span v-else>{{ episode.label }}</span>
+              </div>
+              <div class="fullscreen-episode-copy">
+                <span>{{ episode.label }}</span>
+                <strong>{{ episode.title || episode.label }}</strong>
+                <p>{{ episode.summary || '该话暂无剧情简介。' }}</p>
+              </div>
+              <i v-if="selectedEpisodeKey === episode.key" aria-label="正在播放" />
+            </button>
+          </div>
+        </aside>
+      </div>
+    </Transition>
 
     <div class="hidden-progress" :style="progressStyle" aria-hidden="true" />
   </section>
@@ -962,6 +1101,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
 }
 
 .play-button,
+.episode-picker-button,
 .fullscreen-button {
   width: 34px;
   height: 34px;
@@ -970,7 +1110,8 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
   color: #ffffff;
 }
 
-.play-button:disabled {
+.play-button:disabled,
+.episode-picker-button:disabled {
   cursor: wait;
   opacity: 0.42;
 }
@@ -981,6 +1122,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
   font-size: 12px;
 }
 
+.episode-picker-button i,
 .fullscreen-button i {
   width: 20px;
   height: 20px;
@@ -988,14 +1130,222 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
   place-items: center;
 }
 
+.episode-picker-button :deep(svg),
 .fullscreen-button :deep(svg) {
   width: 100%;
   height: 100%;
   display: block;
 }
 
+.episode-picker-button :deep(path),
 .fullscreen-button :deep(path) {
   fill: currentColor;
+}
+
+.episode-picker-button i {
+  width: 18px;
+  height: 18px;
+}
+
+.episode-picker-button {
+  border-radius: 7px;
+  transition: color 140ms var(--ease-soft), background 140ms var(--ease-soft);
+}
+
+.episode-picker-button.active {
+  color: var(--cyan-300);
+  background: rgba(142, 232, 242, 0.12);
+}
+
+.fullscreen-episode-picker {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  justify-content: flex-end;
+  padding:
+    max(10px, env(safe-area-inset-top))
+    max(10px, env(safe-area-inset-right))
+    max(10px, env(safe-area-inset-bottom))
+    max(10px, env(safe-area-inset-left));
+  background: rgba(3, 5, 10, 0.68);
+  backdrop-filter: blur(4px);
+  touch-action: pan-y;
+}
+
+.fullscreen-episode-picker > aside {
+  width: min(480px, 58vw);
+  min-width: min(320px, calc(100vw - 28px));
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.94);
+  background: linear-gradient(150deg, rgba(30, 36, 49, 0.98), rgba(15, 19, 29, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48), inset 0 0 0 1px rgba(142, 232, 242, 0.04);
+}
+
+.fullscreen-episode-picker > aside > header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 11px 10px 14px;
+  background: rgba(7, 10, 18, 0.42);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.fullscreen-episode-picker > aside > header > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.fullscreen-episode-picker > aside > header span {
+  color: var(--cyan-300);
+  font-size: 9px;
+  letter-spacing: 1.4px;
+}
+
+.fullscreen-episode-picker > aside > header h2 {
+  font-size: 16px;
+}
+
+.fullscreen-episode-picker > aside > header small {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.fullscreen-episode-picker > aside > header > button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding-bottom: 3px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 24px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
+}
+
+.fullscreen-episode-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+  overscroll-behavior: contain;
+  scroll-padding: 8px 0;
+}
+
+.fullscreen-episode-item {
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 11px;
+  padding: 8px;
+  color: inherit;
+  text-align: left;
+  border: 1px solid transparent;
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  transition: border-color 140ms var(--ease-soft), background 140ms var(--ease-soft), transform 140ms var(--ease-soft);
+}
+
+.fullscreen-episode-item.selected {
+  border-color: rgba(255, 159, 189, 0.5);
+  background: linear-gradient(100deg, rgba(255, 95, 158, 0.2), rgba(73, 214, 233, 0.1));
+}
+
+.fullscreen-episode-item:active {
+  transform: scale(0.985);
+}
+
+.fullscreen-episode-thumb {
+  aspect-ratio: 16 / 9;
+  align-self: center;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--pink-200);
+  font-size: 11px;
+  text-align: center;
+  background: linear-gradient(135deg, rgba(255, 95, 158, 0.2), rgba(73, 214, 233, 0.14));
+  border-radius: 6px;
+}
+
+.fullscreen-episode-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fullscreen-episode-copy {
+  min-width: 0;
+  align-self: center;
+  padding-right: 15px;
+}
+
+.fullscreen-episode-copy > span {
+  color: var(--pink-200);
+  font-size: 10px;
+}
+
+.fullscreen-episode-copy > strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 1px;
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fullscreen-episode-copy > p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-line;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.fullscreen-episode-item > i {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 7px;
+  height: 7px;
+  background: var(--cyan-300);
+  box-shadow: 0 0 0 3px rgba(142, 232, 242, 0.12), 0 0 10px var(--cyan-300);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.fullscreen-episode-picker-enter-active,
+.fullscreen-episode-picker-leave-active {
+  transition: opacity 170ms var(--ease-soft);
+}
+
+.fullscreen-episode-picker-enter-active > aside,
+.fullscreen-episode-picker-leave-active > aside {
+  transition: transform 210ms cubic-bezier(0.2, 0.82, 0.2, 1);
+}
+
+.fullscreen-episode-picker-enter-from,
+.fullscreen-episode-picker-leave-to {
+  opacity: 0;
+}
+
+.fullscreen-episode-picker-enter-from > aside,
+.fullscreen-episode-picker-leave-to > aside {
+  transform: translateX(28px);
 }
 
 .op-skip-button {

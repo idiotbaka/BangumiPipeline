@@ -35,6 +35,8 @@ const summaryExpanded = ref(false)
 const metadataExpanded = ref(false)
 const failedImages = ref<Set<string>>(new Set())
 const episodeRail = ref<HTMLElement | null>(null)
+const episodeSheetOpen = ref(false)
+const episodeSheetList = ref<HTMLElement | null>(null)
 const episodeCardRefs = new Map<string, HTMLElement>()
 let progressSaving = false
 let queuedProgress: { mediaId: number; positionSeconds: number; durationSeconds: number } | null = null
@@ -45,6 +47,17 @@ const selectedEpisode = computed(() =>
   anime.value?.episodes.find((episode) => episode.key === selectedEpisodeKey.value) ?? null,
 )
 const playableEpisodes = computed(() => anime.value?.episodes.filter((episode) => episode.hasMedia) ?? [])
+const playerEpisodes = computed(() =>
+  playableEpisodes.value.map((episode) => ({
+    key: episode.key,
+    mediaId: episode.mediaId,
+    label: episode.label,
+    title: episode.title || episode.originalTitle,
+    summary: episode.summary,
+    hasCover: episode.hasCover,
+    coverURL: episodeCoverURL(episode),
+  })),
+)
 const streamURL = computed(() => {
   const episode = selectedEpisode.value
   return episode?.hasMedia ? buildAuthenticatedMediaURL(`/api/anime/${props.bangumiId}/media/${episode.mediaId}/stream`) : ''
@@ -117,6 +130,7 @@ async function loadDetail() {
   followError.value = ''
   summaryExpanded.value = false
   metadataExpanded.value = false
+  episodeSheetOpen.value = false
   episodeCardRefs.clear()
   try {
     const result = await api.animeDetail(props.bangumiId)
@@ -164,6 +178,39 @@ function selectEpisode(episode: ViewerDetailEpisode) {
   selectedEpisodeKey.value = episode.key
   resumePosition.value = 0
   void scrollSelectedEpisodeIntoView('smooth')
+}
+
+function selectEpisodeByKey(key: string) {
+  const episode = anime.value?.episodes.find((item) => item.key === key)
+  if (episode) selectEpisode(episode)
+}
+
+async function openEpisodeSheet() {
+  if (!anime.value?.episodes.length) return
+  episodeSheetOpen.value = true
+  await nextTick()
+  window.requestAnimationFrame(() => scrollSelectedSheetEpisodeIntoView('auto'))
+}
+
+function closeEpisodeSheet() {
+  episodeSheetOpen.value = false
+}
+
+function selectEpisodeFromSheet(episode: ViewerDetailEpisode) {
+  if (!episode.hasMedia) return
+  closeEpisodeSheet()
+  selectEpisode(episode)
+}
+
+function scrollSelectedSheetEpisodeIntoView(behavior: ScrollBehavior) {
+  const list = episodeSheetList.value
+  const selectedItem = list?.querySelector<HTMLElement>('.episode-sheet-item.selected')
+  if (!list || !selectedItem) return
+
+  const listBounds = list.getBoundingClientRect()
+  const itemBounds = selectedItem.getBoundingClientRect()
+  const target = list.scrollTop + itemBounds.top - listBounds.top - (list.clientHeight - itemBounds.height) / 2
+  list.scrollTo({ top: Math.max(target, 0), behavior })
 }
 
 function setEpisodeCardRef(key: string, element: unknown) {
@@ -334,14 +381,17 @@ function formatInfoValue(value: unknown): string {
       <div class="player-wrap">
         <MobileVideoPlayer
           v-if="selectedEpisode"
-          :key="selectedEpisode.mediaId"
           :media-id="selectedEpisode.mediaId"
           :src="streamURL"
           :poster="playerPoster"
           :title="playerTitle"
           :start-time="resumePosition"
           :op-skip="selectedEpisode.opSkip"
+          :episodes="playerEpisodes"
+          :selected-episode-key="selectedEpisodeKey"
           @progress="saveProgress"
+          @open-episode-sheet="openEpisodeSheet"
+          @select-episode="selectEpisodeByKey"
         />
         <div v-else class="player-empty">
           <img
@@ -399,7 +449,18 @@ function formatInfoValue(value: unknown): string {
       <section class="detail-block">
         <div class="block-head">
           <div class="block-title">选集</div>
-          <span>{{ playableEpisodes.length }} / {{ anime.episodes.length }}</span>
+          <button
+            class="episode-list-trigger"
+            type="button"
+            :disabled="!anime.episodes.length"
+            aria-haspopup="dialog"
+            :aria-expanded="episodeSheetOpen"
+            aria-controls="mobile-episode-sheet"
+            @click="openEpisodeSheet"
+          >
+            <span>{{ playableEpisodes.length }} / {{ anime.episodes.length }}</span>
+            <i aria-hidden="true" />
+          </button>
         </div>
         <div v-if="anime.episodes.length" ref="episodeRail" class="episode-rail">
           <article
@@ -502,6 +563,68 @@ function formatInfoValue(value: unknown): string {
         <div v-else class="detail-empty">暂无角色与声优资料</div>
       </section>
     </div>
+
+    <Teleport to="body">
+      <Transition name="episode-sheet">
+        <div
+          v-if="episodeSheetOpen && anime"
+          class="episode-sheet-layer"
+          role="presentation"
+          @click.self="closeEpisodeSheet"
+        >
+          <section
+            id="mobile-episode-sheet"
+            class="episode-sheet-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="选集"
+            @keydown.esc="closeEpisodeSheet"
+          >
+            <div class="episode-sheet-handle" aria-hidden="true" />
+            <header>
+              <div>
+                <h2>选集</h2>
+                <span>{{ playableEpisodes.length }} / {{ anime.episodes.length }} 集可播放</span>
+              </div>
+              <button type="button" aria-label="关闭选集列表" @click="closeEpisodeSheet">×</button>
+            </header>
+
+            <div ref="episodeSheetList" class="episode-sheet-list">
+              <button
+                v-for="episode in anime.episodes"
+                :key="episode.key"
+                class="episode-sheet-item"
+                :class="{ selected: selectedEpisodeKey === episode.key, unavailable: !episode.hasMedia }"
+                type="button"
+                :disabled="!episode.hasMedia"
+                :aria-current="selectedEpisodeKey === episode.key ? 'true' : undefined"
+                @click="selectEpisodeFromSheet(episode)"
+              >
+                <div class="episode-sheet-thumb">
+                  <img
+                    v-if="imageAvailable(`episode-${episode.mediaId}`, episode.hasCover)"
+                    :src="episodeCoverURL(episode)"
+                    :alt="episode.title || episode.label"
+                    loading="lazy"
+                    @error="markImageFailed(`episode-${episode.mediaId}`)"
+                  />
+                  <span v-else>{{ episode.label }}</span>
+                </div>
+                <div class="episode-sheet-copy">
+                  <div class="episode-sheet-meta">
+                    <span>{{ episode.label }}</span>
+                    <i v-if="selectedEpisodeKey === episode.key">正在播放</i>
+                    <i v-else-if="!episode.hasMedia">{{ episodeAvailability(episode) }}</i>
+                  </div>
+                  <strong>{{ episode.title || episode.originalTitle || episode.label }}</strong>
+                  <p>{{ episode.summary || '该话暂无剧情简介。' }}</p>
+                </div>
+              </button>
+            </div>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
   </section>
 </template>
 
@@ -911,6 +1034,32 @@ function formatInfoValue(value: unknown): string {
   white-space: nowrap;
 }
 
+.episode-list-trigger {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 5px 0 10px;
+  color: var(--ink-400);
+  font-size: 12px;
+  border-radius: 999px;
+  transition: color 140ms var(--ease-soft), background 140ms var(--ease-soft), transform 140ms var(--ease-soft);
+}
+
+.episode-list-trigger i {
+  width: 7px;
+  height: 7px;
+  border-top: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.episode-list-trigger:active:not(:disabled) {
+  color: var(--pink-600);
+  background: var(--pink-50);
+  transform: scale(0.96);
+}
+
 .summary-box {
   position: relative;
   max-height: 76px;
@@ -1048,6 +1197,213 @@ function formatInfoValue(value: unknown): string {
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.episode-sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-top: max(48px, env(safe-area-inset-top));
+  background: rgba(7, 10, 18, 0.48);
+  backdrop-filter: blur(2px);
+  overscroll-behavior: contain;
+}
+
+.episode-sheet-panel {
+  width: min(100%, 560px);
+  max-height: min(82vh, 760px);
+  max-height: min(82dvh, 760px);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  color: var(--ink-900);
+  background: rgba(250, 251, 255, 0.98);
+  border: 1px solid rgba(32, 40, 62, 0.08);
+  border-bottom: 0;
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -18px 48px rgba(7, 10, 18, 0.22);
+}
+
+.episode-sheet-handle {
+  width: 38px;
+  height: 4px;
+  margin: 9px auto 4px;
+  background: rgba(32, 40, 62, 0.16);
+  border-radius: 999px;
+}
+
+.episode-sheet-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 16px 12px;
+  border-bottom: 1px solid rgba(32, 40, 62, 0.07);
+}
+
+.episode-sheet-panel > header > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.episode-sheet-panel > header h2 {
+  font-size: 18px;
+}
+
+.episode-sheet-panel > header span {
+  color: var(--ink-400);
+  font-size: 12px;
+}
+
+.episode-sheet-panel > header button {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding-bottom: 3px;
+  color: var(--ink-400);
+  font-size: 25px;
+  line-height: 1;
+  background: rgba(32, 40, 62, 0.05);
+  border-radius: 50%;
+}
+
+.episode-sheet-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 7px 10px calc(12px + env(safe-area-inset-bottom));
+  overscroll-behavior: contain;
+  scroll-padding: 12px 0;
+}
+
+.episode-sheet-item {
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 11px;
+  padding: 9px 7px;
+  color: var(--ink-700);
+  text-align: left;
+  border: 1px solid transparent;
+  border-bottom-color: rgba(32, 40, 62, 0.06);
+  border-radius: 9px;
+  transition: background 140ms var(--ease-soft), border-color 140ms var(--ease-soft), transform 140ms var(--ease-soft);
+}
+
+.episode-sheet-item.selected {
+  border-color: rgba(255, 95, 158, 0.28);
+  background: linear-gradient(105deg, rgba(255, 225, 236, 0.72), rgba(236, 253, 255, 0.56));
+}
+
+.episode-sheet-item:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.episode-sheet-item.unavailable {
+  opacity: 0.58;
+}
+
+.episode-sheet-thumb {
+  position: relative;
+  align-self: start;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--pink-600);
+  font-size: 11px;
+  text-align: center;
+  background: linear-gradient(135deg, var(--pink-50), var(--cyan-50));
+  border-radius: 7px;
+}
+
+.episode-sheet-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.episode-sheet-copy {
+  min-width: 0;
+}
+
+.episode-sheet-meta {
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.episode-sheet-meta > span {
+  color: var(--pink-600);
+  font-size: 11px;
+}
+
+.episode-sheet-meta > i {
+  overflow: hidden;
+  padding: 2px 6px;
+  color: var(--blue-500);
+  font-size: 9px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--cyan-50);
+  border-radius: 999px;
+}
+
+.episode-sheet-item.selected .episode-sheet-meta > i {
+  color: var(--pink-600);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.episode-sheet-copy > strong {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--ink-900);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.episode-sheet-copy > p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--ink-400);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-line;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.episode-sheet-enter-active,
+.episode-sheet-leave-active {
+  transition: opacity 180ms var(--ease-soft);
+}
+
+.episode-sheet-enter-active .episode-sheet-panel,
+.episode-sheet-leave-active .episode-sheet-panel {
+  transition: transform 220ms cubic-bezier(0.2, 0.82, 0.2, 1);
+}
+
+.episode-sheet-enter-from,
+.episode-sheet-leave-to {
+  opacity: 0;
+}
+
+.episode-sheet-enter-from .episode-sheet-panel,
+.episode-sheet-leave-to .episode-sheet-panel {
+  transform: translateY(100%);
 }
 
 .tag-cloud {
