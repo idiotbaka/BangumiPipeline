@@ -26,7 +26,7 @@ const emit = defineEmits<{
 const anime = ref<ViewerAnimeDetail | null>(null)
 const selectedEpisodeKey = ref('')
 const resumePosition = ref(0)
-const loading = ref(false)
+const loading = ref(true)
 const errorMessage = ref('')
 const followed = ref(false)
 const followSaving = ref(false)
@@ -271,9 +271,54 @@ function formatInfoValue(value: unknown): string {
 
 <template>
   <section class="detail-screen" aria-label="番剧详情播放页">
-    <div v-if="loading" class="detail-state">
-      <i aria-hidden="true" />
-      <p>正在读取番剧详情...</p>
+    <div v-if="loading" class="detail-skeleton" aria-label="正在读取番剧详情" aria-busy="true">
+      <div class="detail-skeleton-player detail-skeleton-shimmer">
+        <button class="floating-back skeleton-back" type="button" aria-label="返回" @click="emit('back')">‹</button>
+        <div class="detail-skeleton-player-copy" aria-hidden="true">
+          <span />
+          <span />
+        </div>
+        <div class="detail-skeleton-player-controls" aria-hidden="true">
+          <span class="skeleton-play-button" />
+          <span class="skeleton-timeline" />
+          <span class="skeleton-time" />
+        </div>
+      </div>
+
+      <section class="detail-skeleton-title" aria-hidden="true">
+        <div>
+          <span class="detail-skeleton-line title detail-skeleton-shimmer" />
+          <span class="detail-skeleton-line subtitle detail-skeleton-shimmer" />
+        </div>
+        <span class="detail-skeleton-follow detail-skeleton-shimmer" />
+      </section>
+
+      <div class="detail-skeleton-facts" aria-hidden="true">
+        <span v-for="index in 3" :key="`skeleton-fact-${index}`" class="detail-skeleton-pill detail-skeleton-shimmer" />
+      </div>
+
+      <section class="detail-skeleton-card" aria-hidden="true">
+        <span class="detail-skeleton-heading detail-skeleton-shimmer" />
+        <div class="detail-skeleton-copy">
+          <span class="detail-skeleton-line detail-skeleton-shimmer" />
+          <span class="detail-skeleton-line detail-skeleton-shimmer" />
+          <span class="detail-skeleton-line short detail-skeleton-shimmer" />
+        </div>
+      </section>
+
+      <section class="detail-skeleton-card" aria-hidden="true">
+        <div class="detail-skeleton-card-head">
+          <span class="detail-skeleton-heading detail-skeleton-shimmer" />
+          <span class="detail-skeleton-count detail-skeleton-shimmer" />
+        </div>
+        <div class="detail-skeleton-episodes">
+          <article v-for="index in 3" :key="`skeleton-episode-${index}`">
+            <div class="detail-skeleton-episode-cover detail-skeleton-shimmer" />
+            <span class="detail-skeleton-line episode-label detail-skeleton-shimmer" />
+            <span class="detail-skeleton-line episode-title detail-skeleton-shimmer" />
+          </article>
+        </div>
+      </section>
     </div>
 
     <div v-else-if="errorMessage" class="detail-state error">
@@ -471,6 +516,220 @@ function formatInfoValue(value: unknown): string {
 
 .detail-content {
   padding-bottom: calc(26px + env(safe-area-inset-bottom));
+}
+
+.detail-skeleton {
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding-bottom: calc(26px + env(safe-area-inset-bottom));
+  background: #f6f7fb;
+}
+
+.detail-skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: #edf0f5;
+}
+
+.detail-skeleton-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 18%, rgba(255, 255, 255, 0.82) 45%, transparent 72%);
+  animation: detail-skeleton-sweep 1.1s ease-in-out infinite;
+}
+
+.detail-skeleton-player {
+  position: relative;
+  width: 100%;
+  min-height: 210px;
+  aspect-ratio: 16 / 9;
+  background: #101522;
+}
+
+.detail-skeleton-player::after {
+  background: linear-gradient(100deg, transparent 18%, rgba(255, 255, 255, 0.11) 45%, transparent 72%);
+}
+
+.skeleton-back {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.detail-skeleton-player-copy {
+  position: absolute;
+  top: calc(19px + env(safe-area-inset-top));
+  right: 18px;
+  left: 62px;
+  z-index: 1;
+  display: grid;
+  gap: 7px;
+}
+
+.detail-skeleton-player-copy span {
+  width: 48%;
+  height: 9px;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+
+.detail-skeleton-player-copy span:last-child {
+  width: 31%;
+  height: 7px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.detail-skeleton-player-controls {
+  position: absolute;
+  right: 16px;
+  bottom: 17px;
+  left: 16px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.skeleton-play-button {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 50%;
+}
+
+.skeleton-timeline {
+  height: 4px;
+  flex: 1;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+.skeleton-time {
+  width: 48px;
+  height: 8px;
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+.detail-skeleton-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 18px 16px 0;
+}
+
+.detail-skeleton-line {
+  display: block;
+  width: 100%;
+  height: 11px;
+  border-radius: 999px;
+}
+
+.detail-skeleton-line.title {
+  width: min(78%, 250px);
+  height: 21px;
+}
+
+.detail-skeleton-line.subtitle {
+  width: min(56%, 180px);
+  height: 10px;
+  margin-top: 7px;
+}
+
+.detail-skeleton-line.short {
+  width: 64%;
+}
+
+.detail-skeleton-follow {
+  width: 72px;
+  height: 32px;
+  border-radius: 999px;
+}
+
+.detail-skeleton-facts {
+  display: flex;
+  gap: 8px;
+  overflow: hidden;
+  padding: 12px 16px 2px;
+}
+
+.detail-skeleton-pill {
+  width: 82px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
+.detail-skeleton-pill:nth-child(2) {
+  width: 68px;
+}
+
+.detail-skeleton-pill:nth-child(3) {
+  width: 74px;
+}
+
+.detail-skeleton-card {
+  margin: 14px 12px 0;
+  padding: 15px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(32, 40, 62, 0.06);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(32, 40, 62, 0.04);
+}
+
+.detail-skeleton-heading {
+  display: block;
+  width: 58px;
+  height: 17px;
+  border-radius: 999px;
+}
+
+.detail-skeleton-copy {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.detail-skeleton-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.detail-skeleton-count {
+  width: 46px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.detail-skeleton-episodes {
+  display: flex;
+  gap: 10px;
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+.detail-skeleton-episodes article {
+  flex: 0 0 154px;
+}
+
+.detail-skeleton-episode-cover {
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+}
+
+.detail-skeleton-line.episode-label {
+  width: 48px;
+  height: 10px;
+  margin-top: 8px;
+}
+
+.detail-skeleton-line.episode-title {
+  width: 78%;
+  height: 9px;
+  margin-top: 6px;
 }
 
 .player-wrap {
@@ -1005,15 +1264,6 @@ function formatInfoValue(value: unknown): string {
   background: #f6f7fb;
 }
 
-.detail-state > i {
-  width: 38px;
-  height: 38px;
-  border: 2px solid var(--line);
-  border-top-color: var(--pink-500);
-  border-radius: 50%;
-  animation: detail-spin 0.8s linear infinite;
-}
-
 .detail-state > span {
   width: 42px;
   height: 42px;
@@ -1042,9 +1292,12 @@ function formatInfoValue(value: unknown): string {
   border-radius: 999px;
 }
 
-@keyframes detail-spin {
+@keyframes detail-skeleton-sweep {
+  from {
+    transform: translateX(-100%);
+  }
   to {
-    transform: rotate(360deg);
+    transform: translateX(100%);
   }
 }
 </style>
