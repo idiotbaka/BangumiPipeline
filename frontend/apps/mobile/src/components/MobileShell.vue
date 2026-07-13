@@ -28,12 +28,15 @@ interface Props {
   user: ViewerUser
   loading: boolean
   apiBaseUrl: string
+  checkingAppUpdate: boolean
+  appUpdateCheckMessage: string
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (event: 'logout'): void
   (event: 'server-address-change', value: string): void
+  (event: 'check-app-update'): void
 }>()
 
 type MainTab = 'home' | 'schedule' | 'library' | 'profile'
@@ -1088,6 +1091,27 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             <strong>v{{ appVersion }}</strong>
           </div>
         </section>
+
+        <section class="about-update-card">
+          <button
+            type="button"
+            :disabled="props.checkingAppUpdate"
+            @click="emit('check-app-update')"
+          >
+            <span class="about-update-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M20 12a8 8 0 1 1-2.35-5.65M20 4v5h-5" />
+              </svg>
+            </span>
+            <span class="about-update-copy">
+              <strong>检查新版本</strong>
+              <small>
+                {{ props.checkingAppUpdate ? '正在检查更新...' : (props.appUpdateCheckMessage || '查看是否有可用的新版本') }}
+              </small>
+            </span>
+            <span class="chevron" aria-hidden="true">&gt;</span>
+          </button>
+        </section>
       </div>
 
       <div v-else-if="routePage === 'follows'" class="page-stack">
@@ -1833,6 +1857,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 .settings-editor-card,
 .about-hero-card,
 .about-info-card,
+.about-update-card,
 .state-card,
 .list-row {
   background: #ffffff;
@@ -2811,6 +2836,71 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 .about-info-card strong {
   font-size: 14px;
   font-weight: 600;
+}
+
+.about-update-card {
+  overflow: hidden;
+}
+
+.about-update-card button {
+  width: 100%;
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 15px;
+  text-align: left;
+  transition: background 120ms var(--ease-soft);
+}
+
+.about-update-card button:active:not(:disabled) {
+  background: #f8f9fc;
+}
+
+.about-update-card button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.about-update-icon {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  color: var(--pink-600);
+  border-radius: 10px;
+  background: var(--pink-50);
+}
+
+.about-update-icon svg {
+  width: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.about-update-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.about-update-copy strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.about-update-copy small {
+  color: var(--ink-400);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.about-update-card .chevron {
+  margin-left: auto;
 }
 
 .profile-head {

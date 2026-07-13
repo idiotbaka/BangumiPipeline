@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 
 import { APIError, api, type SiteSettings, type ViewerUser } from './api'
+import AppDownloadPage from './components/AppDownloadPage.vue'
 import AuthScreen from './components/AuthScreen.vue'
 import HomeScreen from './components/HomeScreen.vue'
 import { initializePushNotifications, removePushNotifications } from './pushNotifications'
@@ -14,8 +15,17 @@ const message = ref('')
 const siteName = ref(defaultSiteName)
 const registrationEnabled = ref(true)
 const inviteRequired = ref(false)
+const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
+const isAppDownloadPage = currentPath === '/app/download'
+
+if (isAppDownloadPage) {
+  document.documentElement.classList.add('app-download-mode')
+}
 
 onMounted(async () => {
+  if (isAppDownloadPage) {
+    return
+  }
   try {
     const result = await api.siteSettings()
     applySiteSettings(result.settings)
@@ -78,8 +88,10 @@ async function logout() {
 </script>
 
 <template>
+  <AppDownloadPage v-if="isAppDownloadPage" />
+
   <!-- 启动屏 -->
-  <main v-if="!ready" class="boot-screen">
+  <main v-else-if="!ready" class="boot-screen">
     <div class="boot-halo halo-a" aria-hidden="true" />
     <div class="boot-halo halo-b" aria-hidden="true" />
     <div class="boot-mark">BP</div>

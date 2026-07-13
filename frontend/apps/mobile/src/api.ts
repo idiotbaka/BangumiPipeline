@@ -15,6 +15,15 @@ export interface SiteSettings {
   updatedAt: number
 }
 
+export interface AppRelease {
+  id: number
+  version: string
+  releaseNotes: string
+  apkSize: number
+  apkSha256: string
+  publishedAt: number
+}
+
 export interface ViewerAnimeCard {
   bangumiId: number
   name: string
@@ -282,6 +291,7 @@ async function applyAuthResponse(promise: Promise<AuthResponse>) {
 
 export const api = {
   siteSettings: () => request<{ settings: SiteSettings }>('/api/site-settings'),
+  latestAppRelease: () => request<{ release: AppRelease | null }>('/api/app/releases/latest'),
   me: () => request<{ user: ViewerUser }>('/api/auth/me'),
   login: (username: string, password: string) =>
     applyAuthResponse(

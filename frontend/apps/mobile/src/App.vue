@@ -1,12 +1,26 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import { APIError, api, clearAuthSession, configureAPI, currentAPIBaseURL, type SiteSettings, type ViewerUser } from './api'
+import {
+  APIError,
+  api,
+  clearAuthSession,
+  configureAPI,
+  currentAPIBaseURL,
+  type AppRelease,
+  type SiteSettings,
+  type ViewerUser,
+} from './api'
+import { appDownloadURL, ignoreAppVersion, ignoredAppVersion, isNewerAppVersion } from './appUpdate'
 import { loadAppConfig, normalizeAPIBaseURL, saveAPIBaseURL } from './config'
+import AppUpdateDialog from './components/AppUpdateDialog.vue'
 import MobileShell from './components/MobileShell.vue'
+import { openExternalURL } from './native/opener'
 import charaImage from '../../viewer/src/assets/chara.png'
+import tauriConfig from '../../../../src-tauri/tauri.conf.json'
 
 const appName = 'BakaVip2'
+const appVersion = tauriConfig.version
 
 const ready = ref(false)
 const loading = ref(false)
@@ -22,6 +36,12 @@ const confirmPassword = ref('')
 const inviteCode = ref('')
 const message = ref('')
 const serverMessage = ref('')
+const checkingAppUpdate = ref(false)
+const appUpdateCheckMessage = ref('')
+const appUpdateRelease = ref<AppRelease | null>(null)
+const openingAppDownload = ref(false)
+const appUpdateDialogError = ref('')
+let appUpdateRequestID = 0
 
 const formTitle = computed(() => (mode.value === 'login' ? '欢迎回来' : '注册并进入'))
 const formSubtitle = computed(() => (mode.value === 'login' ? '登录后继续观看番剧' : '创建账号后会自动登录'))
@@ -38,6 +58,7 @@ onMounted(async () => {
   const config = await loadAppConfig()
   apiBaseUrl.value = config.apiBaseUrl
   configureAPI(config.apiBaseUrl)
+  void checkAppUpdate(false)
   await refreshSiteSettings(false)
   try {
     const result = await api.me()
@@ -89,6 +110,7 @@ async function submit() {
   loading.value = true
   try {
     saveAndApplyAPIBaseURL()
+    void checkAppUpdate(false)
     const result =
       mode.value === 'login'
         ? await api.login(username.value, password.value)
@@ -111,6 +133,9 @@ async function refreshSiteSettings(showResult = true) {
   }
   try {
     saveAndApplyAPIBaseURL()
+    if (showResult) {
+      void checkAppUpdate(false)
+    }
     const result = await api.siteSettings()
     applySiteSettings(result.settings)
     if (showResult) {
@@ -152,6 +177,12 @@ async function changeServerAddress(nextBaseURL: string) {
     return
   }
 
+  appUpdateRequestID += 1
+  checkingAppUpdate.value = false
+  appUpdateCheckMessage.value = ''
+  appUpdateRelease.value = null
+  appUpdateDialogError.value = ''
+
   clearAuthSession()
   user.value = null
   mode.value = 'login'
@@ -164,6 +195,68 @@ async function changeServerAddress(nextBaseURL: string) {
   message.value = '服务器地址已更新，请登录新服务器'
   document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.remove()
   await refreshSiteSettings(false)
+  void checkAppUpdate(false)
+}
+
+async function checkAppUpdate(manual: boolean) {
+  const requestID = ++appUpdateRequestID
+  checkingAppUpdate.value = true
+  appUpdateDialogError.value = ''
+  if (manual) {
+    appUpdateCheckMessage.value = ''
+  }
+
+  try {
+    const result = await api.latestAppRelease()
+    if (requestID !== appUpdateRequestID) {
+      return
+    }
+    const release = result.release
+    if (!release || !isNewerAppVersion(release.version, appVersion)) {
+      if (manual) {
+        appUpdateCheckMessage.value = `当前已是最新版本（v${appVersion}）`
+      }
+      return
+    }
+    if (!manual && ignoredAppVersion() === release.version) {
+      return
+    }
+    appUpdateCheckMessage.value = ''
+    appUpdateRelease.value = release
+  } catch (error) {
+    if (requestID === appUpdateRequestID && manual) {
+      appUpdateCheckMessage.value = error instanceof Error ? error.message : '检查更新失败，请稍后重试'
+    }
+  } finally {
+    if (requestID === appUpdateRequestID) {
+      checkingAppUpdate.value = false
+    }
+  }
+}
+
+function ignoreCurrentAppRelease() {
+  if (!appUpdateRelease.value || openingAppDownload.value) {
+    return
+  }
+  ignoreAppVersion(appUpdateRelease.value.version)
+  appUpdateRelease.value = null
+  appUpdateDialogError.value = ''
+}
+
+async function openAppDownloadPage() {
+  if (!appUpdateRelease.value || openingAppDownload.value) {
+    return
+  }
+  openingAppDownload.value = true
+  appUpdateDialogError.value = ''
+  try {
+    await openExternalURL(appDownloadURL())
+    appUpdateRelease.value = null
+  } catch (error) {
+    appUpdateDialogError.value = error instanceof Error ? error.message : '无法打开系统浏览器'
+  } finally {
+    openingAppDownload.value = false
+  }
 }
 
 function applySiteSettings(settings: SiteSettings) {
@@ -217,8 +310,11 @@ function saveAndApplyAPIBaseURL() {
     :user="user"
     :loading="loading"
     :api-base-url="apiBaseUrl"
+    :checking-app-update="checkingAppUpdate"
+    :app-update-check-message="appUpdateCheckMessage"
     @logout="logout"
     @server-address-change="changeServerAddress"
+    @check-app-update="checkAppUpdate(true)"
   />
 
   <main v-else class="auth-screen">
@@ -319,4 +415,14 @@ function saveAndApplyAPIBaseURL() {
       </form>
     </section>
   </main>
+
+  <AppUpdateDialog
+    v-if="ready && appUpdateRelease"
+    :release="appUpdateRelease"
+    :current-version="appVersion"
+    :opening-download="openingAppDownload"
+    :error-message="appUpdateDialogError"
+    @download="openAppDownloadPage"
+    @ignore="ignoreCurrentAppRelease"
+  />
 </template>

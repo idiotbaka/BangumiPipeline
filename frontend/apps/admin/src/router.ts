@@ -17,6 +17,7 @@ import ViewerSiteSettingsPage from './pages/ViewerSiteSettingsPage.vue'
 import ViewerInviteManagementPage from './pages/ViewerInviteManagementPage.vue'
 import ViewerCarouselManagementPage from './pages/ViewerCarouselManagementPage.vue'
 import ViewerFilterManagementPage from './pages/ViewerFilterManagementPage.vue'
+import AppReleaseManagementPage from './pages/AppReleaseManagementPage.vue'
 import AdminLayout from './components/AdminLayout.vue'
 
 const router = createRouter({
@@ -44,6 +45,7 @@ const router = createRouter({
         { path: 'viewer-site-settings', name: 'viewer-site-settings', component: ViewerSiteSettingsPage },
         { path: 'viewer-carousels', name: 'viewer-carousels', component: ViewerCarouselManagementPage },
         { path: 'viewer-filters', name: 'viewer-filters', component: ViewerFilterManagementPage },
+        { path: 'app-releases', name: 'app-releases', component: AppReleaseManagementPage },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

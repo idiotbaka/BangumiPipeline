@@ -32,6 +32,8 @@ func NewViewerHandler(authService *viewer.Service, pushService *viewer.PushServi
 	mux.HandleFunc("POST /api/auth/login", api.login)
 	mux.HandleFunc("GET /api/auth/me", api.me)
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
+	mux.HandleFunc("GET /api/app/releases/latest", api.latestAppRelease)
+	mux.HandleFunc("GET /api/app/releases/{releaseID}/download", api.downloadAppRelease)
 	mux.HandleFunc("GET /api/push/config", api.pushConfig)
 	mux.HandleFunc("POST /api/push/subscriptions", api.upsertPushSubscription)
 	mux.HandleFunc("DELETE /api/push/subscriptions", api.removePushSubscription)

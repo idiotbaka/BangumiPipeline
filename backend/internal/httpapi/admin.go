@@ -94,6 +94,8 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("POST /api/viewer/filter-dimensions", api.createViewerFilterDimension)
 	mux.HandleFunc("PUT /api/viewer/filter-dimensions/{dimensionID}", api.updateViewerFilterDimension)
 	mux.HandleFunc("DELETE /api/viewer/filter-dimensions/{dimensionID}", api.deleteViewerFilterDimension)
+	mux.HandleFunc("GET /api/viewer/app-releases", api.listAppReleases)
+	mux.HandleFunc("POST /api/viewer/app-releases", api.publishAppRelease)
 	mux.HandleFunc("GET /api/system-logs", api.listSystemLogs)
 	mux.HandleFunc("GET /api/system-logs/stream", api.streamSystemLogs)
 	mux.HandleFunc("GET /api/anime", api.listAnime)

@@ -1093,6 +1093,28 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (29, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 29 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_app_releases (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    version        TEXT NOT NULL UNIQUE,
+    version_major  INTEGER NOT NULL,
+    version_minor  INTEGER NOT NULL,
+    version_patch  INTEGER NOT NULL,
+    release_notes  TEXT NOT NULL,
+    apk_data       BLOB NOT NULL,
+    apk_size       INTEGER NOT NULL,
+    apk_sha256     TEXT NOT NULL,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_app_releases_version
+ON viewer_app_releases(version_major DESC, version_minor DESC, version_patch DESC, id DESC);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (30, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 30 migration: %w", err)
+	}
 	return nil
 }
 

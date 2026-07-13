@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default capability for the mobile client",
   "windows": ["main"],
-  "permissions": ["core:default", "player:default"]
+  "permissions": ["core:default", "opener:default", "player:default"]
 }

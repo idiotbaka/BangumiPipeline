@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Calendar, Collection, Document, Download, Film, Picture, PriceTag, Setting, SwitchButton, Tickets, User, VideoCamera } from '@element-plus/icons-vue'
+import { Calendar, Cellphone, Collection, Document, Download, Film, Picture, PriceTag, Setting, SwitchButton, Tickets, User, VideoCamera } from '@element-plus/icons-vue'
 import { api } from '../api'
 import { session } from '../session'
 
@@ -88,6 +88,10 @@ async function logout() {
           <el-menu-item index="/viewer-filters">
             <el-icon><PriceTag /></el-icon>
             <span>筛选标签管理</span>
+          </el-menu-item>
+          <el-menu-item index="/app-releases">
+            <el-icon><Cellphone /></el-icon>
+            <span>APP版本管理</span>
           </el-menu-item>
         </el-sub-menu>
       </el-menu>
