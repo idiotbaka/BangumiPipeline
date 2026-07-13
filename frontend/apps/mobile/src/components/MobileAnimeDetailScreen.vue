@@ -1129,7 +1129,8 @@ function formatInfoValue(value: unknown): string {
   gap: 10px;
   overflow-x: auto;
   margin: 9px 0 -3px;
-  padding: 3px 0 3px;
+  padding: 3px;
+  scroll-padding-inline: 3px;
   scroll-snap-type: x proximity;
 }
 
