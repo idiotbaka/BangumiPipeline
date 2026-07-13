@@ -78,3 +78,101 @@ func TestAppReleaseValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateAndDeleteAppRelease(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "app-release-update.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	service := NewService(db, time.Hour)
+	currentTime := time.Unix(100, 0)
+	service.now = func() time.Time { return currentTime }
+	originalAPK := []byte{'P', 'K', 0x03, 0x04, 'o', 'l', 'd'}
+	release, err := service.PublishAppRelease(ctx, AppReleaseInput{
+		Version: "1.1.0", ReleaseNotes: "原更新日志", APKData: originalAPK,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSHA256 := release.APKSHA256
+
+	currentTime = time.Unix(200, 0)
+	updated, err := service.UpdateAppRelease(ctx, release.ID, AppReleaseInput{
+		Version: "1.2.0", ReleaseNotes: "新更新日志",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Version != "1.2.0" || updated.ReleaseNotes != "新更新日志" {
+		t.Fatalf("unexpected updated release: %#v", updated)
+	}
+	if updated.PublishedAt != release.PublishedAt {
+		t.Fatalf("published time changed from %d to %d", release.PublishedAt, updated.PublishedAt)
+	}
+	if updated.APKSize != int64(len(originalAPK)) || updated.APKSHA256 != originalSHA256 {
+		t.Fatalf("APK metadata changed without a replacement: %#v", updated)
+	}
+	file, err := service.AppReleaseAPK(ctx, release.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(file.Data) != string(originalAPK) {
+		t.Fatalf("APK changed without a replacement: %q", file.Data)
+	}
+
+	replacementAPK := []byte{'P', 'K', 0x03, 0x04, 'n', 'e', 'w', 'e', 'r'}
+	replaced, err := service.UpdateAppRelease(ctx, release.ID, AppReleaseInput{
+		Version: "1.2.0", ReleaseNotes: "替换安装包", APKData: replacementAPK,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced.APKSize != int64(len(replacementAPK)) || replaced.APKSHA256 == originalSHA256 {
+		t.Fatalf("APK metadata was not replaced: %#v", replaced)
+	}
+	file, err = service.AppReleaseAPK(ctx, release.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(file.Data) != string(replacementAPK) {
+		t.Fatalf("unexpected replacement APK: %q", file.Data)
+	}
+
+	other, err := service.PublishAppRelease(ctx, AppReleaseInput{
+		Version: "2.0.0", ReleaseNotes: "其他版本", APKData: originalAPK,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateAppRelease(ctx, release.ID, AppReleaseInput{
+		Version: "2.0.0", ReleaseNotes: "重复版本",
+	}); !errors.Is(err, ErrAppReleaseVersionExists) {
+		t.Fatalf("expected duplicate version error, got %v", err)
+	}
+	if _, err := service.UpdateAppRelease(ctx, 99999, AppReleaseInput{
+		Version: "3.0.0", ReleaseNotes: "不存在",
+	}); !errors.Is(err, ErrAppReleaseNotFound) {
+		t.Fatalf("expected not found error, got %v", err)
+	}
+
+	if err := service.DeleteAppRelease(ctx, release.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AppReleaseAPK(ctx, release.ID); !errors.Is(err, ErrAppReleaseNotFound) {
+		t.Fatalf("expected deleted APK to be unavailable, got %v", err)
+	}
+	if err := service.DeleteAppRelease(ctx, release.ID); !errors.Is(err, ErrAppReleaseNotFound) {
+		t.Fatalf("expected repeated delete to return not found, got %v", err)
+	}
+	latest, err := service.LatestAppRelease(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.ID != other.ID {
+		t.Fatalf("unexpected latest release after deletion: %#v", latest)
+	}
+}

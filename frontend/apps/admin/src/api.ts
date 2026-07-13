@@ -127,6 +127,12 @@ export interface AppReleaseInput {
   file: File
 }
 
+export interface AppReleaseUpdateInput {
+  version: string
+  releaseNotes: string
+  file?: File | null
+}
+
 export interface ViewerFilterDimension {
   id: number
   name: string
@@ -579,11 +585,11 @@ function viewerCarouselForm(input: ViewerCarouselInput) {
   return form
 }
 
-function appReleaseForm(input: AppReleaseInput) {
+function appReleaseForm(input: AppReleaseInput | AppReleaseUpdateInput) {
   const form = new FormData()
   form.append('version', input.version)
   form.append('releaseNotes', input.releaseNotes)
-  form.append('file', input.file)
+  if (input.file) form.append('file', input.file)
   return form
 }
 
@@ -705,6 +711,13 @@ export const api = {
       method: 'POST',
       body: appReleaseForm(input),
     }),
+  updateAppRelease: (releaseId: number, input: AppReleaseUpdateInput) =>
+    request<{ release: AppRelease }>(`/api/viewer/app-releases/${releaseId}`, {
+      method: 'PUT',
+      body: appReleaseForm(input),
+    }),
+  deleteAppRelease: (releaseId: number) =>
+    request<void>(`/api/viewer/app-releases/${releaseId}`, { method: 'DELETE' }),
   viewerFilterDimensions: () =>
     request<{ items: ViewerFilterDimension[] }>('/api/viewer/filter-dimensions'),
   createViewerFilterDimension: (input: ViewerFilterDimensionInput) =>

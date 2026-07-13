@@ -34,36 +34,12 @@ func (a *AdminAPI) publishAppRelease(w http.ResponseWriter, r *http.Request) {
 	if !a.requireAdministrator(w, r) {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, viewer.MaxAppAPKBytes+appReleaseFormOverhead)
-	if err := r.ParseMultipartForm(appReleaseMultipartMemory); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "发布表单无效或 APK 文件超过 256MiB")
-		return
-	}
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
-	}
-
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "missing_apk", "请上传 arm64-v8a 的 APK 文件")
-		return
-	}
-	defer file.Close()
-	if !strings.EqualFold(filepath.Ext(strings.TrimSpace(header.Filename)), ".apk") {
-		writeError(w, http.StatusBadRequest, "invalid_apk", "仅支持上传 .apk 文件")
-		return
-	}
-	apkData, err := io.ReadAll(io.LimitReader(file, viewer.MaxAppAPKBytes+1))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_apk", "读取 APK 文件失败")
+	input, ok := readAppReleaseForm(w, r, true)
+	if !ok {
 		return
 	}
 
-	release, err := a.viewer.PublishAppRelease(r.Context(), viewer.AppReleaseInput{
-		Version:      r.FormValue("version"),
-		ReleaseNotes: r.FormValue("releaseNotes"),
-		APKData:      apkData,
-	})
+	release, err := a.viewer.PublishAppRelease(r.Context(), input)
 	if err != nil {
 		a.writeAppReleaseError(w, err)
 		return
@@ -76,6 +52,85 @@ func (a *AdminAPI) publishAppRelease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"release": release})
 }
 
+func (a *AdminAPI) updateAppRelease(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("releaseID"))
+	if !ok {
+		return
+	}
+	input, ok := readAppReleaseForm(w, r, false)
+	if !ok {
+		return
+	}
+
+	release, err := a.viewer.UpdateAppRelease(r.Context(), id, input)
+	if err != nil {
+		a.writeAppReleaseError(w, err)
+		return
+	}
+	a.logger.Info("app release updated",
+		"source", "viewer",
+		"release_id", release.ID,
+		"version", release.Version,
+		"apk_replaced", input.APKData != nil,
+	)
+	writeJSON(w, http.StatusOK, map[string]any{"release": release})
+}
+
+func (a *AdminAPI) deleteAppRelease(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("releaseID"))
+	if !ok {
+		return
+	}
+	if err := a.viewer.DeleteAppRelease(r.Context(), id); err != nil {
+		a.writeAppReleaseError(w, err)
+		return
+	}
+	a.logger.Info("app release deleted", "source", "viewer", "release_id", id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func readAppReleaseForm(w http.ResponseWriter, r *http.Request, apkRequired bool) (viewer.AppReleaseInput, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, viewer.MaxAppAPKBytes+appReleaseFormOverhead)
+	if err := r.ParseMultipartForm(appReleaseMultipartMemory); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "版本表单无效或 APK 文件超过 256MiB")
+		return viewer.AppReleaseInput{}, false
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+
+	input := viewer.AppReleaseInput{
+		Version:      r.FormValue("version"),
+		ReleaseNotes: r.FormValue("releaseNotes"),
+	}
+	file, header, err := r.FormFile("file")
+	if errors.Is(err, http.ErrMissingFile) && !apkRequired {
+		return input, true
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing_apk", "请上传 arm64-v8a 的 APK 文件")
+		return viewer.AppReleaseInput{}, false
+	}
+	defer file.Close()
+	if !strings.EqualFold(filepath.Ext(strings.TrimSpace(header.Filename)), ".apk") {
+		writeError(w, http.StatusBadRequest, "invalid_apk", "仅支持上传 .apk 文件")
+		return viewer.AppReleaseInput{}, false
+	}
+	apkData, err := io.ReadAll(io.LimitReader(file, viewer.MaxAppAPKBytes+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_apk", "读取 APK 文件失败")
+		return viewer.AppReleaseInput{}, false
+	}
+	input.APKData = apkData
+	return input, true
+}
+
 func (a *AdminAPI) writeAppReleaseError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, viewer.ErrInvalidAppVersion):
@@ -86,6 +141,8 @@ func (a *AdminAPI) writeAppReleaseError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_apk", "APK 文件无效或超过 256MiB")
 	case errors.Is(err, viewer.ErrAppReleaseVersionExists):
 		writeError(w, http.StatusConflict, "app_version_exists", "该 APP 版本已经发布")
+	case errors.Is(err, viewer.ErrAppReleaseNotFound):
+		writeError(w, http.StatusNotFound, "app_release_not_found", "APP 版本不存在")
 	default:
 		a.internalError(w, err)
 	}

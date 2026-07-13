@@ -41,6 +41,18 @@ function formatBytes(value: number) {
   }
   return `${size.toFixed(unit === 0 ? 0 : 2)} ${units[unit]}`
 }
+
+function formatPublishedAt(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '-'
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(value * 1000))
+}
 </script>
 
 <template>
@@ -88,6 +100,13 @@ function formatBytes(value: number) {
           <div>
             <span class="latest-chip">LATEST RELEASE</span>
             <h2>版本 {{ release.version }}</h2>
+            <p class="published-at">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="8.5" />
+                <path d="M12 7.5v5l3.5 2" />
+              </svg>
+              发布时间 {{ formatPublishedAt(release.publishedAt) }}
+            </p>
           </div>
           <div class="file-size">
             <span>APK SIZE</span>
@@ -302,6 +321,25 @@ function formatBytes(value: number) {
   margin-top: 9px;
   color: #26314b;
   font-size: 26px;
+}
+
+.published-at {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: #8b95aa;
+  font-size: 11px;
+}
+
+.published-at svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: #ff6fa6;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .file-size {

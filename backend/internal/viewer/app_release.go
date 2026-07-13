@@ -70,13 +70,9 @@ ORDER BY version_major DESC, version_minor DESC, version_patch DESC, id DESC`)
 }
 
 func (s *Service) PublishAppRelease(ctx context.Context, input AppReleaseInput) (AppRelease, error) {
-	version, major, minor, patch, err := parseAppVersion(input.Version)
+	version, major, minor, patch, releaseNotes, err := normalizeAppReleaseMetadata(input)
 	if err != nil {
 		return AppRelease{}, err
-	}
-	releaseNotes := strings.TrimSpace(input.ReleaseNotes)
-	if !utf8.ValidString(releaseNotes) || utf8.RuneCountInString(releaseNotes) < 1 || utf8.RuneCountInString(releaseNotes) > 10000 || strings.ContainsRune(releaseNotes, '\x00') {
-		return AppRelease{}, ErrInvalidAppReleaseNotes
 	}
 	if !validAppAPK(input.APKData) {
 		return AppRelease{}, ErrInvalidAppAPK
@@ -110,6 +106,70 @@ INSERT INTO viewer_app_releases(
 		return AppRelease{}, err
 	}
 	return s.appRelease(ctx, id)
+}
+
+func (s *Service) UpdateAppRelease(ctx context.Context, id int64, input AppReleaseInput) (AppRelease, error) {
+	version, major, minor, patch, releaseNotes, err := normalizeAppReleaseMetadata(input)
+	if err != nil {
+		return AppRelease{}, err
+	}
+	if input.APKData != nil && !validAppAPK(input.APKData) {
+		return AppRelease{}, ErrInvalidAppAPK
+	}
+
+	var releaseExists, versionExists bool
+	if err := s.db.QueryRowContext(ctx, `
+SELECT
+    EXISTS(SELECT 1 FROM viewer_app_releases WHERE id = ?),
+    EXISTS(SELECT 1 FROM viewer_app_releases WHERE version = ? AND id <> ?)`,
+		id, version, id,
+	).Scan(&releaseExists, &versionExists); err != nil {
+		return AppRelease{}, err
+	}
+	if !releaseExists {
+		return AppRelease{}, ErrAppReleaseNotFound
+	}
+	if versionExists {
+		return AppRelease{}, ErrAppReleaseVersionExists
+	}
+
+	now := s.now().UTC().Unix()
+	if input.APKData == nil {
+		_, err = s.db.ExecContext(ctx, `
+UPDATE viewer_app_releases
+SET version = ?, version_major = ?, version_minor = ?, version_patch = ?,
+    release_notes = ?, updated_at = ?
+WHERE id = ?`, version, major, minor, patch, releaseNotes, now, id)
+	} else {
+		digest := sha256.Sum256(input.APKData)
+		_, err = s.db.ExecContext(ctx, `
+UPDATE viewer_app_releases
+SET version = ?, version_major = ?, version_minor = ?, version_patch = ?,
+    release_notes = ?, apk_data = ?, apk_size = ?, apk_sha256 = ?, updated_at = ?
+WHERE id = ?`,
+			version, major, minor, patch, releaseNotes, input.APKData, len(input.APKData),
+			hex.EncodeToString(digest[:]), now, id,
+		)
+	}
+	if err != nil {
+		return AppRelease{}, fmt.Errorf("update app release: %w", err)
+	}
+	return s.appRelease(ctx, id)
+}
+
+func (s *Service) DeleteAppRelease(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM viewer_app_releases WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete app release: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrAppReleaseNotFound
+	}
+	return nil
 }
 
 func (s *Service) LatestAppRelease(ctx context.Context) (AppRelease, error) {
@@ -172,6 +232,18 @@ func parseAppVersion(value string) (string, int64, int64, int64, error) {
 		numbers[index] = value
 	}
 	return version, numbers[0], numbers[1], numbers[2], nil
+}
+
+func normalizeAppReleaseMetadata(input AppReleaseInput) (string, int64, int64, int64, string, error) {
+	version, major, minor, patch, err := parseAppVersion(input.Version)
+	if err != nil {
+		return "", 0, 0, 0, "", err
+	}
+	releaseNotes := strings.TrimSpace(input.ReleaseNotes)
+	if !utf8.ValidString(releaseNotes) || utf8.RuneCountInString(releaseNotes) < 1 || utf8.RuneCountInString(releaseNotes) > 10000 || strings.ContainsRune(releaseNotes, '\x00') {
+		return "", 0, 0, 0, "", ErrInvalidAppReleaseNotes
+	}
+	return version, major, minor, patch, releaseNotes, nil
 }
 
 func validAppAPK(data []byte) bool {

@@ -53,7 +53,7 @@ func TestPublicAppReleaseMetadataAndDownload(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Release == nil || payload.Release.ID != release.ID || payload.Release.Version != "1.1.0" {
+	if payload.Release == nil || payload.Release.ID != release.ID || payload.Release.Version != "1.1.0" || payload.Release.PublishedAt <= 0 {
 		t.Fatalf("unexpected latest release: %#v", payload.Release)
 	}
 

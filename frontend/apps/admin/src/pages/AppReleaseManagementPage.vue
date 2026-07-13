@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, Edit, Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
 
 import { api, type AppRelease } from '../api'
 
@@ -11,13 +11,18 @@ const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const items = ref<AppRelease[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
-const publishing = ref(false)
+const saving = ref(false)
+const deletingID = ref<number | null>(null)
+const editingRelease = ref<AppRelease | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const form = ref({
   version: '',
   releaseNotes: '',
 })
+
+const dialogTitle = computed(() => editingRelease.value ? '修改 APP 版本' : '发布新版本')
+const apkRequired = computed(() => editingRelease.value === null)
 
 onMounted(loadItems)
 
@@ -34,7 +39,18 @@ async function loadItems() {
 }
 
 function openPublish() {
+  editingRelease.value = null
   form.value = { version: '', releaseNotes: '' }
+  selectedFile.value = null
+  dialogVisible.value = true
+}
+
+function openEdit(release: AppRelease) {
+  editingRelease.value = release
+  form.value = {
+    version: release.version,
+    releaseNotes: release.releaseNotes,
+  }
   selectedFile.value = null
   dialogVisible.value = true
 }
@@ -59,14 +75,14 @@ function selectAPK(event: Event) {
   selectedFile.value = file
 }
 
-async function publishRelease() {
+async function saveRelease() {
   const version = form.value.version.trim()
   const releaseNotes = form.value.releaseNotes.trim()
   if (!versionPattern.test(version)) {
     ElMessage.warning('版本号格式应为 major.minor.patch，例如 1.1.0')
     return
   }
-  if (!selectedFile.value) {
+  if (apkRequired.value && !selectedFile.value) {
     ElMessage.warning('请上传 arm64-v8a 的 APK 文件')
     return
   }
@@ -75,20 +91,52 @@ async function publishRelease() {
     return
   }
 
-  publishing.value = true
+  saving.value = true
   try {
-    await api.publishAppRelease({
-      version,
-      releaseNotes,
-      file: selectedFile.value,
-    })
-    ElMessage.success(`BakaVip2 v${version} 发布成功`)
+    if (editingRelease.value) {
+      await api.updateAppRelease(editingRelease.value.id, {
+        version,
+        releaseNotes,
+        file: selectedFile.value,
+      })
+      ElMessage.success(`BakaVip2 v${version} 修改成功`)
+    } else {
+      await api.publishAppRelease({
+        version,
+        releaseNotes,
+        file: selectedFile.value!,
+      })
+      ElMessage.success(`BakaVip2 v${version} 发布成功`)
+    }
     dialogVisible.value = false
     await loadItems()
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '发布 APP 版本失败')
+    ElMessage.error(error instanceof Error ? error.message : '保存 APP 版本失败')
   } finally {
-    publishing.value = false
+    saving.value = false
+  }
+}
+
+async function deleteRelease(release: AppRelease) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除 BakaVip2 v${release.version} 吗？删除后该版本的 APK 将无法继续下载。`,
+      '删除 APP 版本',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    )
+    deletingID.value = release.id
+    await api.deleteAppRelease(release.id)
+    ElMessage.success(`BakaVip2 v${release.version} 已删除`)
+    await loadItems()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error instanceof Error ? error.message : '删除 APP 版本失败')
+  } finally {
+    deletingID.value = null
   }
 }
 
@@ -141,16 +189,28 @@ function formatDate(value: number) {
         <el-table-column width="190" label="发布时间">
           <template #default="{ row }">{{ formatDate(row.publishedAt) }}</template>
         </el-table-column>
+        <el-table-column width="170" label="操作" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" link :icon="Edit" @click="openEdit(row)">修改</el-button>
+            <el-button
+              type="danger"
+              link
+              :icon="Delete"
+              :loading="deletingID === row.id"
+              @click="deleteRelease(row)"
+            >删除</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
     <el-dialog
       v-model="dialogVisible"
-      title="发布新版本"
+      :title="dialogTitle"
       width="680px"
       destroy-on-close
-      :close-on-click-modal="!publishing"
-      :close-on-press-escape="!publishing"
+      :close-on-click-modal="!saving"
+      :close-on-press-escape="!saving"
     >
       <el-form label-position="top">
         <el-form-item label="版本号" required>
@@ -158,18 +218,24 @@ function formatDate(value: number) {
             v-model="form.version"
             maxlength="32"
             placeholder="例如 1.1.0"
-            :disabled="publishing"
+            :disabled="saving"
           />
           <p class="form-help">使用 major.minor.patch 格式；相同版本号不可重复发布。</p>
         </el-form-item>
 
-        <el-form-item label="arm64-v8a APK" required>
+        <el-form-item label="arm64-v8a APK" :required="apkRequired">
           <input ref="fileInput" class="native-file-input" type="file" accept=".apk,application/vnd.android.package-archive" @change="selectAPK" />
-          <button class="apk-picker" type="button" :disabled="publishing" @click="chooseAPK">
+          <button class="apk-picker" type="button" :disabled="saving" @click="chooseAPK">
             <el-icon><UploadFilled /></el-icon>
             <span>
-              <strong>{{ selectedFile?.name || '选择 APK 文件' }}</strong>
-              <small>{{ selectedFile ? formatBytes(selectedFile.size) : '仅支持 .apk，最大 256MiB' }}</small>
+              <strong>{{ selectedFile?.name || (apkRequired ? '选择 APK 文件' : '保留当前 APK 文件') }}</strong>
+              <small>
+                {{ selectedFile
+                  ? formatBytes(selectedFile.size)
+                  : apkRequired
+                    ? '仅支持 .apk，最大 256MiB'
+                    : '不选择文件时，仅修改版本号和更新日志' }}
+              </small>
             </span>
           </button>
         </el-form-item>
@@ -183,14 +249,16 @@ function formatDate(value: number) {
             show-word-limit
             resize="vertical"
             placeholder="例如：&#10;1. 新增 APP 更新提醒；&#10;2. 优化播放器体验；"
-            :disabled="publishing"
+            :disabled="saving"
           />
         </el-form-item>
       </el-form>
 
       <template #footer>
-        <el-button :disabled="publishing" @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="publishing" @click="publishRelease">确认发布</el-button>
+        <el-button :disabled="saving" @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="saveRelease">
+          {{ editingRelease ? '保存修改' : '确认发布' }}
+        </el-button>
       </template>
     </el-dialog>
   </section>
