@@ -229,7 +229,12 @@ async function scrollSelectedEpisodeIntoView(behavior: ScrollBehavior) {
     const rail = episodeRail.value
     const card = episodeCardRefs.get(key)
     if (!rail || !card) return
-    card.scrollIntoView({ behavior, block: 'nearest', inline: 'center' })
+
+    const railBounds = rail.getBoundingClientRect()
+    const cardBounds = card.getBoundingClientRect()
+    const target = rail.scrollLeft + cardBounds.left - railBounds.left - (rail.clientWidth - cardBounds.width) / 2
+    const maxScrollLeft = Math.max(rail.scrollWidth - rail.clientWidth, 0)
+    rail.scrollTo({ left: Math.max(0, Math.min(target, maxScrollLeft)), behavior })
   })
 }
 
