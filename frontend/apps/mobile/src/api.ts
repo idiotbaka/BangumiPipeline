@@ -94,6 +94,14 @@ export interface ViewerAnimeCharacter {
   actors: ViewerAnimeActor[]
 }
 
+export interface ViewerOPSkipSegment {
+  startSeconds: number
+  endSeconds: number
+  promptStartSeconds: number
+  promptEndSeconds: number
+  seekToSeconds: number
+}
+
 export interface ViewerDetailEpisode {
   key: string
   episodeId: number
@@ -108,6 +116,7 @@ export interface ViewerDetailEpisode {
   type: number
   hasMedia: boolean
   hasCover: boolean
+  opSkip: ViewerOPSkipSegment | null
 }
 
 export interface ViewerAnimeDetail {

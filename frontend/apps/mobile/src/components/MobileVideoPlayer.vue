@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
+import type { ViewerOPSkipSegment } from '../api'
 import fullscreenIcon from '../assets/fullscreen.svg?raw'
 import { enterNativeFullscreen, exitNativeFullscreen, setNativeKeepScreenOn } from '../native/player'
 
@@ -10,6 +11,7 @@ interface Props {
   poster: string
   title: string
   startTime: number
+  opSkip: ViewerOPSkipSegment | null
 }
 
 const props = defineProps<Props>()
@@ -31,6 +33,7 @@ const resumeApplied = ref(false)
 const hasPlayed = ref(false)
 const autoplayAttempted = ref(false)
 const nativeFullscreen = ref(false)
+const opSkipDismissed = ref(false)
 const seekGestureActive = ref(false)
 const seekGestureDelta = ref(0)
 const seekGestureTarget = ref(0)
@@ -69,14 +72,32 @@ const maxSeekGestureSeconds = 600
 
 const playerLoading = computed(() => Boolean(props.src) && !mediaReady.value && !errorMessage.value)
 const canControlPlayback = computed(() => Boolean(props.src) && mediaReady.value && !errorMessage.value)
+const activeOPSkip = computed(() => normalizeOPSkip(props.opSkip))
 const progressStyle = computed(() => {
   const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
   const buffered = duration.value > 0 ? (bufferedEnd.value / duration.value) * 100 : progress
+  const clampedProgress = clampPercent(progress)
+  const clampedBuffered = Math.max(clampedProgress, clampPercent(buffered))
+  const opStart =
+    activeOPSkip.value && duration.value > 0 ? clampPercent((activeOPSkip.value.startSeconds / duration.value) * 100) : 0
+  const opEnd =
+    activeOPSkip.value && duration.value > 0 ? clampPercent((activeOPSkip.value.endSeconds / duration.value) * 100) : 0
   return {
-    '--progress': `${clampPercent(progress)}%`,
-    '--buffered': `${Math.max(clampPercent(progress), clampPercent(buffered))}%`,
+    '--progress': `${clampedProgress}%`,
+    '--buffered': `${clampedBuffered}%`,
+    '--op-start': `${opStart}%`,
+    '--op-end': `${opEnd}%`,
   }
 })
+const withinOPSkipPrompt = computed(() => {
+  const segment = activeOPSkip.value
+  return Boolean(
+    segment &&
+      currentTime.value >= segment.promptStartSeconds &&
+      currentTime.value < segment.promptEndSeconds,
+  )
+})
+const opSkipVisible = computed(() => canControlPlayback.value && withinOPSkipPrompt.value && !opSkipDismissed.value)
 const seekGestureText = computed(() => {
   const prefix = seekGestureDelta.value >= 0 ? '+' : '-'
   return `${prefix}${formatDuration(Math.abs(seekGestureDelta.value))}`
@@ -92,6 +113,17 @@ watch(
     video.value?.load()
   },
 )
+
+watch(
+  () => props.opSkip,
+  () => {
+    opSkipDismissed.value = false
+  },
+)
+
+watch(withinOPSkipPrompt, (inside) => {
+  if (!inside) opSkipDismissed.value = false
+})
 
 window.addEventListener('popstate', handlePopState)
 
@@ -147,6 +179,7 @@ function resetMediaState() {
   resumeApplied.value = false
   hasPlayed.value = false
   autoplayAttempted.value = false
+  opSkipDismissed.value = false
   stopProgressTimer()
   stopBufferTimer()
   stopTapTimer()
@@ -516,6 +549,19 @@ function seek(event: Event) {
   updateBuffered()
 }
 
+function skipOP() {
+  const element = video.value
+  const segment = activeOPSkip.value
+  if (!element || !segment) return
+  const maxSeek = duration.value > 0 ? Math.max(duration.value - 0.1, 0) : segment.seekToSeconds
+  const target = Math.max(0, Math.min(segment.seekToSeconds, maxSeek))
+  opSkipDismissed.value = true
+  element.currentTime = target
+  currentTime.value = target
+  updateBuffered()
+  showControls()
+}
+
 async function toggleFullscreen() {
   if (nativeFullscreen.value) {
     await exitFullscreen()
@@ -583,6 +629,26 @@ function clampPercent(value: number) {
 function clampTime(value: number) {
   return Math.max(0, Math.min(duration.value || 0, value))
 }
+
+function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
+  if (!segment) return null
+  const startSeconds = Math.max(0, segment.startSeconds)
+  const endSeconds = Math.max(0, segment.endSeconds)
+  if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds <= startSeconds) return null
+  const fallbackPromptStart = Math.max(0, startSeconds - 2)
+  const fallbackSeekTo = Math.max(0, endSeconds - 2)
+  const promptStartSeconds = Number.isFinite(segment.promptStartSeconds)
+    ? Math.max(0, segment.promptStartSeconds)
+    : fallbackPromptStart
+  const seekToSeconds = Number.isFinite(segment.seekToSeconds)
+    ? Math.max(0, Math.min(segment.seekToSeconds, endSeconds))
+    : fallbackSeekTo
+  const promptEndSeconds = Number.isFinite(segment.promptEndSeconds)
+    ? Math.max(promptStartSeconds, Math.min(segment.promptEndSeconds, endSeconds))
+    : Math.max(promptStartSeconds, seekToSeconds)
+  if (promptEndSeconds <= promptStartSeconds) return null
+  return { startSeconds, endSeconds, promptStartSeconds, promptEndSeconds, seekToSeconds }
+}
 </script>
 
 <template>
@@ -639,6 +705,12 @@ function clampTime(value: number) {
       <span>{{ nativeFullscreen ? '正在播放' : 'BakaVip2' }}</span>
       <p>{{ title }}</p>
     </div>
+
+    <Transition name="op-skip">
+      <button v-if="opSkipVisible" class="op-skip-button" type="button" aria-label="跳过 OP" @click.stop="skipOP">
+        <span>跳过 OP</span>
+      </button>
+    </Transition>
 
     <div class="player-controls">
       <input
@@ -856,12 +928,19 @@ function clampTime(value: number) {
   height: 4px;
   display: block;
   appearance: none;
-  background: linear-gradient(
-    90deg,
-    var(--pink-500) 0 var(--progress),
-    rgba(142, 232, 242, 0.58) var(--progress) var(--buffered),
-    rgba(255, 255, 255, 0.3) var(--buffered) 100%
-  );
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0 var(--op-start),
+      rgba(255, 189, 77, 0.88) var(--op-start) var(--op-end),
+      transparent var(--op-end) 100%
+    ),
+    linear-gradient(
+      90deg,
+      var(--pink-500) 0 var(--progress),
+      rgba(142, 232, 242, 0.58) var(--progress) var(--buffered),
+      rgba(255, 255, 255, 0.3) var(--buffered) 100%
+    );
 }
 
 .timeline::-webkit-slider-thumb {
@@ -919,6 +998,46 @@ function clampTime(value: number) {
   fill: currentColor;
 }
 
+.op-skip-button {
+  position: absolute;
+  right: 12px;
+  bottom: 66px;
+  z-index: 5;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(54, 59, 68, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(8px);
+}
+
+.op-skip-button:active {
+  transform: scale(0.97);
+}
+
+.mobile-player.fullscreen .op-skip-button {
+  right: max(20px, env(safe-area-inset-right));
+  bottom: calc(76px + env(safe-area-inset-bottom));
+}
+
+.op-skip-enter-active,
+.op-skip-leave-active {
+  transition: opacity 160ms var(--ease-soft), transform 160ms var(--ease-soft);
+}
+
+.op-skip-enter-from,
+.op-skip-leave-to {
+  opacity: 0;
+  transform: translateY(7px);
+}
+
 .hidden-progress {
   position: absolute;
   right: 0;
@@ -928,7 +1047,19 @@ function clampTime(value: number) {
   height: 3px;
   pointer-events: none;
   opacity: 0;
-  background: linear-gradient(90deg, var(--pink-500) 0 var(--progress), rgba(142, 232, 242, 0.5) var(--progress) var(--buffered), transparent var(--buffered) 100%);
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0 var(--op-start),
+      rgba(255, 189, 77, 0.74) var(--op-start) var(--op-end),
+      transparent var(--op-end) 100%
+    ),
+    linear-gradient(
+      90deg,
+      var(--pink-500) 0 var(--progress),
+      rgba(142, 232, 242, 0.5) var(--progress) var(--buffered),
+      transparent var(--buffered) 100%
+    );
   transition: opacity 180ms var(--ease-soft);
 }
 
