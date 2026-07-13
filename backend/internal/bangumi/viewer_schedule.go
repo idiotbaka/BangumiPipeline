@@ -13,15 +13,16 @@ type ViewerSchedule struct {
 }
 
 type ViewerScheduleCard struct {
-	BangumiID          int64  `json:"bangumiId"`
-	Title              string `json:"title"`
-	AirDate            string `json:"airDate"`
-	AirWeekday         int    `json:"airWeekday"`
-	TotalEpisodes      int    `json:"totalEpisodes"`
-	HasCover           bool   `json:"hasCover"`
-	ImageStatus        string `json:"imageStatus"`
-	LatestEpisode      string `json:"latestEpisode"`
-	LatestEpisodeLabel string `json:"latestEpisodeLabel"`
+	BangumiID              int64  `json:"bangumiId"`
+	Title                  string `json:"title"`
+	AirDate                string `json:"airDate"`
+	AirWeekday             int    `json:"airWeekday"`
+	TotalEpisodes          int    `json:"totalEpisodes"`
+	HasCover               bool   `json:"hasCover"`
+	ImageStatus            string `json:"imageStatus"`
+	LatestEpisode          string `json:"latestEpisode"`
+	LatestEpisodeLabel     string `json:"latestEpisodeLabel"`
+	LatestEpisodeUpdatedAt *int64 `json:"latestEpisodeUpdatedAt"`
 }
 
 // ViewerSchedule returns every active anime carrying the exact Bangumi season
@@ -134,6 +135,7 @@ ORDER BY bangumi_id, id`, strings.Join(placeholders, ",")), args...)
 		index := indexByID[bangumiID]
 		items[index].LatestEpisode = episode.episodeNumber
 		items[index].LatestEpisodeLabel = viewerEpisodeLabel(episode)
+		items[index].LatestEpisodeUpdatedAt = ptrInt64(episode.updatedAt)
 	}
 	return nil
 }

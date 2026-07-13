@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { api, type ViewerSchedule, type ViewerScheduleCard } from '../api'
 import ParticleField from './ParticleField.vue'
@@ -26,14 +26,25 @@ const schedule = ref<ViewerSchedule | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
 const failedCovers = ref<Set<number>>(new Set())
+const relativeTimeNow = ref(Date.now())
 let requestID = 0
+let relativeTimeTimer: ReturnType<typeof setInterval> | null = null
 
 const seasonKey = computed(() => `${seasonYear.value.toString().padStart(4, '0')}-${seasonMonth.value.toString().padStart(2, '0')}`)
 const fallbackSeasonLabel = computed(() => `${seasonYear.value}年${seasonMonth.value}月`)
 const selectedDay = computed(() => weekdays.find((day) => day.value === selectedWeekday.value) ?? weekdays[0])
 const selectedItems = computed(() => itemsForDay(selectedWeekday.value))
 
-onMounted(() => void loadSchedule())
+onMounted(() => {
+  void loadSchedule()
+  relativeTimeTimer = setInterval(() => {
+    relativeTimeNow.value = Date.now()
+  }, 60_000)
+})
+
+onBeforeUnmount(() => {
+  if (relativeTimeTimer !== null) clearInterval(relativeTimeTimer)
+})
 
 function normalizedWeekday(value: number) {
   return value >= 1 && value <= 7 ? value : 8
@@ -106,6 +117,23 @@ function progressText(item: ViewerScheduleCard) {
   const status = availabilityStatus(item)
   if (status === 'unknown') return '开播时间未定'
   return status === 'not-aired' ? '尚未开播' : '尚未放流'
+}
+
+function scheduleCardMeta(item: ViewerScheduleCard) {
+  const updateAge = formatScheduleUpdateAge(item.latestEpisodeUpdatedAt)
+  return updateAge ? `于 ${updateAge} 更新` : formatAirDate(item.airDate)
+}
+
+function formatScheduleUpdateAge(value: number | null) {
+  if (!value) return ''
+  const elapsedSeconds = Math.max(Math.floor(relativeTimeNow.value / 1000) - value, 0)
+  const hourSeconds = 60 * 60
+  const daySeconds = 24 * hourSeconds
+  if (elapsedSeconds < hourSeconds) return '刚刚'
+  if (elapsedSeconds < daySeconds) return `${Math.floor(elapsedSeconds / hourSeconds)} 小时前`
+  if (elapsedSeconds > 30 * daySeconds) return ''
+  const days = Math.floor(elapsedSeconds / daySeconds)
+  return days === 1 ? '昨天' : `${days} 天前`
 }
 
 function availabilityStatus(item: ViewerScheduleCard) {
@@ -230,7 +258,7 @@ function stagger(index: number) {
             </div>
           </div>
           <h3 :title="item.title">{{ item.title }}</h3>
-          <p class="air-date"><i aria-hidden="true" />{{ formatAirDate(item.airDate) }}</p>
+          <p class="air-date"><i aria-hidden="true" />{{ scheduleCardMeta(item) }}</p>
         </article>
       </div>
     </div>

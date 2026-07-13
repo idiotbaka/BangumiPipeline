@@ -808,6 +808,26 @@ function scheduleProgress(item: ViewerScheduleCard) {
   return !Number.isNaN(premiere.getTime()) && premiere > today ? '尚未开播' : '尚未放流'
 }
 
+function schedulePageProgress(item: ViewerScheduleCard) {
+  if (!item.latestEpisodeLabel) {
+    return scheduleProgress(item)
+  }
+  const updateAge = formatScheduleUpdateAge(item.latestEpisodeUpdatedAt)
+  return updateAge ? `${updateAge}更新至${item.latestEpisodeLabel}` : `更新至 ${item.latestEpisodeLabel}`
+}
+
+function formatScheduleUpdateAge(value: number | null) {
+  if (!value) return ''
+  const elapsedSeconds = Math.max(Math.floor(relativeTimeNow.value / 1000) - value, 0)
+  const hourSeconds = 60 * 60
+  const daySeconds = 24 * hourSeconds
+  if (elapsedSeconds < hourSeconds) return '刚刚'
+  if (elapsedSeconds < daySeconds) return `${Math.floor(elapsedSeconds / hourSeconds)} 小时前`
+  if (elapsedSeconds > 30 * daySeconds) return ''
+  const days = Math.floor(elapsedSeconds / daySeconds)
+  return days === 1 ? '昨天' : `${days} 天前`
+}
+
 function totalEpisodesText(value: number) {
   return value > 0 ? `全 ${value} 话` : '话数未定'
 }
@@ -1194,7 +1214,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             <div>
               <p class="item-title">{{ item.title }}</p>
               <p>{{ formatAirDate(item.airDate) }} / {{ totalEpisodesText(item.totalEpisodes) }}</p>
-              <small>{{ scheduleProgress(item) }}</small>
+              <small>{{ schedulePageProgress(item) }}</small>
             </div>
           </article>
         </div>

@@ -56,6 +56,7 @@ export interface ViewerScheduleCard {
   imageStatus: string
   latestEpisode: string
   latestEpisodeLabel: string
+  latestEpisodeUpdatedAt: number | null
 }
 
 export interface ViewerSchedule {
