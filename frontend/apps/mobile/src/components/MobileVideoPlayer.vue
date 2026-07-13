@@ -54,6 +54,7 @@ let seekGesture:
       startX: number
       startY: number
       startTime: number
+      controlsVisibleAtStart: boolean
       canSeek: boolean
       tracking: boolean
       moved: boolean
@@ -283,6 +284,7 @@ function handlePointerDown(event: PointerEvent) {
     startX: event.clientX,
     startY: event.clientY,
     startTime: currentTime.value,
+    controlsVisibleAtStart: controlsVisible.value,
     canSeek: canStartSeekGesture(event),
     tracking: false,
     moved: false,
@@ -330,12 +332,13 @@ function handlePointerUp(event: PointerEvent) {
   if (seekGesture.tracking && Math.abs(seekGestureDelta.value) >= 5) {
     applySeekGesture()
   }
+  const controlsVisibleAtStart = seekGesture.controlsVisibleAtStart
   const shouldHandleTap = !seekGesture.tracking && !seekGesture.moved && !isInteractiveTarget(event.target)
   releaseGesturePointerCapture(event.pointerId)
   seekGesture = null
   resetSeekGesturePreview()
   if (shouldHandleTap) {
-    handlePlayerTap(event)
+    handlePlayerTap(event, controlsVisibleAtStart)
   }
 }
 
@@ -402,7 +405,7 @@ function resetSeekGesturePreview() {
   seekGestureTarget.value = currentTime.value
 }
 
-function handlePlayerTap(event: PointerEvent) {
+function handlePlayerTap(event: PointerEvent, controlsVisibleAtStart: boolean) {
   if (playerLoading.value || errorMessage.value || buffering.value) {
     showControls()
     return
@@ -425,14 +428,14 @@ function handlePlayerTap(event: PointerEvent) {
   lastTap = { time: now, x: event.clientX, y: event.clientY }
   stopTapTimer()
   tapTimer = window.setTimeout(() => {
-    toggleControls()
+    applySingleTap(controlsVisibleAtStart)
     lastTap = null
     tapTimer = null
   }, doubleTapDelay)
 }
 
-function toggleControls() {
-  if (controlsVisible.value) {
+function applySingleTap(controlsWereVisible: boolean) {
+  if (controlsWereVisible) {
     controlsVisible.value = false
     stopControlsTimer()
     return
