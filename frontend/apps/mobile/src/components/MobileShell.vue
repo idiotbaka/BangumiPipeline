@@ -1533,6 +1533,13 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 .mobile-shell {
   --shell-topbar-height: calc(62px + env(safe-area-inset-top));
   --mobile-topbar-height: var(--shell-topbar-height);
+  --page-slide-duration: 260ms;
+  --page-slide-easing: cubic-bezier(0.2, 0.82, 0.2, 1);
+  --page-slide-fade-duration: 220ms;
+  --page-slide-forward-enter-x: 100%;
+  --page-slide-forward-leave-x: -100%;
+  --page-slide-back-enter-x: -100%;
+  --page-slide-back-leave-x: 100%;
   min-height: 100vh;
   min-height: 100dvh;
   overflow-x: hidden;
@@ -1567,8 +1574,8 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 .topbar-slide-back-enter-active,
 .topbar-slide-back-leave-active {
   transition:
-    transform 260ms cubic-bezier(0.2, 0.82, 0.2, 1),
-    opacity 220ms var(--ease-out);
+    transform var(--page-slide-duration) var(--page-slide-easing),
+    opacity var(--page-slide-fade-duration) var(--ease-out);
   will-change: transform, opacity;
 }
 
@@ -1585,22 +1592,22 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 .topbar-slide-forward-enter-from {
   opacity: 0.72;
-  transform: translate3d(100%, 0, 0);
+  transform: translate3d(var(--page-slide-forward-enter-x), 0, 0);
 }
 
 .topbar-slide-forward-leave-to {
   opacity: 0.5;
-  transform: translate3d(-24%, 0, 0);
+  transform: translate3d(var(--page-slide-forward-leave-x), 0, 0);
 }
 
 .topbar-slide-back-enter-from {
   opacity: 0.72;
-  transform: translate3d(-32%, 0, 0);
+  transform: translate3d(var(--page-slide-back-enter-x), 0, 0);
 }
 
 .topbar-slide-back-leave-to {
   opacity: 0.5;
-  transform: translate3d(100%, 0, 0);
+  transform: translate3d(var(--page-slide-back-leave-x), 0, 0);
 }
 
 .brand-mini {
@@ -1771,8 +1778,8 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 .page-slide-back-enter-active,
 .page-slide-back-leave-active {
   transition:
-    transform 260ms cubic-bezier(0.2, 0.82, 0.2, 1),
-    opacity 220ms var(--ease-out);
+    transform var(--page-slide-duration) var(--page-slide-easing),
+    opacity var(--page-slide-fade-duration) var(--ease-out);
   will-change: transform, opacity;
 }
 
@@ -1792,24 +1799,29 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   z-index: 2;
 }
 
+/*
+ * Entering and leaving surfaces must travel complementary full widths.
+ * Short parallax distances make the transparent page layers overlap and
+ * leave the previous view visible until Vue removes its transition node.
+ */
 .page-slide-forward-enter-from {
   opacity: 0.72;
-  transform: translate3d(100%, 0, 0);
+  transform: translate3d(var(--page-slide-forward-enter-x), 0, 0);
 }
 
 .page-slide-forward-leave-to {
   opacity: 0.5;
-  transform: translate3d(-24%, 0, 0);
+  transform: translate3d(var(--page-slide-forward-leave-x), 0, 0);
 }
 
 .page-slide-back-enter-from {
   opacity: 0.72;
-  transform: translate3d(-32%, 0, 0);
+  transform: translate3d(var(--page-slide-back-enter-x), 0, 0);
 }
 
 .page-slide-back-leave-to {
   opacity: 0.5;
-  transform: translate3d(100%, 0, 0);
+  transform: translate3d(var(--page-slide-back-leave-x), 0, 0);
 }
 
 .route-mode .app-page {
