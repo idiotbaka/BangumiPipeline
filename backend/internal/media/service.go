@@ -70,6 +70,7 @@ type Config struct {
 	DownloadCleaner    DownloadCleaner
 	MetadataRefresher  MetadataRefresher
 	CompletionNotifier CompletionNotifier
+	CommentEnqueuer    EpisodeCommentEnqueuer
 }
 
 type DownloadCleaner interface {
@@ -88,6 +89,10 @@ type CompletionNotifier interface {
 	NotifyMediaCompleted(context.Context, int64, int64) error
 }
 
+type EpisodeCommentEnqueuer interface {
+	EnqueueMediaCompleted(context.Context, int64, int64) error
+}
+
 type Service struct {
 	db                 *sql.DB
 	logger             *slog.Logger
@@ -97,6 +102,7 @@ type Service struct {
 	cleaner            DownloadCleaner
 	metadataRefresher  MetadataRefresher
 	completionNotifier CompletionNotifier
+	commentEnqueuer    EpisodeCommentEnqueuer
 	now                func() time.Time
 	storageMu          sync.Mutex
 }
@@ -339,7 +345,8 @@ func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
 		db: db, logger: logger, mediaDir: mediaDir,
 		ffmpegPath: ffmpegPath, ffprobePath: ffprobePath,
 		cleaner: config.DownloadCleaner, metadataRefresher: config.MetadataRefresher,
-		completionNotifier: config.CompletionNotifier, now: time.Now,
+		completionNotifier: config.CompletionNotifier, commentEnqueuer: config.CommentEnqueuer,
+		now: time.Now,
 	}
 }
 
@@ -1508,6 +1515,7 @@ func (s *Service) processPlannedJob(ctx context.Context, job plannedJob) (proces
 	if err := s.markCompleted(ctx, job.ID); err != nil {
 		return result, err
 	}
+	s.enqueueEpisodeComments(ctx, job.ID, job.BangumiID)
 	if s.completionNotifier != nil {
 		if err := s.completionNotifier.NotifyMediaCompleted(ctx, job.ID, job.BangumiID); err != nil {
 			s.logger.Warn("创建观看端新集通知失败", "source", "media", "media_job_id", job.ID, "error", err)
@@ -1523,6 +1531,19 @@ func (s *Service) processPlannedJob(ctx context.Context, job plannedJob) (proces
 	s.refreshAnimeMetadataOncePerDay(ctx, job.BangumiID)
 	s.logger.Info("媒体处理成功", "source", "media", "media_job_id", job.ID, "action", plan.action, "output_file", filepath.Base(plan.outputPath))
 	return result, nil
+}
+
+func (s *Service) enqueueEpisodeComments(ctx context.Context, mediaJobID, bangumiID int64) {
+	if s.commentEnqueuer == nil {
+		return
+	}
+	if err := s.commentEnqueuer.EnqueueMediaCompleted(ctx, mediaJobID, bangumiID); err != nil {
+		s.logger.Warn("媒体处理完成后加入 Bangumi 剧集吐槽同步队列失败", "source", "media",
+			"media_job_id", mediaJobID, "bangumi_id", bangumiID, "error", err)
+		return
+	}
+	s.logger.Info("媒体处理完成后已加入 Bangumi 剧集吐槽同步队列", "source", "media",
+		"media_job_id", mediaJobID, "bangumi_id", bangumiID)
 }
 
 func (s *Service) cleanupDownload(ctx context.Context, job pendingJob) error {

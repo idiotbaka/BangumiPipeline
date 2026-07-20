@@ -46,6 +46,7 @@ docker compose up --build
 | `BP_VIEWER_WEB_DIR` | `./frontend/apps/viewer/dist` | 观看端静态文件目录 |
 | `BP_COVER_DIR` | `./data/images/bangumi` | Bangumi 大图与角色/声优图片保存目录 |
 | `BP_BANGUMI_API_URL` | `https://api.bgm.tv` | Bangumi API 地址 |
+| `BP_BANGUMI_NEXT_API_URL` | `https://next.bgm.tv` | Bangumi 新版站点 API 地址，用于抓取剧集吐槽 |
 | `BP_BANGUMI_USER_AGENT` | 项目默认值 | Bangumi API 请求 User-Agent，部署时应覆盖 |
 | `BP_WEB_PUSH_CONTACT_EMAIL` | `noreply@localhost` | Web Push VAPID 联系邮箱，可按部署域名修改 |
 | `BP_COOKIE_SECURE` | `false` | 是否仅通过 HTTPS 发送登录 Cookie |

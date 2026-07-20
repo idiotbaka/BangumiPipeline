@@ -64,6 +64,7 @@ Dockerfile                多阶段生产构建
 - `download-bound-episodes`
 - `process-downloaded-media`
 - `translate-anime-metadata`
+- `sync-bangumi-episode-comments`
 
 ## 配置
 
@@ -80,6 +81,7 @@ Dockerfile                多阶段生产构建
 - `BP_FFMPEG_PATH`，默认 `ffmpeg`
 - `BP_FFPROBE_PATH`，默认 `ffprobe`
 - `BP_BANGUMI_API_URL`
+- `BP_BANGUMI_NEXT_API_URL`，默认 `https://next.bgm.tv`
 - `BP_BANGUMI_USER_AGENT`
 - `BP_COOKIE_SECURE`
 
@@ -119,6 +121,8 @@ SQLite 是唯一事实源。打开逻辑在 `backend/internal/database/database.
 - `anime_aliases`、`anime_tags`：别名与标签。
 - `anime_characters`、`actors`、`character_actors`：角色、声优、关联。
 - `anime_episodes`：分集元数据。
+- `bangumi_episode_comment_sync`：按 Bangumi episode ID 记录吐槽抓取里程碑、重试和历史回填状态。
+- `bangumi_episode_comments`：剧集吐槽及楼中楼回复快照，保留用户、头像、签名、reactions 和原始 JSON。
 - `bangumi_custom_search_settings`：Bangumi 自定义标签抓取设置。
 - `subscription_settings`、`subscription_items`、`subscription_title_rules`：RSS、匹配、绑定、标题记忆。
 - `download_settings`、`download_jobs`：qBittorrent 设置与下载状态。
@@ -151,6 +155,7 @@ SQLite 是唯一事实源。打开逻辑在 `backend/internal/database/database.
 - `download-bound-episodes`：下载番剧，默认 1 分钟，默认关闭。
 - `process-downloaded-media`：处理和转码已下载完成的视频，默认 1 分钟，默认关闭。
 - `translate-anime-metadata`：翻译新番元数据，默认 1 分钟，默认关闭。
+- `sync-bangumi-episode-comments`：同步已有成品话数的 Bangumi 吐槽，默认 1 分钟，默认开启。
 
 ## Bangumi 元数据
 
@@ -167,6 +172,9 @@ SQLite 是唯一事实源。打开逻辑在 `backend/internal/database/database.
 - Subject API 补全简介、Tags、别名、话数、Infobox、Rating、Collection、Meta Tags。
 - Characters API 补全角色和声优。
 - Episodes API `GET /v0/episodes?subject_id={bangumi_id}` 补全分集。
+- 剧集吐槽使用 `GET https://next.bgm.tv/p1/episodes/{episode_id}/comments`，由独立计划任务串行同步。
+- 某话成品首次完成后立即入队，并在成品完成后的 2 小时、12 小时、24 小时、3 天和 7 天更新；超过 7 天且从未抓取的历史成品只兜底抓取一次。
+- 吐槽正文按接口原文保存，不在后端解释 `(bgm38)`、`[s]`、`[mask]`、`[img]` 等内容标记。
 
 刷新行为：
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -107,6 +108,45 @@ VALUES (?, ?, ?, ?, ?)`, 1001, "https://bgm.tv/subject/1001", "Original Anime", 
 	service.refreshAnimeMetadataOncePerDay(ctx, 1001)
 	if len(refresher.ids) != 2 || refresher.ids[1] != 1001 {
 		t.Fatalf("expected another refresh on next day, got %+v", refresher.ids)
+	}
+}
+
+func TestCompletedMediaEnqueuesEpisodeCommentsWithoutRollingBackOnQueueError(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	jobID := insertPlannedPendingMediaJob(t, ctx, db, 2002, "01", "copy", false, now)
+	sourcePath := filepath.Join(t.TempDir(), "source.mp4")
+	writeTestFile(t, sourcePath)
+	outputPath := filepath.Join(t.TempDir(), "output.mp4")
+	recorder := &commentEnqueueRecorder{err: errors.New("queue unavailable")}
+	service := NewService(db, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{
+		MediaDir:        t.TempDir(),
+		FFprobePath:     "missing-ffprobe-for-comment-enqueue-test",
+		CommentEnqueuer: recorder,
+	})
+	service.now = func() time.Time { return now }
+	_, err = service.processPlannedJob(ctx, plannedJob{
+		pendingJob: pendingJob{ID: jobID, BangumiID: 2002},
+		plan: mediaPlan{
+			action: "copy", sourcePath: sourcePath, outputPath: outputPath,
+			videoCodec: "h264", audioCodec: "aac",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.calls) != 1 || recorder.calls[0].mediaJobID != jobID || recorder.calls[0].bangumiID != 2002 {
+		t.Fatalf("unexpected comment enqueue calls: %+v", recorder.calls)
+	}
+	assertMediaJobStatus(t, ctx, db, jobID, StatusCompleted)
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("expected completed output despite queue failure: %v", err)
 	}
 }
 
@@ -400,6 +440,21 @@ func TestFFmpegArgsUseSelectedInternalSubtitleIndex(t *testing.T) {
 
 type metadataRefreshRecorder struct {
 	ids []int64
+}
+
+type commentEnqueueCall struct {
+	mediaJobID int64
+	bangumiID  int64
+}
+
+type commentEnqueueRecorder struct {
+	calls []commentEnqueueCall
+	err   error
+}
+
+func (r *commentEnqueueRecorder) EnqueueMediaCompleted(_ context.Context, mediaJobID, bangumiID int64) error {
+	r.calls = append(r.calls, commentEnqueueCall{mediaJobID: mediaJobID, bangumiID: bangumiID})
+	return r.err
 }
 
 func (r *metadataRefreshRecorder) RefreshSubject(_ context.Context, bangumiID int64) error {

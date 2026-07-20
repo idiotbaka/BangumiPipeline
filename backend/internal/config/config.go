@@ -18,6 +18,7 @@ type Config struct {
 	FFmpegPath          string
 	FFprobePath         string
 	BangumiAPIURL       string
+	BangumiNextAPIURL   string
 	BangumiUserAgent    string
 	WebPushContactEmail string
 	CookieSecure        bool
@@ -39,6 +40,7 @@ func Load() Config {
 		FFmpegPath:          getenvAny([]string{"BP_FFMPEG_PATH", "AB_FFMPEG_PATH"}, "ffmpeg"),
 		FFprobePath:         getenvAny([]string{"BP_FFPROBE_PATH", "AB_FFPROBE_PATH"}, "ffprobe"),
 		BangumiAPIURL:       getenvAny([]string{"BP_BANGUMI_API_URL", "AB_BANGUMI_API_URL"}, "https://api.bgm.tv"),
+		BangumiNextAPIURL:   getenvAny([]string{"BP_BANGUMI_NEXT_API_URL"}, "https://next.bgm.tv"),
 		BangumiUserAgent:    getenvAny([]string{"BP_BANGUMI_USER_AGENT", "AB_BANGUMI_USER_AGENT"}, "private-user/BangumiPipeline/0.1 (private deployment)"),
 		WebPushContactEmail: getenvAny([]string{"BP_WEB_PUSH_CONTACT_EMAIL", "AB_WEB_PUSH_CONTACT_EMAIL"}, "noreply@localhost"),
 		CookieSecure:        getenvBoolAny([]string{"BP_COOKIE_SECURE", "AB_COOKIE_SECURE"}, false),

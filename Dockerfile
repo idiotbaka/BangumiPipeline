@@ -26,7 +26,8 @@ ENV BP_ADMIN_ADDR=:8080 \
     BP_ADMIN_WEB_DIR=/app/frontend/apps/admin/dist \
     BP_VIEWER_WEB_DIR=/app/frontend/apps/viewer/dist \
     BP_COVER_DIR=/app/data/images/bangumi \
-    BP_BANGUMI_API_URL=https://api.bgm.tv
+    BP_BANGUMI_API_URL=https://api.bgm.tv \
+    BP_BANGUMI_NEXT_API_URL=https://next.bgm.tv
 EXPOSE 8080 8090
 USER bangumipipeline
 ENTRYPOINT ["/app/bangumi-pipeline"]

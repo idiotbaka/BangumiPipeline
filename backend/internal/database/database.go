@@ -251,6 +251,62 @@ CREATE TABLE IF NOT EXISTS anime_episodes (
 
 CREATE INDEX IF NOT EXISTS idx_anime_episodes_bangumi_sort ON anime_episodes(bangumi_id, type, sort_number, episode_id);
 
+CREATE TABLE IF NOT EXISTS bangumi_episode_comment_sync (
+    episode_id          INTEGER PRIMARY KEY,
+    bangumi_id          INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    anchor_media_job_id INTEGER REFERENCES media_jobs(id) ON DELETE SET NULL,
+    anchor_at           INTEGER NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'not_found')),
+    next_stage          INTEGER NOT NULL DEFAULT 0 CHECK (next_stage BETWEEN 0 AND 6),
+    next_fetch_at       INTEGER,
+    last_fetched_at     INTEGER,
+    last_comment_count  INTEGER NOT NULL DEFAULT 0,
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    last_error          TEXT NOT NULL DEFAULT '',
+    is_backfill         INTEGER NOT NULL DEFAULT 0 CHECK (is_backfill IN (0, 1)),
+    completed_at        INTEGER,
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL,
+    UNIQUE (bangumi_id, episode_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comment_sync_due
+ON bangumi_episode_comment_sync(status, next_fetch_at, is_backfill, episode_id);
+
+CREATE TABLE IF NOT EXISTS bangumi_episode_comments (
+    bangumi_id        INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    episode_id        INTEGER NOT NULL,
+    comment_id        INTEGER NOT NULL,
+    parent_comment_id INTEGER NOT NULL DEFAULT 0,
+    main_id           INTEGER NOT NULL,
+    creator_id        INTEGER NOT NULL DEFAULT 0,
+    related_id        INTEGER NOT NULL DEFAULT 0,
+    source_created_at INTEGER NOT NULL DEFAULT 0,
+    content           TEXT NOT NULL DEFAULT '',
+    state             INTEGER NOT NULL DEFAULT 0,
+    depth             INTEGER NOT NULL DEFAULT 0,
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    user_id           INTEGER NOT NULL DEFAULT 0,
+    username          TEXT NOT NULL DEFAULT '',
+    nickname          TEXT NOT NULL DEFAULT '',
+    avatar_small_url  TEXT NOT NULL DEFAULT '',
+    avatar_medium_url TEXT NOT NULL DEFAULT '',
+    avatar_large_url  TEXT NOT NULL DEFAULT '',
+    user_group        INTEGER NOT NULL DEFAULT 0,
+    user_sign         TEXT NOT NULL DEFAULT '',
+    user_joined_at    INTEGER NOT NULL DEFAULT 0,
+    reactions_json    TEXT NOT NULL DEFAULT '[]',
+    raw_json          TEXT NOT NULL DEFAULT '{}',
+    fetched_at        INTEGER NOT NULL,
+    PRIMARY KEY (episode_id, comment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comments_order
+ON bangumi_episode_comments(episode_id, depth, sort_order, comment_id);
+
+CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comments_parent
+ON bangumi_episode_comments(episode_id, parent_comment_id, sort_order, comment_id);
+
 CREATE TABLE IF NOT EXISTS bangumi_custom_search_settings (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
     tags_json  TEXT NOT NULL DEFAULT '[]',
@@ -1114,6 +1170,80 @@ ON viewer_app_releases(version_major DESC, version_minor DESC, version_patch DES
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (30, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 30 migration: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS bangumi_episode_comment_sync (
+    episode_id          INTEGER PRIMARY KEY,
+    bangumi_id          INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    anchor_media_job_id INTEGER REFERENCES media_jobs(id) ON DELETE SET NULL,
+    anchor_at           INTEGER NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'not_found')),
+    next_stage          INTEGER NOT NULL DEFAULT 0 CHECK (next_stage BETWEEN 0 AND 6),
+    next_fetch_at       INTEGER,
+    last_fetched_at     INTEGER,
+    last_comment_count  INTEGER NOT NULL DEFAULT 0,
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    last_error          TEXT NOT NULL DEFAULT '',
+    is_backfill         INTEGER NOT NULL DEFAULT 0 CHECK (is_backfill IN (0, 1)),
+    completed_at        INTEGER,
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL,
+    UNIQUE (bangumi_id, episode_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comment_sync_due
+ON bangumi_episode_comment_sync(status, next_fetch_at, is_backfill, episode_id);
+
+CREATE TABLE IF NOT EXISTS bangumi_episode_comments (
+    bangumi_id        INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    episode_id        INTEGER NOT NULL,
+    comment_id        INTEGER NOT NULL,
+    parent_comment_id INTEGER NOT NULL DEFAULT 0,
+    main_id           INTEGER NOT NULL,
+    creator_id        INTEGER NOT NULL DEFAULT 0,
+    related_id        INTEGER NOT NULL DEFAULT 0,
+    source_created_at INTEGER NOT NULL DEFAULT 0,
+    content           TEXT NOT NULL DEFAULT '',
+    state             INTEGER NOT NULL DEFAULT 0,
+    depth             INTEGER NOT NULL DEFAULT 0,
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    user_id           INTEGER NOT NULL DEFAULT 0,
+    username          TEXT NOT NULL DEFAULT '',
+    nickname          TEXT NOT NULL DEFAULT '',
+    avatar_small_url  TEXT NOT NULL DEFAULT '',
+    avatar_medium_url TEXT NOT NULL DEFAULT '',
+    avatar_large_url  TEXT NOT NULL DEFAULT '',
+    user_group        INTEGER NOT NULL DEFAULT 0,
+    user_sign         TEXT NOT NULL DEFAULT '',
+    user_joined_at    INTEGER NOT NULL DEFAULT 0,
+    reactions_json    TEXT NOT NULL DEFAULT '[]',
+    raw_json          TEXT NOT NULL DEFAULT '{}',
+    fetched_at        INTEGER NOT NULL,
+    PRIMARY KEY (episode_id, comment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comments_order
+ON bangumi_episode_comments(episode_id, depth, sort_order, comment_id);
+
+CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comments_parent
+ON bangumi_episode_comments(episode_id, parent_comment_id, sort_order, comment_id);
+
+INSERT OR IGNORE INTO scheduled_tasks(
+    task_key, name, description, schedule, enabled, interval_minutes, created_at, updated_at
+) VALUES (
+    'sync-bangumi-episode-comments',
+    '同步 Bangumi 剧集吐槽',
+    '在成品视频生成后按固定时间节点同步 Bangumi 剧集吐槽，并为历史成品补抓一次。',
+    'interval',
+    1,
+    1,
+    unixepoch(),
+    unixepoch()
+);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (31, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 31 migration: %w", err)
 	}
 	return nil
 }

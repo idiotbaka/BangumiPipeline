@@ -59,15 +59,23 @@ func run(logger *slog.Logger) error {
 	}
 	viewerPushService := viewer.NewPushService(db, logger, cfg.WebPushContactEmail)
 	systemService := system.NewService(db)
+	bangumiRequestLimiter := bangumi.NewRequestLimiter(2 * time.Second)
 	metadataSyncer := bangumi.NewSyncer(db, systemService, logger, bangumi.SyncerConfig{
 		APIBaseURL: cfg.BangumiAPIURL, UserAgent: cfg.BangumiUserAgent, CoverDir: cfg.CoverDir,
 		FFmpegPath: cfg.FFmpegPath, APIInterval: 2 * time.Second, RequestTimeout: 20 * time.Second,
+		RequestLimiter: bangumiRequestLimiter,
+	})
+	episodeCommentSyncer := bangumi.NewEpisodeCommentSyncer(db, systemService, logger, bangumi.EpisodeCommentSyncerConfig{
+		APIBaseURL: cfg.BangumiNextAPIURL, UserAgent: cfg.BangumiUserAgent,
+		APIInterval: 2 * time.Second, RequestTimeout: 20 * time.Second,
+		RequestLimiter: bangumiRequestLimiter,
 	})
 	subscriptionService := subscription.NewService(db, systemService, logger)
 	downloadService := download.NewService(db, systemService, logger, download.Config{DownloadDir: cfg.DownloadDir})
 	mediaService := media.NewService(db, logger, media.Config{
 		MediaDir: cfg.MediaDir, FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
 		DownloadCleaner: downloadService, MetadataRefresher: metadataSyncer, CompletionNotifier: viewerPushService,
+		CommentEnqueuer: episodeCommentSyncer,
 	})
 	opSkipService := opskip.NewService(db, logger, opskip.Config{
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
@@ -76,6 +84,7 @@ func run(logger *slog.Logger) error {
 	translationService := translation.NewService(db, systemService, logger)
 	scheduler := system.NewScheduler(systemService, logger, cfg.SchedulerPoll)
 	scheduler.Register("bangumi-season-metadata", metadataSyncer)
+	scheduler.Register(bangumi.EpisodeCommentTaskKey, episodeCommentSyncer)
 	scheduler.Register(subscription.TaskKey, subscriptionService)
 	scheduler.Register(download.TaskKey, downloadService)
 	scheduler.Register(media.TaskKey, mediaService)

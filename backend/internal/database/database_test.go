@@ -303,6 +303,40 @@ SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 28)`).Scan(&applie
 	}
 }
 
+func TestVersion31MigrationAddsEpisodeCommentTablesAndTask(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	assertTableExists(t, db, "bangumi_episode_comment_sync")
+	assertTableExists(t, db, "bangumi_episode_comments")
+
+	var name string
+	var interval int
+	var enabled bool
+	if err := db.QueryRowContext(ctx, `
+SELECT name, interval_minutes, enabled
+FROM scheduled_tasks
+WHERE task_key = 'sync-bangumi-episode-comments'`).Scan(&name, &interval, &enabled); err != nil {
+		t.Fatal(err)
+	}
+	if name != "同步 Bangumi 剧集吐槽" || interval != 1 || !enabled {
+		t.Fatalf("unexpected episode comment task seed: name=%q interval=%d enabled=%v", name, interval, enabled)
+	}
+	var applied bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 31)`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("expected version 31 migration to be recorded")
+	}
+}
+
 func assertTableExists(t *testing.T, db *sql.DB, table string) {
 	t.Helper()
 	var exists bool

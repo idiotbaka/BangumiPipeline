@@ -30,26 +30,41 @@ const (
 	imageOutputFileType = ".jpg"
 )
 
+type apiHTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *apiHTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Body)
+}
+
 type apiClient struct {
 	httpClient *http.Client
 	baseURL    string
 	userAgent  string
 	ffmpegPath string
 	logger     *slog.Logger
-	limiter    *apiLimiter
+	limiter    *RequestLimiter
 }
 
-type apiLimiter struct {
+// RequestLimiter serializes requests shared by Bangumi-backed services.
+// A single instance should be reused for api.bgm.tv and next.bgm.tv so
+// independently scheduled tasks cannot bypass the project-wide request gap.
+type RequestLimiter struct {
 	mu          sync.Mutex
 	nextRequest time.Time
 	interval    time.Duration
 }
 
-func newAPILimiter(interval time.Duration) *apiLimiter {
-	return &apiLimiter{interval: interval}
+func NewRequestLimiter(interval time.Duration) *RequestLimiter {
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	return &RequestLimiter{interval: interval}
 }
 
-func newAPIClient(settings system.NetworkSettings, config SyncerConfig, logger *slog.Logger, limiter *apiLimiter) (*apiClient, error) {
+func newAPIClient(settings system.NetworkSettings, config SyncerConfig, logger *slog.Logger, limiter *RequestLimiter) (*apiClient, error) {
 	httpProxy, err := parseOptionalURL(settings.HTTPProxy)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 代理配置无效: %w", err)
@@ -99,7 +114,7 @@ func (c *apiClient) getJSON(ctx context.Context, path string, target any) error 
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
-		err := fmt.Errorf("HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		err := &apiHTTPError{StatusCode: response.StatusCode, Body: strings.TrimSpace(string(body))}
 		c.logger.Error("API 抓取失败", "source", "bangumi", "endpoint", path, "error", err)
 		return err
 	}
@@ -137,7 +152,7 @@ func (c *apiClient) postJSON(ctx context.Context, path string, payload, target a
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
-		err := fmt.Errorf("HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		err := &apiHTTPError{StatusCode: response.StatusCode, Body: strings.TrimSpace(string(body))}
 		c.logger.Error("API 抓取失败", "source", "bangumi", "endpoint", path, "error", err)
 		return err
 	}
@@ -156,7 +171,7 @@ func (c *apiClient) waitForAPISlot(ctx context.Context) error {
 	return c.limiter.wait(ctx)
 }
 
-func (l *apiLimiter) wait(ctx context.Context) error {
+func (l *RequestLimiter) wait(ctx context.Context) error {
 	l.mu.Lock()
 	slot := time.Now()
 	if l.nextRequest.After(slot) {

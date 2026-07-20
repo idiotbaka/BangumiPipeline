@@ -31,6 +31,7 @@ type SyncerConfig struct {
 	FFmpegPath     string
 	APIInterval    time.Duration
 	RequestTimeout time.Duration
+	RequestLimiter *RequestLimiter
 }
 
 type Syncer struct {
@@ -38,7 +39,7 @@ type Syncer struct {
 	settings SettingsProvider
 	logger   *slog.Logger
 	config   SyncerConfig
-	limiter  *apiLimiter
+	limiter  *RequestLimiter
 	now      func() time.Time
 }
 
@@ -52,9 +53,13 @@ func NewSyncer(db *sql.DB, settings SettingsProvider, logger *slog.Logger, confi
 	if strings.TrimSpace(config.FFmpegPath) == "" {
 		config.FFmpegPath = "ffmpeg"
 	}
+	limiter := config.RequestLimiter
+	if limiter == nil {
+		limiter = NewRequestLimiter(config.APIInterval)
+	}
 	return &Syncer{
 		db: db, settings: settings, logger: logger, config: config,
-		limiter: newAPILimiter(config.APIInterval), now: time.Now,
+		limiter: limiter, now: time.Now,
 	}
 }
 
