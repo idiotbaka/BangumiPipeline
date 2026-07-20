@@ -2,12 +2,13 @@ package applog
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"bangumipipeline.local/server/internal/database"
 )
 
 const MaxInitialEntries = 1000
@@ -26,14 +27,14 @@ type Entry struct {
 }
 
 type Service struct {
-	db *sql.DB
+	db database.Executor
 
 	mu          sync.RWMutex
 	nextID      int
 	subscribers map[int]chan Entry
 }
 
-func NewService(db *sql.DB) *Service {
+func NewService(db database.Executor) *Service {
 	return &Service{db: db, subscribers: make(map[int]chan Entry)}
 }
 

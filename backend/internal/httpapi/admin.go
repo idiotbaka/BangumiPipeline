@@ -127,7 +127,7 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 		writeError(w, http.StatusNotFound, "not_found", "API endpoint not found")
 	})
 	mux.Handle("/", SPA(webDir))
-	return CommonMiddleware(logger, mux)
+	return CommonMiddleware(logger, adminDatabaseReadWorkload(mux))
 }
 
 type dashboardOverview struct {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"bangumipipeline.local/server/internal/bangumi"
+	"bangumipipeline.local/server/internal/database"
 	"bangumipipeline.local/server/internal/viewer"
 )
 
@@ -70,7 +71,7 @@ func NewViewerHandler(authService *viewer.Service, pushService *viewer.PushServi
 		writeError(w, http.StatusNotFound, "not_found", "API endpoint not found")
 	})
 	mux.Handle("/", SPA(webDir))
-	return CommonMiddleware(logger, viewerCORSMiddleware(mux))
+	return CommonMiddleware(logger, databaseReadWorkload(database.ReadViewer, viewerCORSMiddleware(mux)))
 }
 
 func (a *ViewerAPI) register(w http.ResponseWriter, r *http.Request) {

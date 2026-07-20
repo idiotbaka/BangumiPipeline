@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"bangumipipeline.local/server/internal/database"
 )
 
 var (
@@ -28,11 +30,11 @@ const (
 )
 
 type Catalog struct {
-	db       *sql.DB
+	db       database.Executor
 	mediaDir string
 }
 
-func NewCatalog(db *sql.DB, mediaDir ...string) *Catalog {
+func NewCatalog(db database.Executor, mediaDir ...string) *Catalog {
 	root := "./data/bangumi"
 	if len(mediaDir) > 0 && strings.TrimSpace(mediaDir[0]) != "" {
 		root = strings.TrimSpace(mediaDir[0])

@@ -39,7 +39,7 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := database.Open(ctx, cfg.DatabasePath)
+	db, err := database.OpenConnections(ctx, cfg.DatabasePath)
 	if err != nil {
 		return err
 	}
@@ -49,6 +49,12 @@ func run(logger *slog.Logger) error {
 		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
 		logService,
 	))
+	logger.Info("database connection pools ready", "source", "database",
+		"writer", db.Writer.Stats().MaxOpenConnections,
+		"viewer_readers", db.ViewerReader.Stats().MaxOpenConnections,
+		"admin_readers", db.AdminReader.Stats().MaxOpenConnections,
+		"worker_readers", db.WorkerReader.Stats().MaxOpenConnections,
+	)
 
 	authService := auth.NewService(db, cfg.SessionTTL)
 	if err := authService.DeleteExpiredSessions(ctx); err != nil {

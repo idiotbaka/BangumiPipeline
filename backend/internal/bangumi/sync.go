@@ -2,7 +2,6 @@ package bangumi
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"bangumipipeline.local/server/internal/database"
 	"bangumipipeline.local/server/internal/system"
 )
 
@@ -35,7 +35,7 @@ type SyncerConfig struct {
 }
 
 type Syncer struct {
-	db       *sql.DB
+	db       database.Executor
 	settings SettingsProvider
 	logger   *slog.Logger
 	config   SyncerConfig
@@ -43,7 +43,7 @@ type Syncer struct {
 	now      func() time.Time
 }
 
-func NewSyncer(db *sql.DB, settings SettingsProvider, logger *slog.Logger, config SyncerConfig) *Syncer {
+func NewSyncer(db database.Executor, settings SettingsProvider, logger *slog.Logger, config SyncerConfig) *Syncer {
 	if config.APIInterval <= 0 {
 		config.APIInterval = 2 * time.Second
 	}

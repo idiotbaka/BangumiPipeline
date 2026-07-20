@@ -51,6 +51,12 @@ docker compose up --build
 | `BP_WEB_PUSH_CONTACT_EMAIL` | `noreply@localhost` | Web Push VAPID 联系邮箱，可按部署域名修改 |
 | `BP_COOKIE_SECURE` | `false` | 是否仅通过 HTTPS 发送登录 Cookie |
 
+## SQLite 并发模型
+
+后端继续使用同一个 SQLite 文件作为唯一事实源，并启用 WAL。数据库访问采用“单写、多读”模型：所有事务和业务写入固定通过 1 条 Writer 连接串行执行；Viewer API 使用最多 4 条只读连接，Admin API 和后台 Worker 各使用 1 条独立只读连接。Reader 以 `mode=ro` 和 `query_only=ON` 打开，因此管理后台慢查询或计划任务扫描不会再占用 Viewer 的读取连接，且只读路径无法误写数据库。
+
+连接级 `foreign_keys`、`busy_timeout`、`synchronous` 与 `query_only` 通过 DSN 应用到每条物理连接。管理端普通 GET API 的数据库上下文最长为 15 秒，系统日志 SSE 流不受该期限影响。SQLite 仍然只有一个 Writer，因此写事务必须保持短小，不能在事务中执行网络请求、文件处理或 ffmpeg 工作。
+
 ## Bangumi 评论表情资源
 
 首次执行“同步 Bangumi 剧集吐槽”计划任务时，后端会检查并下载评论表情到

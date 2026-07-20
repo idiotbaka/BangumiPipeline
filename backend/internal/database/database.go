@@ -15,12 +15,16 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", path)
+	dsn, err := writeDSN(path)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	// A single writer is sufficient for this single-process application and
-	// ensures connection-scoped SQLite pragmas are applied consistently.
+	// SQLite still has a single writer. Connection-scoped pragmas also live in
+	// the DSN so they are reapplied if database/sql replaces the connection.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 

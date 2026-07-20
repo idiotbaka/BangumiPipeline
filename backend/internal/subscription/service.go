@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode"
 
+	"bangumipipeline.local/server/internal/database"
 	"bangumipipeline.local/server/internal/system"
 )
 
@@ -60,14 +61,14 @@ type SettingsProvider interface {
 }
 
 type Service struct {
-	db       *sql.DB
+	db       database.Executor
 	settings SettingsProvider
 	logger   *slog.Logger
 	timeout  time.Duration
 	now      func() time.Time
 }
 
-func NewService(db *sql.DB, settings SettingsProvider, logger *slog.Logger) *Service {
+func NewService(db database.Executor, settings SettingsProvider, logger *slog.Logger) *Service {
 	return &Service{
 		db: db, settings: settings, logger: logger,
 		timeout: defaultRequestTimeout, now: time.Now,
@@ -757,7 +758,7 @@ LIMIT 1`, BindingStatusBound, bangumiID).Scan(
 	return source, nil
 }
 
-func animeNameByDB(ctx context.Context, db *sql.DB, bangumiID int64) (string, error) {
+func animeNameByDB(ctx context.Context, db database.Executor, bangumiID int64) (string, error) {
 	var name, nameCN string
 	err := db.QueryRowContext(ctx, `
 SELECT name, name_cn

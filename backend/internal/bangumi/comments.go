@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"bangumipipeline.local/server/internal/database"
 )
 
 const (
@@ -80,7 +82,7 @@ type EpisodeCommentSyncerConfig struct {
 // the per-episode milestone schedule. Media completion only enqueues work; all
 // network failures remain isolated from the media pipeline.
 type EpisodeCommentSyncer struct {
-	db       *sql.DB
+	db       database.Executor
 	settings SettingsProvider
 	logger   *slog.Logger
 	config   EpisodeCommentSyncerConfig
@@ -164,7 +166,7 @@ type completedMediaCommentCandidate struct {
 	AnchorAt   int64
 }
 
-func NewEpisodeCommentSyncer(db *sql.DB, settings SettingsProvider, logger *slog.Logger, config EpisodeCommentSyncerConfig) *EpisodeCommentSyncer {
+func NewEpisodeCommentSyncer(db database.Executor, settings SettingsProvider, logger *slog.Logger, config EpisodeCommentSyncerConfig) *EpisodeCommentSyncer {
 	config.APIBaseURL = strings.TrimRight(strings.TrimSpace(config.APIBaseURL), "/")
 	if config.APIBaseURL == "" {
 		config.APIBaseURL = defaultCommentAPIBaseURL

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"bangumipipeline.local/server/internal/database"
 )
 
 var ErrExecutorNotFound = errors.New("scheduled task executor not found")
@@ -46,6 +48,7 @@ func (s *Scheduler) Register(key string, executor Executor) {
 }
 
 func (s *Scheduler) Start(ctx context.Context) error {
+	ctx = database.WithReadWorkload(ctx, database.ReadWorker)
 	if err := s.service.PrepareScheduler(ctx); err != nil {
 		return fmt.Errorf("prepare scheduler: %w", err)
 	}
@@ -113,7 +116,7 @@ func (s *Scheduler) dispatchDue(ctx context.Context) {
 func (s *Scheduler) execute(ctx context.Context, key string, executor Executor) {
 	s.logger.Info("scheduled task started", "source", "scheduler", "task", key)
 	runErr := executor.Execute(ctx)
-	finishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	finishCtx, cancel := context.WithTimeout(database.WithReadWorkload(context.Background(), database.ReadWorker), 5*time.Second)
 	defer cancel()
 	if err := s.service.MarkTaskFinished(finishCtx, key, runErr); err != nil {
 		s.logger.Error("persist scheduled task result", "source", "scheduler", "task", key, "error", err)

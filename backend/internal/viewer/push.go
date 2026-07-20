@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"bangumipipeline.local/server/internal/database"
+
 	"github.com/SherClockHolmes/webpush-go"
 )
 
@@ -45,7 +47,7 @@ type PushConfig struct {
 }
 
 type PushService struct {
-	db      *sql.DB
+	db      database.Executor
 	logger  *slog.Logger
 	contact string
 	now     func() time.Time
@@ -88,7 +90,7 @@ type browserPushSender struct {
 	contact string
 }
 
-func NewPushService(db *sql.DB, logger *slog.Logger, contactEmail string) *PushService {
+func NewPushService(db database.Executor, logger *slog.Logger, contactEmail string) *PushService {
 	contactEmail = strings.TrimSpace(contactEmail)
 	if contactEmail == "" {
 		contactEmail = "noreply@localhost"

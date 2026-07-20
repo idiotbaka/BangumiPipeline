@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"bangumipipeline.local/server/internal/database"
 	"bangumipipeline.local/server/internal/system"
 )
 
@@ -44,7 +45,7 @@ type Config struct {
 }
 
 type Service struct {
-	db          *sql.DB
+	db          database.Executor
 	settings    SettingsProvider
 	logger      *slog.Logger
 	downloadDir string
@@ -113,7 +114,7 @@ type activeJob struct {
 	StartedAt          *int64
 }
 
-func NewService(db *sql.DB, settings SettingsProvider, logger *slog.Logger, config Config) *Service {
+func NewService(db database.Executor, settings SettingsProvider, logger *slog.Logger, config Config) *Service {
 	downloadDir := strings.TrimSpace(config.DownloadDir)
 	if downloadDir == "" {
 		downloadDir = "./data/downloads"

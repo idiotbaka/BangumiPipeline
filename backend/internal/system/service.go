@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"bangumipipeline.local/server/internal/database"
 )
 
 const (
@@ -94,11 +96,11 @@ func (s LLMSettings) Configured() bool {
 }
 
 type Service struct {
-	db  *sql.DB
+	db  database.Executor
 	now func() time.Time
 }
 
-func NewService(db *sql.DB) *Service {
+func NewService(db database.Executor) *Service {
 	return &Service{db: db, now: time.Now}
 }
 

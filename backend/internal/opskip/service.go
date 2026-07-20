@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"bangumipipeline.local/server/internal/database"
 )
 
 const (
@@ -53,7 +55,7 @@ type Config struct {
 }
 
 type Service struct {
-	db          *sql.DB
+	db          database.Executor
 	logger      *slog.Logger
 	ffmpegPath  string
 	ffprobePath string
@@ -146,7 +148,7 @@ type probeFormat struct {
 	Duration string `json:"duration"`
 }
 
-func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
+func NewService(db database.Executor, logger *slog.Logger, config Config) *Service {
 	ffmpegPath := strings.TrimSpace(config.FFmpegPath)
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"

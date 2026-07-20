@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"bangumipipeline.local/server/internal/database"
 )
 
 const stageStatusCompleted = "completed"
@@ -17,7 +19,7 @@ const (
 	maxCustomSearchTagLength = 80
 )
 
-func isProcessed(ctx context.Context, db *sql.DB, bangumiID int64) (bool, error) {
+func isProcessed(ctx context.Context, db database.Executor, bangumiID int64) (bool, error) {
 	var exists bool
 	err := db.QueryRowContext(ctx,
 		"SELECT EXISTS(SELECT 1 FROM anime_metadata WHERE bangumi_id = ?)", bangumiID,
@@ -25,7 +27,7 @@ func isProcessed(ctx context.Context, db *sql.DB, bangumiID int64) (bool, error)
 	return exists, err
 }
 
-func customSearchSettings(ctx context.Context, db *sql.DB) (CustomSearchSettings, error) {
+func customSearchSettings(ctx context.Context, db database.Executor) (CustomSearchSettings, error) {
 	var rawTags string
 	var updatedAt int64
 	err := db.QueryRowContext(ctx, `
@@ -49,7 +51,7 @@ WHERE id = 1`).Scan(&rawTags, &updatedAt)
 	return CustomSearchSettings{Tags: tags, UpdatedAt: updatedAt}, nil
 }
 
-func updateCustomSearchSettings(ctx context.Context, db *sql.DB, tags []string, now time.Time) (CustomSearchSettings, error) {
+func updateCustomSearchSettings(ctx context.Context, db database.Executor, tags []string, now time.Time) (CustomSearchSettings, error) {
 	normalized, err := normalizeCustomSearchTags(tags)
 	if err != nil {
 		return CustomSearchSettings{}, err
@@ -94,7 +96,7 @@ func normalizeCustomSearchTags(tags []string) ([]string, error) {
 	return result, nil
 }
 
-func activeSubjectExists(ctx context.Context, db *sql.DB, bangumiID int64) (bool, error) {
+func activeSubjectExists(ctx context.Context, db database.Executor, bangumiID int64) (bool, error) {
 	var exists bool
 	err := db.QueryRowContext(ctx,
 		"SELECT EXISTS(SELECT 1 FROM anime_metadata WHERE bangumi_id = ? AND deleted_at IS NULL)", bangumiID,
@@ -102,7 +104,7 @@ func activeSubjectExists(ctx context.Context, db *sql.DB, bangumiID int64) (bool
 	return exists, err
 }
 
-func insertBaseMetadata(ctx context.Context, db *sql.DB, item calendarItem, cover imageDownload, downloadErr error, now time.Time) error {
+func insertBaseMetadata(ctx context.Context, db database.Executor, item calendarItem, cover imageDownload, downloadErr error, now time.Time) error {
 	_, err := db.ExecContext(ctx, `
 INSERT INTO anime_metadata(
     bangumi_id, url, name, name_cn, air_date, air_weekday,
@@ -114,7 +116,7 @@ INSERT INTO anime_metadata(
 	return err
 }
 
-func upsertBaseMetadataFromDetail(ctx context.Context, db *sql.DB, bangumiID int64, detail subjectDetail, cover imageDownload, downloadErr error, now time.Time) error {
+func upsertBaseMetadataFromDetail(ctx context.Context, db database.Executor, bangumiID int64, detail subjectDetail, cover imageDownload, downloadErr error, now time.Time) error {
 	timestamp := now.UTC().Unix()
 	_, err := db.ExecContext(ctx, `
 INSERT INTO anime_metadata(
@@ -158,7 +160,7 @@ func subjectAirWeekday(date string) int {
 	return weekday
 }
 
-func listRetryableAnimeImages(ctx context.Context, db *sql.DB) ([]pendingAnimeImage, error) {
+func listRetryableAnimeImages(ctx context.Context, db database.Executor) ([]pendingAnimeImage, error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT bangumi_id, image_large_url
 FROM anime_metadata
@@ -179,7 +181,7 @@ ORDER BY bangumi_id`)
 	return result, rows.Err()
 }
 
-func updateAnimeImage(ctx context.Context, db *sql.DB, bangumiID int64, download imageDownload, downloadErr error) error {
+func updateAnimeImage(ctx context.Context, db database.Executor, bangumiID int64, download imageDownload, downloadErr error) error {
 	errorMessage := truncateError(downloadErr)
 	_, err := db.ExecContext(ctx, `
 UPDATE anime_metadata
@@ -188,7 +190,7 @@ WHERE bangumi_id = ?`, download.Path, download.Status, errorMessage, bangumiID)
 	return err
 }
 
-func listIncompleteSubjects(ctx context.Context, db *sql.DB) ([]incompleteSubject, error) {
+func listIncompleteSubjects(ctx context.Context, db database.Executor) ([]incompleteSubject, error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT bangumi_id, detail_status, characters_status, episodes_status,
        (
@@ -233,7 +235,7 @@ ORDER BY bangumi_id`, stageStatusCompleted, stageStatusCompleted, stageStatusCom
 	return result, rows.Err()
 }
 
-func saveSubjectDetail(ctx context.Context, db *sql.DB, bangumiID int64, detail subjectDetail, now time.Time) error {
+func saveSubjectDetail(ctx context.Context, db database.Executor, bangumiID int64, detail subjectDetail, now time.Time) error {
 	infoboxJSON, err := json.Marshal(detail.Infobox)
 	if err != nil {
 		return err
@@ -307,7 +309,7 @@ VALUES (?, ?, ?)`, bangumiID, alias, index); err != nil {
 	return tx.Commit()
 }
 
-func saveCharacters(ctx context.Context, db *sql.DB, bangumiID int64, characters []storedCharacter, now time.Time) error {
+func saveCharacters(ctx context.Context, db database.Executor, bangumiID int64, characters []storedCharacter, now time.Time) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -355,7 +357,7 @@ WHERE bangumi_id = ?`, timestamp, bangumiID); err != nil {
 	return tx.Commit()
 }
 
-func saveEpisodes(ctx context.Context, db *sql.DB, bangumiID int64, episodes []episodeDetail, now time.Time) error {
+func saveEpisodes(ctx context.Context, db database.Executor, bangumiID int64, episodes []episodeDetail, now time.Time) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -463,7 +465,7 @@ WHERE bangumi_id = ?`, bangumiID)
 	return result, rows.Err()
 }
 
-func getActorImageState(ctx context.Context, db *sql.DB, actorID int64) (actorImageState, error) {
+func getActorImageState(ctx context.Context, db database.Executor, actorID int64) (actorImageState, error) {
 	var state actorImageState
 	err := db.QueryRowContext(ctx, `
 SELECT image_large_url, image_local_path, image_status
@@ -480,7 +482,7 @@ FROM actors WHERE actor_id = ?`, actorID).Scan(
 	return state, nil
 }
 
-func upsertActor(ctx context.Context, db *sql.DB, actor storedActor, now time.Time) error {
+func upsertActor(ctx context.Context, db database.Executor, actor storedActor, now time.Time) error {
 	timestamp := now.UTC().Unix()
 	_, err := db.ExecContext(ctx, `
 INSERT INTO actors(
@@ -505,21 +507,21 @@ ON CONFLICT(actor_id) DO UPDATE SET
 	return err
 }
 
-func markDetailFailed(ctx context.Context, db *sql.DB, bangumiID int64, runErr error) error {
+func markDetailFailed(ctx context.Context, db database.Executor, bangumiID int64, runErr error) error {
 	_, err := db.ExecContext(ctx, `
 UPDATE anime_metadata SET detail_status = 'failed', detail_error = ? WHERE bangumi_id = ?`,
 		truncateError(runErr), bangumiID)
 	return err
 }
 
-func markCharactersFailed(ctx context.Context, db *sql.DB, bangumiID int64, runErr error) error {
+func markCharactersFailed(ctx context.Context, db database.Executor, bangumiID int64, runErr error) error {
 	_, err := db.ExecContext(ctx, `
 UPDATE anime_metadata SET characters_status = 'failed', characters_error = ? WHERE bangumi_id = ?`,
 		truncateError(runErr), bangumiID)
 	return err
 }
 
-func markEpisodesFailed(ctx context.Context, db *sql.DB, bangumiID int64, runErr error) error {
+func markEpisodesFailed(ctx context.Context, db database.Executor, bangumiID int64, runErr error) error {
 	_, err := db.ExecContext(ctx, `
 UPDATE anime_metadata SET episodes_status = 'failed', episodes_error = ? WHERE bangumi_id = ?`,
 		truncateError(runErr), bangumiID)

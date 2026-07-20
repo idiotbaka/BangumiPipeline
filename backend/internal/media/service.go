@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode"
 
+	"bangumipipeline.local/server/internal/database"
 	"bangumipipeline.local/server/internal/imageutil"
 	"bangumipipeline.local/server/internal/subscription"
 )
@@ -94,7 +95,7 @@ type EpisodeCommentEnqueuer interface {
 }
 
 type Service struct {
-	db                 *sql.DB
+	db                 database.Executor
 	logger             *slog.Logger
 	mediaDir           string
 	ffmpegPath         string
@@ -325,7 +326,7 @@ type episodeReplacementJob struct {
 	CoverPath  string
 }
 
-func NewService(db *sql.DB, logger *slog.Logger, config Config) *Service {
+func NewService(db database.Executor, logger *slog.Logger, config Config) *Service {
 	mediaDir := strings.TrimSpace(config.MediaDir)
 	if mediaDir == "" {
 		mediaDir = "./data/bangumi"

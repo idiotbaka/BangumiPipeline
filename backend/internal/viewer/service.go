@@ -15,6 +15,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"bangumipipeline.local/server/internal/database"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -98,12 +100,12 @@ type InvitationCodePage struct {
 }
 
 type Service struct {
-	db         *sql.DB
+	db         database.Executor
 	sessionTTL time.Duration
 	now        func() time.Time
 }
 
-func NewService(db *sql.DB, sessionTTL time.Duration) *Service {
+func NewService(db database.Executor, sessionTTL time.Duration) *Service {
 	return &Service{db: db, sessionTTL: sessionTTL, now: time.Now}
 }
 

@@ -1,10 +1,35 @@
 package httpapi
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
+
+	"bangumipipeline.local/server/internal/database"
 )
+
+const adminReadRequestTimeout = 15 * time.Second
+
+func databaseReadWorkload(workload database.ReadWorkload, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := database.WithReadWorkload(r.Context(), workload)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func adminDatabaseReadWorkload(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := database.WithReadWorkload(r.Context(), database.ReadAdmin)
+		cancel := func() {}
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/system-logs/stream" {
+			ctx, cancel = context.WithTimeout(ctx, adminReadRequestTimeout)
+		}
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 func CommonMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

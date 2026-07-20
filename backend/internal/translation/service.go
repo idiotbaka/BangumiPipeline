@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"bangumipipeline.local/server/internal/database"
 	"bangumipipeline.local/server/internal/system"
 )
 
@@ -26,7 +27,7 @@ type SettingsProvider interface {
 }
 
 type Service struct {
-	db       *sql.DB
+	db       database.Executor
 	settings SettingsProvider
 	logger   *slog.Logger
 	now      func() time.Time
@@ -61,7 +62,7 @@ type chatClient struct {
 	client   *http.Client
 }
 
-func NewService(db *sql.DB, settings SettingsProvider, logger *slog.Logger) *Service {
+func NewService(db database.Executor, settings SettingsProvider, logger *slog.Logger) *Service {
 	return &Service{db: db, settings: settings, logger: logger, now: time.Now}
 }
 
