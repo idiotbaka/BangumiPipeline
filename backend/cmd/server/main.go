@@ -77,6 +77,7 @@ func run(logger *slog.Logger) error {
 		APIInterval: 2 * time.Second, RequestTimeout: 20 * time.Second,
 		RequestLimiter: bangumiRequestLimiter,
 		SmileDir:       filepath.Join(cfg.CoverDir, "smiles"),
+		AvatarDir:      filepath.Join(cfg.CoverDir, "avatar"),
 	})
 	subscriptionService := subscription.NewService(db, systemService, logger)
 	downloadService := download.NewService(db, systemService, logger, download.Config{DownloadDir: cfg.DownloadDir})
@@ -88,7 +89,9 @@ func run(logger *slog.Logger) error {
 	opSkipService := opskip.NewService(db, logger, opskip.Config{
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath,
 	})
-	catalog := bangumi.NewCatalog(db, mediaService.DefaultMediaDir())
+	catalog := bangumi.NewCatalogWithConfig(db, bangumi.CatalogConfig{
+		MediaDir: mediaService.DefaultMediaDir(), CommentAvatarDir: filepath.Join(cfg.CoverDir, "avatar"),
+	})
 	translationService := translation.NewService(db, systemService, logger)
 	scheduler := system.NewScheduler(systemService, logger, cfg.SchedulerPoll)
 	scheduler.Register("bangumi-season-metadata", metadataSyncer)

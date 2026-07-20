@@ -380,6 +380,39 @@ SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 32)`).Scan(&applie
 	}
 }
 
+func TestVersion33MigrationAddsCommentAvatarCache(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	assertTableExists(t, db, "bangumi_comment_user_avatars")
+	for _, index := range []string{
+		"idx_bangumi_comment_user_avatars_due",
+		"idx_bangumi_episode_comments_user_avatar",
+	} {
+		var exists bool
+		if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?)`, index).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			t.Fatalf("expected index %s to exist", index)
+		}
+	}
+	var applied bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 33)`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("expected version 33 migration to be recorded")
+	}
+}
+
 func assertTableExists(t *testing.T, db *sql.DB, table string) {
 	t.Helper()
 	var exists bool

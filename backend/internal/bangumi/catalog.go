@@ -30,8 +30,9 @@ const (
 )
 
 type Catalog struct {
-	db       database.Executor
-	mediaDir string
+	db               database.Executor
+	mediaDir         string
+	commentAvatarDir string
 }
 
 func NewCatalog(db database.Executor, mediaDir ...string) *Catalog {
@@ -39,10 +40,29 @@ func NewCatalog(db database.Executor, mediaDir ...string) *Catalog {
 	if len(mediaDir) > 0 && strings.TrimSpace(mediaDir[0]) != "" {
 		root = strings.TrimSpace(mediaDir[0])
 	}
-	if abs, err := filepath.Abs(root); err == nil {
-		root = abs
+	return NewCatalogWithConfig(db, CatalogConfig{MediaDir: root})
+}
+
+type CatalogConfig struct {
+	MediaDir         string
+	CommentAvatarDir string
+}
+
+func NewCatalogWithConfig(db database.Executor, config CatalogConfig) *Catalog {
+	mediaDir := cleanAbsoluteDirectory(config.MediaDir, "./data/bangumi")
+	avatarDir := cleanAbsoluteDirectory(config.CommentAvatarDir, "./data/images/bangumi/avatar")
+	return &Catalog{db: db, mediaDir: mediaDir, commentAvatarDir: avatarDir}
+}
+
+func cleanAbsoluteDirectory(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = fallback
 	}
-	return &Catalog{db: db, mediaDir: root}
+	if abs, err := filepath.Abs(value); err == nil {
+		value = abs
+	}
+	return filepath.Clean(value)
 }
 
 type AnimeListItem struct {

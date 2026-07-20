@@ -64,6 +64,7 @@ func NewViewerHandler(authService *viewer.Service, pushService *viewer.PushServi
 	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/comments", api.animeEpisodeComments)
 	mux.HandleFunc("PUT /api/anime/{bangumiID}/media/{mediaID}/progress", api.updateWatchProgress)
 	mux.HandleFunc("GET /api/bangumi-smiles/{code}", api.bangumiSmile)
+	mux.HandleFunc("GET /api/bangumi-comment-avatars/{userID}", api.bangumiCommentAvatar)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/characters/{characterID}/image", api.animeCharacterImage)
 	mux.HandleFunc("GET /api/actors/{actorID}/image", api.animeActorImage)
 	mux.HandleFunc("GET /favicon.png", api.favicon)
@@ -607,6 +608,19 @@ func (a *ViewerAPI) bangumiSmile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "inline")
 	w.Header().Set("Cache-Control", "private, max-age=604800, immutable")
 	http.ServeFile(w, r, path)
+}
+
+func (a *ViewerAPI) bangumiCommentAvatar(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	userID, ok := parsePathID(w, r.PathValue("userID"))
+	if !ok {
+		return
+	}
+	a.serveCatalogImage(w, r, func() (string, error) {
+		return a.catalog.CommentAvatarPath(r.Context(), userID)
+	})
 }
 
 func (a *ViewerAPI) commentSmileURLs(comments []*bangumi.ViewerEpisodeComment) map[string]string {

@@ -74,6 +74,7 @@ type EpisodeCommentSyncerConfig struct {
 	BatchSize           int
 	RequestLimiter      *RequestLimiter
 	SmileDir            string
+	AvatarDir           string
 	SmileBangumiBaseURL string
 	SmileLainBaseURL    string
 }
@@ -88,6 +89,7 @@ type EpisodeCommentSyncer struct {
 	config   EpisodeCommentSyncerConfig
 	limiter  *RequestLimiter
 	smiles   *BangumiSmileStore
+	avatars  *BangumiCommentAvatarStore
 	now      func() time.Time
 
 	smileAssetsReady       atomic.Bool
@@ -195,6 +197,12 @@ func NewEpisodeCommentSyncer(db database.Executor, settings SettingsProvider, lo
 			RequestTimeout: config.RequestTimeout,
 		})
 	}
+	if strings.TrimSpace(config.AvatarDir) != "" {
+		syncer.avatars = NewBangumiCommentAvatarStore(db, logger, BangumiCommentAvatarSyncConfig{
+			Directory: config.AvatarDir, UserAgent: config.UserAgent,
+			RequestTimeout: min(config.RequestTimeout, 10*time.Second), RequestLimiter: limiter,
+		})
+	}
 	return syncer
 }
 
@@ -208,38 +216,42 @@ func (s *EpisodeCommentSyncer) Execute(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(smileErr, fmt.Errorf("查询待同步剧集评论: %w", err))
 	}
-	if len(jobs) == 0 {
-		s.logger.Info("Bangumi 剧集吐槽同步完成：没有到期任务", "source", "bangumi", "backfilled", backfilled)
-		return smileErr
-	}
-
-	client, err := s.newCommentAPIClient(ctx)
-	if err != nil {
-		return errors.Join(smileErr, err)
-	}
-	defer client.close()
-
 	succeeded := 0
 	notFound := 0
 	failures := make([]string, 0)
 	if smileErr != nil {
 		failures = append(failures, smileErr.Error())
 	}
-	for _, job := range jobs {
-		outcome, runErr := s.syncEpisodeComments(ctx, client, job)
-		switch outcome {
-		case "completed":
-			succeeded++
-		case "not_found":
-			notFound++
+	if len(jobs) > 0 {
+		client, clientErr := s.newCommentAPIClient(ctx)
+		if clientErr != nil {
+			failures = append(failures, clientErr.Error())
+		} else {
+			for _, job := range jobs {
+				outcome, runErr := s.syncEpisodeComments(ctx, client, job)
+				switch outcome {
+				case "completed":
+					succeeded++
+				case "not_found":
+					notFound++
+				}
+				if runErr != nil {
+					failures = append(failures, fmt.Sprintf("episode #%d: %v", job.EpisodeID, runErr))
+				}
+			}
+			client.close()
 		}
-		if runErr != nil {
-			failures = append(failures, fmt.Sprintf("episode #%d: %v", job.EpisodeID, runErr))
-		}
+	}
+	avatarResult, avatarErr := s.syncPendingAvatars(ctx)
+	if avatarErr != nil {
+		failures = append(failures, fmt.Sprintf("同步评论用户头像: %v", avatarErr))
 	}
 	s.logger.Info("Bangumi 剧集吐槽同步完成", "source", "bangumi",
 		"due", len(jobs), "succeeded", succeeded, "not_found", notFound,
-		"failed", len(failures), "backfilled", backfilled)
+		"failed", len(failures), "backfilled", backfilled,
+		"avatar_due", avatarResult.Due, "avatar_downloaded", avatarResult.Downloaded,
+		"avatar_cached", avatarResult.Cached, "avatar_not_found", avatarResult.NotFound,
+		"avatar_failed", avatarResult.Failed)
 	if len(failures) > 0 {
 		shown := failures
 		if len(shown) > 3 {
@@ -248,6 +260,24 @@ func (s *EpisodeCommentSyncer) Execute(ctx context.Context) error {
 		return fmt.Errorf("同步存在 %d 个错误：%s", len(failures), strings.Join(shown, "；"))
 	}
 	return nil
+}
+
+func (s *EpisodeCommentSyncer) syncPendingAvatars(ctx context.Context) (BangumiCommentAvatarSyncResult, error) {
+	if s.avatars == nil {
+		return BangumiCommentAvatarSyncResult{}, nil
+	}
+	jobs, err := s.avatars.dueJobs(ctx, 0)
+	if err != nil {
+		return BangumiCommentAvatarSyncResult{}, err
+	}
+	if len(jobs) == 0 {
+		return BangumiCommentAvatarSyncResult{}, nil
+	}
+	network, err := s.settings.GetNetworkSettings(ctx)
+	if err != nil {
+		return BangumiCommentAvatarSyncResult{}, fmt.Errorf("读取头像下载代理设置: %w", err)
+	}
+	return s.avatars.syncJobs(ctx, network, jobs)
 }
 
 func (s *EpisodeCommentSyncer) ensureSmileAssets(ctx context.Context) error {
@@ -450,6 +480,7 @@ func (s *EpisodeCommentSyncer) saveEpisodeCommentSnapshot(ctx context.Context, j
 		return err
 	}
 	now := s.now().UTC().Unix()
+	queuedAvatarUsers := make(map[int64]struct{})
 	for _, comment := range comments {
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO bangumi_episode_comments(
@@ -467,6 +498,12 @@ INSERT INTO bangumi_episode_comments(
 			comment.ReactionsJSON, comment.RawJSON, now,
 		); err != nil {
 			return err
+		}
+		if _, queued := queuedAvatarUsers[comment.UserID]; !queued && comment.UserID > 0 && strings.TrimSpace(comment.AvatarMediumURL) != "" {
+			if err := upsertCommentAvatarCandidate(ctx, tx, comment.UserID, comment.AvatarMediumURL, now); err != nil {
+				return err
+			}
+			queuedAvatarUsers[comment.UserID] = struct{}{}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `

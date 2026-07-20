@@ -29,6 +29,20 @@ func TestViewerEpisodeCommentsAndSmileAssetRequireViewerSession(t *testing.T) {
 	defer db.Close()
 	now := time.Now().UTC().Unix()
 	mediaID := insertViewerCommentAPIData(t, ctx, db, now)
+	avatarDir := filepath.Join(t.TempDir(), "avatar")
+	if err := os.MkdirAll(avatarDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	avatarData := []byte("local-avatar")
+	if err := os.WriteFile(filepath.Join(avatarDir, "2.jpg"), avatarData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO bangumi_comment_user_avatars(
+    user_id, medium_url, file_name, content_type, status, downloaded_at, created_at, updated_at
+) VALUES (2, 'https://lain.bgm.tv/medium.jpg', '2.jpg', 'image/jpeg', 'downloaded', ?, ?, ?)`, now, now, now); err != nil {
+		t.Fatal(err)
+	}
 
 	smileDir := filepath.Join(t.TempDir(), "smiles")
 	if err := os.MkdirAll(smileDir, 0o755); err != nil {
@@ -63,8 +77,9 @@ func TestViewerEpisodeCommentsAndSmileAssetRequireViewerSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	catalog := bangumi.NewCatalogWithConfig(db, bangumi.CatalogConfig{CommentAvatarDir: avatarDir})
 	server := httptest.NewServer(httpapi.NewViewerHandler(
-		auth, nil, bangumi.NewCatalog(db), logger, false, t.TempDir(), smileDir,
+		auth, nil, catalog, logger, false, t.TempDir(), smileDir,
 	))
 	defer server.Close()
 
@@ -101,6 +116,29 @@ func TestViewerEpisodeCommentsAndSmileAssetRequireViewerSession(t *testing.T) {
 	}
 	if payload.Smiles["(bgm24)"] != "/api/bangumi-smiles/bgm24" {
 		t.Fatalf("unexpected smile mapping: %+v", payload.Smiles)
+	}
+	avatarURL := payload.Episode.Comments[0].User.AvatarURL
+	if avatarURL != "/api/bangumi-comment-avatars/2" || strings.Contains(avatarURL, "lain.bgm.tv") {
+		t.Fatalf("unexpected local avatar URL: %q", avatarURL)
+	}
+	unauthorizedAvatar, err := server.Client().Get(server.URL + avatarURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthorizedAvatar.Body.Close()
+	if unauthorizedAvatar.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized avatar status = %d", unauthorizedAvatar.StatusCode)
+	}
+	avatarRequest, _ := http.NewRequest(http.MethodGet, server.URL+avatarURL, nil)
+	avatarRequest.Header.Set("Authorization", "Bearer "+session.Token)
+	avatarResponse, err := server.Client().Do(avatarRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servedAvatar, _ := io.ReadAll(avatarResponse.Body)
+	avatarResponse.Body.Close()
+	if avatarResponse.StatusCode != http.StatusOK || string(servedAvatar) != string(avatarData) {
+		t.Fatalf("unexpected avatar response: status=%d body=%q", avatarResponse.StatusCode, servedAvatar)
 	}
 
 	smileRequest, _ := http.NewRequest(http.MethodGet, server.URL+payload.Smiles["(bgm24)"], nil)

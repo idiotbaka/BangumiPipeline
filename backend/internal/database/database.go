@@ -1302,6 +1302,32 @@ VALUES (32, unixepoch());`); err != nil {
 			return fmt.Errorf("finish version 32 migration: %w", err)
 		}
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS bangumi_comment_user_avatars (
+    user_id       INTEGER PRIMARY KEY CHECK (user_id > 0),
+    medium_url    TEXT NOT NULL,
+    file_name     TEXT NOT NULL DEFAULT '',
+    content_type  TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'downloaded', 'failed', 'not_found')),
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    next_retry_at INTEGER,
+    last_error    TEXT NOT NULL DEFAULT '',
+    downloaded_at INTEGER,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_bangumi_comment_user_avatars_due
+ON bangumi_comment_user_avatars(status, next_retry_at, user_id);
+
+CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comments_user_avatar
+ON bangumi_episode_comments(user_id, fetched_at DESC, source_created_at DESC, comment_id DESC)
+WHERE user_id > 0 AND avatar_medium_url != '';
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (33, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 33 migration: %w", err)
+	}
 	return nil
 }
 

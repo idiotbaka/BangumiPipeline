@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -70,9 +73,11 @@ WHERE mj.id = ? AND mj.bangumi_id = ?
 
 	rows, err := c.db.QueryContext(ctx, `
 SELECT comment_id, parent_comment_id, source_created_at, content, state, sort_order,
-       user_id, username, nickname, avatar_small_url, avatar_medium_url, avatar_large_url,
+       comments.user_id, username, nickname, COALESCE(avatars.file_name, ''),
        user_group, user_sign
-FROM bangumi_episode_comments
+FROM bangumi_episode_comments comments
+LEFT JOIN bangumi_comment_user_avatars avatars
+       ON avatars.user_id = comments.user_id AND avatars.status = 'downloaded'
 WHERE bangumi_id = ? AND episode_id = ?
 ORDER BY source_created_at DESC, sort_order DESC, comment_id DESC`, bangumiID, result.EpisodeID)
 	if err != nil {
@@ -82,18 +87,20 @@ ORDER BY source_created_at DESC, sort_order DESC, comment_id DESC`, bangumiID, r
 	for rows.Next() {
 		var comment ViewerEpisodeComment
 		var user ViewerEpisodeCommentUser
-		var avatarSmall, avatarMedium, avatarLarge string
+		var avatarFileName string
 		if err := rows.Scan(
 			&comment.CommentID, &comment.ParentCommentID, &comment.CreatedAt,
 			&comment.Content, &comment.State, &comment.sortOrder,
 			&user.UserID, &user.Username, &user.Nickname,
-			&avatarSmall, &avatarMedium, &avatarLarge, &user.Group, &user.Sign,
+			&avatarFileName, &user.Group, &user.Sign,
 		); err != nil {
 			rows.Close()
 			return ViewerEpisodeComments{}, err
 		}
 		comment.Replies = make([]*ViewerEpisodeComment, 0)
-		user.AvatarURL = firstNonEmpty(avatarMedium, avatarLarge, avatarSmall)
+		if avatarFileName == commentAvatarFileName(user.UserID) {
+			user.AvatarURL = "/api/bangumi-comment-avatars/" + strconv.FormatInt(user.UserID, 10)
+		}
 		if user.UserID > 0 || strings.TrimSpace(user.Username) != "" || strings.TrimSpace(user.Nickname) != "" {
 			comment.User = &user
 		}
@@ -109,6 +116,28 @@ ORDER BY source_created_at DESC, sort_order DESC, comment_id DESC`, bangumiID, r
 	result.Comments = buildViewerCommentTree(nodes)
 	result.CommentCount = len(result.Comments)
 	return result, nil
+}
+
+func (c *Catalog) CommentAvatarPath(ctx context.Context, userID int64) (string, error) {
+	if userID <= 0 {
+		return "", ErrAnimeNotFound
+	}
+	var fileName string
+	err := c.db.QueryRowContext(ctx, `
+SELECT file_name
+FROM bangumi_comment_user_avatars
+WHERE user_id = ? AND status = 'downloaded'`, userID).Scan(&fileName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrAnimeNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	expected := commentAvatarFileName(userID)
+	if fileName != expected || filepath.Base(fileName) != fileName {
+		return "", fmt.Errorf("用户 #%d 的评论头像缓存文件名无效", userID)
+	}
+	return filepath.Join(c.commentAvatarDir, fileName), nil
 }
 
 func buildViewerCommentTree(nodes []*ViewerEpisodeComment) []*ViewerEpisodeComment {
@@ -162,13 +191,4 @@ func sortViewerCommentSiblings(comments []*ViewerEpisodeComment) {
 	for _, comment := range comments {
 		sortViewerCommentSiblings(comment.Replies)
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

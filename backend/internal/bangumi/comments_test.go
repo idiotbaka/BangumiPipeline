@@ -107,6 +107,8 @@ func TestEpisodeCommentSyncerStoresUpdatesAndRetriesWithoutLosingSnapshot(t *tes
 	assertCommentSyncState(t, ctx, db, 1561891, "pending", 1, anchor.Add(2*time.Hour).Unix(), 0, 1)
 	assertStoredComment(t, ctx, db, 1561891, 100, 0, "首版(bgm38)[s]保留[/s][mask]隐藏[/mask][img]https://img.example/a.jpg[/img]", "主楼签名", "l")
 	assertStoredComment(t, ctx, db, 1561891, 101, 100, "回复", "回复签名", "rl")
+	assertCommentAvatarQueue(t, ctx, db, 10, "m", "pending")
+	assertCommentAvatarQueue(t, ctx, db, 11, "rm", "pending")
 
 	syncer.now = func() time.Time { return anchor.Add(2 * time.Hour) }
 	if err := syncer.Execute(ctx); err != nil {
@@ -114,6 +116,7 @@ func TestEpisodeCommentSyncerStoresUpdatesAndRetriesWithoutLosingSnapshot(t *tes
 	}
 	assertCommentSyncState(t, ctx, db, 1561891, "pending", 2, anchor.Add(12*time.Hour).Unix(), 0, 1)
 	assertStoredComment(t, ctx, db, 1561891, 100, 0, "更新后的正文[mask]新剧透[/mask]", "更新签名", "l2")
+	assertCommentAvatarQueue(t, ctx, db, 10, "m2", "pending")
 	var replyCount int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM bangumi_episode_comments WHERE episode_id = ? AND comment_id = ?", 1561891, 101).Scan(&replyCount); err != nil {
 		t.Fatal(err)
@@ -506,6 +509,18 @@ FROM bangumi_episode_comments WHERE episode_id = ? AND comment_id = ?`, episodeI
 	}
 	if rawJSON == "" || reactionsJSON == "" {
 		t.Fatalf("expected raw and reaction JSON, got raw=%q reactions=%q", rawJSON, reactionsJSON)
+	}
+}
+
+func assertCommentAvatarQueue(t *testing.T, ctx context.Context, db *sql.DB, userID int64, wantURL, wantStatus string) {
+	t.Helper()
+	var mediumURL, status string
+	if err := db.QueryRowContext(ctx, `
+SELECT medium_url, status FROM bangumi_comment_user_avatars WHERE user_id = ?`, userID).Scan(&mediumURL, &status); err != nil {
+		t.Fatal(err)
+	}
+	if mediumURL != wantURL || status != wantStatus {
+		t.Fatalf("unexpected avatar queue state for user %d: url=%q status=%q", userID, mediumURL, status)
 	}
 }
 

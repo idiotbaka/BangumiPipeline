@@ -31,6 +31,13 @@ WHERE episode_id = ?`, now.Unix(), now.Unix(), 1561891); err != nil {
 	insertViewerComment(t, ctx, db, 537904, 1561891, 101, 100, 1100, 1, "较早回复", "reply-a", "回复甲", "", "", "large-a", "甲签名")
 	insertViewerComment(t, ctx, db, 537904, 1561891, 102, 100, 1200, 2, "较新回复", "reply-b", "回复乙", "small-b", "", "", "乙签名")
 	insertViewerComment(t, ctx, db, 537904, 1561891, 200, 0, 2000, 3, "新主楼[mask]剧透[/mask]", "new", "新用户", "", "medium-new", "", "新签名")
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO bangumi_comment_user_avatars(
+    user_id, medium_url, file_name, content_type, status, downloaded_at, created_at, updated_at
+) VALUES (1100, 'medium', '1100.jpg', 'image/jpeg', 'downloaded', ?, ?, ?)`,
+		now.Unix(), now.Unix(), now.Unix()); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := NewCatalog(db).ViewerEpisodeComments(ctx, 537904, mediaID)
 	if err != nil {
@@ -49,11 +56,11 @@ WHERE episode_id = ?`, now.Unix(), now.Unix(), 1561891); err != nil {
 	if len(old.Replies) != 2 || old.Replies[0].CommentID != 102 || old.Replies[1].CommentID != 101 {
 		t.Fatalf("replies are not newest first: %+v", old.Replies)
 	}
-	if old.User == nil || old.User.Nickname != "旧用户" || old.User.Sign != "旧签名" || old.User.AvatarURL != "medium" {
+	if old.User == nil || old.User.Nickname != "旧用户" || old.User.Sign != "旧签名" || old.User.AvatarURL != "/api/bangumi-comment-avatars/1100" {
 		t.Fatalf("comment user data missing: %+v", old.User)
 	}
-	if old.Replies[0].User == nil || old.Replies[0].User.AvatarURL != "small-b" {
-		t.Fatalf("avatar fallback failed: %+v", old.Replies[0].User)
+	if old.Replies[0].User == nil || old.Replies[0].User.AvatarURL != "" {
+		t.Fatalf("uncached avatar must not expose upstream URL: %+v", old.Replies[0].User)
 	}
 	if _, err := NewCatalog(db).ViewerEpisodeComments(ctx, 537904, mediaID+999); !errors.Is(err, ErrAnimeNotFound) {
 		t.Fatalf("expected unrelated media to be rejected, got %v", err)

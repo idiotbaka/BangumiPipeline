@@ -86,3 +86,22 @@ Bangumi 剧集 ID，展示头像、昵称、签名、评论时间和楼中楼回
 评论图片支持 `[img]URL[/img]` 和带尺寸提示的 `[img=宽,高]URL[/img]`，并统一受评论区最大显示尺寸约束。
 正文以结构化节点渲染删除线、剧透遮罩、外链图片及本地 Bangumi 表情，不使用
 `v-html`。未知标签、缺失表情与非 HTTP/HTTPS 图片地址会被过滤。
+
+### Bangumi 评论用户头像
+
+“同步 Bangumi 剧集吐槽”会把评论用户的 `medium` 头像按 Bangumi 用户 ID 去重下载到
+`BP_COVER_DIR/avatar`（默认 `./data/images/bangumi/avatar`）。自动任务会串行处理全部到期头像，
+直接保存上游 JPEG 原图，不做缩放或二次压缩；下载期间也不会持有 SQLite 事务。观看端只返回
+受登录保护的本地头像接口；尚未下载或下载失败时由前端显示昵称首字，不再把
+`lain.bgm.tv` 地址发送给浏览器。
+
+升级后可在 Ubuntu 的仓库根目录执行一次历史数据补全：
+
+```bash
+bash ./scripts/sync-bangumi-comment-avatars.sh
+```
+
+脚本默认使用 `BP_DATABASE_PATH`、`BP_COVER_DIR` 和数据库“网络设置”中保存的代理；也可
+通过 `--database`、`--output`、`--batch` 覆盖。它会扫描历史评论中的最新用户头像、复用
+已经存在的用户 ID 缓存、修复数据库标记存在但本地文件缺失的记录，并重试之前的临时
+失败。脚本需要 Go 1.25 或更高版本；为尽量减少生产写连接竞争，建议在维护窗口执行。
