@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import {
   api,
@@ -7,9 +7,11 @@ import {
   type ViewerAnimeCharacter,
   type ViewerAnimeDetail,
   type ViewerDetailEpisode,
+  type ViewerEpisodeComments,
 } from '../api'
 import { requestPushNotificationsForFollow } from '../pushNotifications'
 import AnimeVideoPlayer from './AnimeVideoPlayer.vue'
+import EpisodeCommentItem from './EpisodeCommentItem.vue'
 import ParticleField from './ParticleField.vue'
 
 interface Props {
@@ -33,12 +35,22 @@ const followSaving = ref(false)
 const followError = ref('')
 const failedImages = ref<Set<string>>(new Set())
 const episodeList = ref<HTMLElement | null>(null)
+const sidePanelTab = ref<'episodes' | 'comments'>('episodes')
+const episodeComments = ref<ViewerEpisodeComments | null>(null)
+const commentSmiles = ref<Record<string, string>>({})
+const commentsLoading = ref(false)
+const commentsError = ref('')
+let commentsController: AbortController | null = null
+let commentsRequestID = 0
 let progressSaving = false
 let queuedProgress: { mediaId: number; positionSeconds: number; durationSeconds: number } | null = null
 
 const weekdays = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const selectedEpisode = computed(() =>
   anime.value?.episodes.find((episode) => episode.key === selectedEpisodeKey.value) ?? null,
+)
+const selectedCommentCount = computed(() =>
+  episodeComments.value?.commentCount ?? selectedEpisode.value?.commentCount ?? 0,
 )
 const playableEpisodes = computed(() => anime.value?.episodes.filter((episode) => episode.hasMedia) ?? [])
 const playerEpisodes = computed(() =>
@@ -95,9 +107,18 @@ const displayTags = computed(() => {
 
 onMounted(loadDetail)
 watch(() => props.bangumiId, loadDetail)
+watch(() => selectedEpisode.value?.mediaId ?? 0, (mediaID, previousMediaID) => {
+  if (mediaID === previousMediaID) return
+  resetEpisodeComments()
+  if (sidePanelTab.value === 'comments' && mediaID > 0) void loadEpisodeComments()
+})
+onBeforeUnmount(() => commentsController?.abort())
 
 async function loadDetail() {
   let scrollToRequestedEpisode = false
+  commentsController?.abort()
+  sidePanelTab.value = 'episodes'
+  resetEpisodeComments()
   loading.value = true
   errorMessage.value = ''
   followError.value = ''
@@ -153,6 +174,53 @@ async function toggleFollow() {
 function selectEpisode(episode: Pick<ViewerDetailEpisode, 'key'>) {
   selectedEpisodeKey.value = episode.key
   resumePosition.value = 0
+}
+
+async function selectSidePanelTab(tab: 'episodes' | 'comments') {
+  sidePanelTab.value = tab
+  if (tab === 'comments') {
+    await loadEpisodeComments()
+    return
+  }
+  await nextTick()
+  scrollSelectedEpisodeIntoView()
+}
+
+async function loadEpisodeComments() {
+  const mediaID = selectedEpisode.value?.mediaId ?? 0
+  commentsController?.abort()
+  const requestID = ++commentsRequestID
+  if (!mediaID) {
+    resetEpisodeComments(false)
+    return
+  }
+  const controller = new AbortController()
+  commentsController = controller
+  commentsLoading.value = true
+  commentsError.value = ''
+  episodeComments.value = null
+  commentSmiles.value = {}
+  try {
+    const result = await api.episodeComments(props.bangumiId, mediaID, controller.signal)
+    if (requestID !== commentsRequestID || selectedEpisode.value?.mediaId !== mediaID) return
+    episodeComments.value = result.episode
+    commentSmiles.value = result.smiles
+  } catch (error) {
+    if (controller.signal.aborted || requestID !== commentsRequestID) return
+    commentsError.value = error instanceof Error ? error.message : '评论加载失败'
+  } finally {
+    if (requestID === commentsRequestID) commentsLoading.value = false
+  }
+}
+
+function resetEpisodeComments(abort = true) {
+  if (abort) commentsController?.abort()
+  commentsController = null
+  commentsRequestID++
+  commentsLoading.value = false
+  commentsError.value = ''
+  episodeComments.value = null
+  commentSmiles.value = {}
 }
 
 function scrollSelectedEpisodeIntoView() {
@@ -316,11 +384,31 @@ function formatInfoValue(value: unknown): string {
         </div>
 
         <aside class="episode-panel">
-          <header>
-            <div><p>EPISODE LIST</p><h2>选集</h2></div>
-            <span>{{ playableEpisodes.length }} EPISODES</span>
+          <header class="panel-tabs" role="tablist" aria-label="选集与评论">
+            <button
+              class="panel-tab"
+              :class="{ active: sidePanelTab === 'episodes' }"
+              type="button"
+              role="tab"
+              :aria-selected="sidePanelTab === 'episodes'"
+              @click="selectSidePanelTab('episodes')"
+            >
+              <span><small>EPISODES</small><strong>选集</strong></span>
+              <em>{{ playableEpisodes.length }}</em>
+            </button>
+            <button
+              class="panel-tab"
+              :class="{ active: sidePanelTab === 'comments' }"
+              type="button"
+              role="tab"
+              :aria-selected="sidePanelTab === 'comments'"
+              @click="selectSidePanelTab('comments')"
+            >
+              <span><small>COMMENTS</small><strong>评论</strong></span>
+              <em>{{ selectedCommentCount }}</em>
+            </button>
           </header>
-          <div v-if="playableEpisodes.length" ref="episodeList" class="episode-list">
+          <div v-if="sidePanelTab === 'episodes' && playableEpisodes.length" ref="episodeList" class="episode-list">
             <button
               v-for="episode in playableEpisodes"
               :key="episode.key"
@@ -350,7 +438,42 @@ function formatInfoValue(value: unknown): string {
               </p>
             </button>
           </div>
-          <div v-else class="episode-list-empty">暂无可播放的成品视频</div>
+          <div v-else-if="sidePanelTab === 'episodes'" class="episode-list-empty">暂无可播放的成品视频</div>
+          <div v-else class="comment-list" role="tabpanel">
+            <div v-if="selectedEpisode" class="comment-context">
+              <div>
+                <strong>{{ selectedEpisode.label }}</strong>
+                <span>{{ selectedEpisode.title || anime.title }}</span>
+              </div>
+              <small v-if="episodeComments">
+                {{ episodeComments.totalCount }} 条内容
+              </small>
+            </div>
+            <div v-if="commentsLoading" class="comment-state comment-loading">
+              <i aria-hidden="true" />
+              <span>正在读取本话评论...</span>
+            </div>
+            <div v-else-if="commentsError" class="comment-state comment-error-state">
+              <span>{{ commentsError }}</span>
+              <button type="button" @click="loadEpisodeComments">重新加载</button>
+            </div>
+            <template v-else-if="episodeComments?.comments.length">
+              <EpisodeCommentItem
+                v-for="comment in episodeComments.comments"
+                :key="comment.commentId"
+                :comment="comment"
+                :smiles="commentSmiles"
+              />
+            </template>
+            <div v-else class="comment-state">
+              <span v-if="!selectedEpisode">请先选择一个可播放话数</span>
+              <span v-else-if="episodeComments?.syncStatus === 'not_started' || episodeComments?.syncStatus === 'pending'">
+                本话评论正在等待首次同步
+              </span>
+              <span v-else-if="episodeComments?.syncStatus === 'not_found'">Bangumi 暂无该话评论数据</span>
+              <span v-else>本话暂时没有评论</span>
+            </div>
+          </div>
         </aside>
       </section>
 
@@ -457,10 +580,17 @@ function formatInfoValue(value: unknown): string {
 .player-empty span { color: rgba(255,255,255,.48); font-size: 13px; }
 
 .episode-panel { height: 100%; display: grid; grid-template-rows: 70px minmax(0, 1fr); overflow: hidden; background: rgba(255,255,255,.8); border: 1px solid rgba(85,119,217,.14); box-shadow: 0 18px 40px rgba(85,119,217,.09); backdrop-filter: blur(14px); clip-path: polygon(0 0, calc(100% - 17px) 0, 100% 17px, 100% 100%, 17px 100%, 0 calc(100% - 17px)); }
-.episode-panel > header { display: flex; align-items: center; justify-content: space-between; padding: 12px 19px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(90deg, rgba(255,244,248,.8), rgba(236,253,255,.36)); }
-.episode-panel > header p { color: var(--blue-500); font-family: var(--font-mono); font-size: 13px; letter-spacing: 1.5px; }
-.episode-panel > header h2 { margin-top: 1px; color: var(--ink-900); font-size: 18px; }
-.episode-panel > header > span { color: var(--pink-500); font-family: var(--font-mono); font-size: 13px; }
+.panel-tabs { display: grid; grid-template-columns: 1fr 1fr; padding: 0; border-bottom: 1px solid var(--line-soft); background: linear-gradient(90deg, rgba(255,244,248,.8), rgba(236,253,255,.36)); }
+.panel-tab { position: relative; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 16px 9px; color: var(--ink-400); text-align: left; border-right: 1px solid rgba(85,119,217,.1); transition: color 150ms ease, background 150ms ease; }
+.panel-tab:last-child { border-right: 0; }
+.panel-tab::after { position: absolute; right: 14px; bottom: 0; left: 14px; height: 2px; content: ''; background: linear-gradient(90deg, var(--pink-400), var(--cyan-400)); transform: scaleX(0); transition: transform 160ms ease; }
+.panel-tab:hover, .panel-tab.active { color: var(--ink-900); background: rgba(255,255,255,.56); }
+.panel-tab.active::after { transform: scaleX(1); }
+.panel-tab span { min-width: 0; }
+.panel-tab small, .panel-tab strong { display: block; }
+.panel-tab small { color: var(--blue-500); font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px; }
+.panel-tab strong { margin-top: 1px; font-size: 16px; }
+.panel-tab em { min-width: 25px; color: var(--pink-500); font-family: var(--font-mono); font-size: 12px; font-style: normal; text-align: right; }
 .episode-list { overflow-y: auto; padding: 7px; }
 .episode-item { width: 100%; display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 13px; padding: 10px; color: var(--ink-700); text-align: left; border-bottom: 1px dashed rgba(85,119,217,.12); transition: background 160ms ease; }
 .episode-item:hover:not(:disabled) { background: rgba(255,244,248,.7); }
@@ -477,6 +607,17 @@ function formatInfoValue(value: unknown): string {
 .episode-copy small { margin-top: 4px; color: var(--ink-400); font-size: 13px; }
 .episode-summary { grid-column: 1 / -1; padding: 9px 11px 7px 12px; color: var(--ink-600); font-size: 13px; line-height: 1.7; border-left: 2px solid var(--cyan-400); background: rgba(255,255,255,.52); }
 .episode-list-empty { display: grid; place-items: center; color: var(--ink-400); font-size: 13px; }
+.comment-list { min-height: 0; overflow-y: auto; padding: 7px; scrollbar-gutter: stable; }
+.comment-context { position: sticky; z-index: 2; top: -7px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid rgba(85,119,217,.12); background: rgba(250,252,255,.94); backdrop-filter: blur(10px); }
+.comment-context div { min-width: 0; }
+.comment-context strong, .comment-context span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comment-context strong { color: var(--pink-600); font-size: 12px; }
+.comment-context span { margin-top: 2px; color: var(--ink-600); font-size: 12px; }
+.comment-context small { flex: 0 0 auto; color: var(--ink-300); font-size: 10px; text-align: right; }
+.comment-state { min-height: 260px; display: grid; place-items: center; align-content: center; gap: 12px; padding: 24px; color: var(--ink-400); font-size: 13px; text-align: center; }
+.comment-loading i { width: 30px; height: 30px; border: 2px solid var(--line-cool); border-top-color: var(--pink-400); border-radius: 50%; animation: bp-spin .8s linear infinite; }
+.comment-error-state { color: #c73567; }
+.comment-error-state button { padding: 7px 13px; color: var(--pink-600); border: 1px solid var(--line); background: #fff; clip-path: polygon(var(--bevel-sm)); }
 
 .information-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(420px, .8fr); gap: 18px; margin-top: 42px; }
 .info-panel { padding: 24px 26px; background: rgba(255,255,255,.74); border: 1px solid rgba(85,119,217,.12); box-shadow: 0 16px 36px rgba(85,119,217,.06); clip-path: polygon(0 0, calc(100% - 17px) 0, 100% 17px, 100% 100%, 17px 100%, 0 calc(100% - 17px)); }

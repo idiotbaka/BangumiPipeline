@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -213,6 +214,36 @@ func TestEpisodeCommentSyncerMarks404NotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCommentSyncState(t, ctx, db, 202001, "not_found", len(commentMilestoneOffsets), 0, 0, 0)
+}
+
+func TestEpisodeCommentSyncerContinuesWhenSmileAssetsCannotBePrepared(t *testing.T) {
+	ctx := context.Background()
+	db := openCommentTestDatabase(t, ctx)
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	insertCommentTestMedia(t, ctx, db, 404, 404001, "1", now)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/p1/episodes/404001/comments" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[{"id":1,"mainID":404001,"creatorID":2,"relatedID":0,"createdAt":3,"content":"评论仍然入库(bgm24)","state":0,"replies":[]}]`)
+	}))
+	t.Cleanup(server.Close)
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	syncer := NewEpisodeCommentSyncer(db, system.NewService(db), discardLogger(), EpisodeCommentSyncerConfig{
+		APIBaseURL: server.URL, UserAgent: "test/BangumiPipeline-comments",
+		APIInterval: time.Millisecond, RequestTimeout: 2 * time.Second,
+		SmileDir: filepath.Join(blocker, "smiles"),
+	})
+	syncer.now = func() time.Time { return now }
+	if err := syncer.Execute(ctx); err == nil || !strings.Contains(err.Error(), "表情") {
+		t.Fatalf("expected smile preparation error after comment sync, got %v", err)
+	}
+	assertStoredComment(t, ctx, db, 404001, 1, 0, "评论仍然入库(bgm24)", "", "")
 }
 
 func TestNextEpisodeCommentMilestoneCollapsesMissedStages(t *testing.T) {

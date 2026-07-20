@@ -5,6 +5,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,10 +24,18 @@ type ViewerAPI struct {
 	catalog      *bangumi.Catalog
 	logger       *slog.Logger
 	cookieSecure bool
+	smileDir     string
 }
 
-func NewViewerHandler(authService *viewer.Service, pushService *viewer.PushService, catalog *bangumi.Catalog, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
-	api := &ViewerAPI{auth: authService, push: pushService, catalog: catalog, logger: logger, cookieSecure: cookieSecure}
+func NewViewerHandler(authService *viewer.Service, pushService *viewer.PushService, catalog *bangumi.Catalog, logger *slog.Logger, cookieSecure bool, webDir string, smileDirs ...string) http.Handler {
+	smileDir := ""
+	if len(smileDirs) > 0 && strings.TrimSpace(smileDirs[0]) != "" {
+		smileDir = filepath.Clean(strings.TrimSpace(smileDirs[0]))
+	}
+	api := &ViewerAPI{
+		auth: authService, push: pushService, catalog: catalog, logger: logger,
+		cookieSecure: cookieSecure, smileDir: smileDir,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
 	mux.HandleFunc("GET /api/site-settings", api.siteSettings)
@@ -49,7 +60,9 @@ func NewViewerHandler(authService *viewer.Service, pushService *viewer.PushServi
 	mux.HandleFunc("PUT /api/anime/{bangumiID}/follow", api.updateAnimeFollow)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/stream", api.animeMediaStream)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/cover", api.animeMediaCover)
+	mux.HandleFunc("GET /api/anime/{bangumiID}/media/{mediaID}/comments", api.animeEpisodeComments)
 	mux.HandleFunc("PUT /api/anime/{bangumiID}/media/{mediaID}/progress", api.updateWatchProgress)
+	mux.HandleFunc("GET /api/bangumi-smiles/{code}", api.bangumiSmile)
 	mux.HandleFunc("GET /api/anime/{bangumiID}/characters/{characterID}/image", api.animeCharacterImage)
 	mux.HandleFunc("GET /api/actors/{actorID}/image", api.animeActorImage)
 	mux.HandleFunc("GET /favicon.png", api.favicon)
@@ -532,6 +545,101 @@ func (a *ViewerAPI) animeMediaCover(w http.ResponseWriter, r *http.Request) {
 	a.serveCatalogImage(w, r, func() (string, error) {
 		return a.catalog.ViewerMediaCoverPath(r.Context(), bangumiID, mediaID)
 	})
+}
+
+func (a *ViewerAPI) animeEpisodeComments(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	bangumiID, ok := parsePathID(w, r.PathValue("bangumiID"))
+	if !ok {
+		return
+	}
+	mediaID, ok := parsePathID(w, r.PathValue("mediaID"))
+	if !ok {
+		return
+	}
+	comments, err := a.catalog.ViewerEpisodeComments(r.Context(), bangumiID, mediaID)
+	if err != nil {
+		if errors.Is(err, bangumi.ErrAnimeNotFound) {
+			writeError(w, http.StatusNotFound, "media_not_found", "当前话数不存在或尚无可播放产物")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"episode": comments,
+		"smiles":  a.commentSmileURLs(comments.Comments),
+	})
+}
+
+func (a *ViewerAPI) bangumiSmile(w http.ResponseWriter, r *http.Request) {
+	if !a.requireViewer(w, r) {
+		return
+	}
+	code := "(" + strings.TrimSpace(r.PathValue("code")) + ")"
+	if a.smileDir == "" || !bangumi.IsBangumiSmileCode(code) {
+		http.NotFound(w, r)
+		return
+	}
+	manifest, err := bangumi.LoadBangumiSmileManifest(a.smileDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	asset, path, ok := manifest.Resolve(a.smileDir, code)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", asset.ContentType)
+	w.Header().Set("Content-Disposition", "inline")
+	w.Header().Set("Cache-Control", "private, max-age=604800, immutable")
+	http.ServeFile(w, r, path)
+}
+
+func (a *ViewerAPI) commentSmileURLs(comments []*bangumi.ViewerEpisodeComment) map[string]string {
+	result := make(map[string]string)
+	if a.smileDir == "" {
+		return result
+	}
+	manifest, err := bangumi.LoadBangumiSmileManifest(a.smileDir)
+	if err != nil {
+		return result
+	}
+	var walk func([]*bangumi.ViewerEpisodeComment)
+	walk = func(items []*bangumi.ViewerEpisodeComment) {
+		for _, comment := range items {
+			for _, match := range bangumi.MatchBangumiSmileCodes(comment.Content) {
+				if _, exists := result[match.Code]; exists {
+					continue
+				}
+				_, path, ok := manifest.Resolve(a.smileDir, match.Code)
+				if !ok {
+					continue
+				}
+				info, statErr := os.Stat(path)
+				if statErr != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+					continue
+				}
+				slug := strings.TrimSuffix(strings.TrimPrefix(match.Code, "("), ")")
+				result[match.Code] = "/api/bangumi-smiles/" + url.PathEscape(slug)
+			}
+			walk(comment.Replies)
+		}
+	}
+	walk(comments)
+	return result
 }
 
 func (a *ViewerAPI) animeCharacterImage(w http.ResponseWriter, r *http.Request) {

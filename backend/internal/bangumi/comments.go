@@ -63,12 +63,15 @@ var (
 )
 
 type EpisodeCommentSyncerConfig struct {
-	APIBaseURL     string
-	UserAgent      string
-	APIInterval    time.Duration
-	RequestTimeout time.Duration
-	BatchSize      int
-	RequestLimiter *RequestLimiter
+	APIBaseURL          string
+	UserAgent           string
+	APIInterval         time.Duration
+	RequestTimeout      time.Duration
+	BatchSize           int
+	RequestLimiter      *RequestLimiter
+	SmileDir            string
+	SmileBangumiBaseURL string
+	SmileLainBaseURL    string
 }
 
 // EpisodeCommentSyncer persists complete snapshots from next.bgm.tv and owns
@@ -80,6 +83,7 @@ type EpisodeCommentSyncer struct {
 	logger   *slog.Logger
 	config   EpisodeCommentSyncerConfig
 	limiter  *RequestLimiter
+	smiles   *BangumiSmileStore
 	now      func() time.Time
 }
 
@@ -172,35 +176,47 @@ func NewEpisodeCommentSyncer(db *sql.DB, settings SettingsProvider, logger *slog
 	if limiter == nil {
 		limiter = NewRequestLimiter(config.APIInterval)
 	}
-	return &EpisodeCommentSyncer{
+	syncer := &EpisodeCommentSyncer{
 		db: db, settings: settings, logger: logger, config: config,
 		limiter: limiter, now: time.Now,
 	}
+	if strings.TrimSpace(config.SmileDir) != "" {
+		syncer.smiles = NewBangumiSmileStore(logger, BangumiSmileSyncConfig{
+			Directory: config.SmileDir, BangumiBaseURL: config.SmileBangumiBaseURL,
+			LainBaseURL: config.SmileLainBaseURL, UserAgent: config.UserAgent,
+			RequestTimeout: config.RequestTimeout,
+		})
+	}
+	return syncer
 }
 
 func (s *EpisodeCommentSyncer) Execute(ctx context.Context) error {
+	smileErr := s.ensureSmileAssets(ctx)
 	backfilled, err := s.enqueueHistoricalEpisodes(ctx)
 	if err != nil {
-		return fmt.Errorf("发现待补抓历史剧集评论: %w", err)
+		return errors.Join(smileErr, fmt.Errorf("发现待补抓历史剧集评论: %w", err))
 	}
 	jobs, err := s.dueCommentSyncJobs(ctx, s.config.BatchSize)
 	if err != nil {
-		return fmt.Errorf("查询待同步剧集评论: %w", err)
+		return errors.Join(smileErr, fmt.Errorf("查询待同步剧集评论: %w", err))
 	}
 	if len(jobs) == 0 {
 		s.logger.Info("Bangumi 剧集吐槽同步完成：没有到期任务", "source", "bangumi", "backfilled", backfilled)
-		return nil
+		return smileErr
 	}
 
 	client, err := s.newCommentAPIClient(ctx)
 	if err != nil {
-		return err
+		return errors.Join(smileErr, err)
 	}
 	defer client.close()
 
 	succeeded := 0
 	notFound := 0
 	failures := make([]string, 0)
+	if smileErr != nil {
+		failures = append(failures, smileErr.Error())
+	}
 	for _, job := range jobs {
 		outcome, runErr := s.syncEpisodeComments(ctx, client, job)
 		switch outcome {
@@ -222,6 +238,23 @@ func (s *EpisodeCommentSyncer) Execute(ctx context.Context) error {
 			shown = shown[:3]
 		}
 		return fmt.Errorf("同步存在 %d 个错误：%s", len(failures), strings.Join(shown, "；"))
+	}
+	return nil
+}
+
+func (s *EpisodeCommentSyncer) ensureSmileAssets(ctx context.Context) error {
+	if s.smiles == nil {
+		return nil
+	}
+	network, err := s.settings.GetNetworkSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("读取 Bangumi 表情下载代理设置: %w", err)
+	}
+	result, err := s.smiles.Ensure(ctx, network)
+	if err != nil {
+		s.logger.Warn("Bangumi 评论表情资源同步未完成，评论抓取将继续", "source", "bangumi",
+			"available", result.Available, "expected", result.Expected, "error", err)
+		return fmt.Errorf("同步 Bangumi 评论表情资源: %w", err)
 	}
 	return nil
 }

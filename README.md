@@ -50,3 +50,28 @@ docker compose up --build
 | `BP_BANGUMI_USER_AGENT` | 项目默认值 | Bangumi API 请求 User-Agent，部署时应覆盖 |
 | `BP_WEB_PUSH_CONTACT_EMAIL` | `noreply@localhost` | Web Push VAPID 联系邮箱，可按部署域名修改 |
 | `BP_COOKIE_SECURE` | `false` | 是否仅通过 HTTPS 发送登录 Cookie |
+
+## Bangumi 评论表情资源
+
+首次执行“同步 Bangumi 剧集吐槽”计划任务时，后端会检查并下载评论表情到
+`BP_COVER_DIR/smiles`（默认 `./data/images/bangumi/smiles`）。图片保留上游 GIF/PNG
+原格式，`manifest.json` 负责把 `(bgm24)`、`(musume_06)` 等评论代码绑定到确定的
+本地文件名和 Content-Type。运行数据目录已被 Git 忽略，不会提交这些图片。
+
+当前目录包含 428 个上游实际存在的资源；Bangumi 官方富文本编辑器未实现且资源返回
+404 的 `(musume_97)`、`(musume_98)` 会固定跳过。完整清单在后续任务中只做本地校验，
+文件缺失时仅补抓缺失项。计划任务自动下载时会使用系统设置中保存的 HTTP/HTTPS 代理。
+
+也可以在仓库根目录手动执行同步脚本：
+
+```powershell
+.\scripts\sync-bangumi-smiles.ps1 `
+  -HttpProxy "http://localhost:10808" `
+  -HttpsProxy "http://localhost:10808"
+```
+
+观看端番剧播放页右侧支持在“选集 / 评论”间切换。评论按当前成品媒体安全映射到
+Bangumi 剧集 ID，展示头像、昵称、签名、评论时间和楼中楼回复；详情接口按本地已抓取的主楼评论分组统计每话评论数，因此加载和切换话数时会立即显示，切换话数也会重新加载正文。
+评论图片支持 `[img]URL[/img]` 和带尺寸提示的 `[img=宽,高]URL[/img]`，并统一受评论区最大显示尺寸约束。
+正文以结构化节点渲染删除线、剧透遮罩、外链图片及本地 Bangumi 表情，不使用
+`v-html`。未知标签、缺失表情与非 HTTP/HTTPS 图片地址会被过滤。

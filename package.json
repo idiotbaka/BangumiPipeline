@@ -15,7 +15,7 @@
     "tauri:dev": "cargo tauri android dev",
     "tauri:build": "cargo tauri android build",
     "build:server": "go build -buildvcs=false ./backend/cmd/server",
-    "test": "go test ./backend/... && npm run build:ui"
+    "test": "go test ./backend/... && npm run test --workspace @bangumi-pipeline/viewer && npm run build:ui"
   },
   "devDependencies": {
     "concurrently": "10.0.3"

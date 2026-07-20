@@ -41,6 +41,7 @@ type ViewerDetailEpisode struct {
 	Summary       string               `json:"summary"`
 	AirDate       string               `json:"airDate"`
 	Duration      string               `json:"duration"`
+	CommentCount  int                  `json:"commentCount"`
 	SortNumber    float64              `json:"sortNumber"`
 	Type          int                  `json:"type"`
 	HasMedia      bool                 `json:"hasMedia"`
@@ -118,6 +119,10 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 	if err != nil {
 		return ViewerAnimeDetail{}, err
 	}
+	commentCounts, err := c.viewerEpisodeCommentCounts(ctx, bangumiID)
+	if err != nil {
+		return ViewerAnimeDetail{}, err
+	}
 	mediaByKey := make(map[string]viewerDetailMedia, len(mediaItems))
 	canonicalMedia := make(map[int64]struct{}, len(mediaItems))
 	for _, media := range mediaItems {
@@ -155,6 +160,7 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 			Summary:       episode.Description,
 			AirDate:       episode.Airdate,
 			Duration:      episode.Duration,
+			CommentCount:  commentCounts[episode.EpisodeID],
 			SortNumber:    episode.SortNumber,
 			Type:          episode.Type,
 			HasMedia:      hasMedia,
@@ -203,6 +209,33 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 		return left.Key < right.Key
 	})
 	return result, nil
+}
+
+func (c *Catalog) viewerEpisodeCommentCounts(ctx context.Context, bangumiID int64) (map[int64]int, error) {
+	rows, err := c.db.QueryContext(ctx, `
+SELECT comments.episode_id, COUNT(*)
+FROM anime_episodes episodes
+JOIN bangumi_episode_comments comments ON comments.episode_id = episodes.episode_id
+WHERE episodes.bangumi_id = ? AND comments.parent_comment_id = 0
+GROUP BY comments.episode_id`, bangumiID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[int64]int)
+	for rows.Next() {
+		var episodeID int64
+		var count int
+		if err := rows.Scan(&episodeID, &count); err != nil {
+			return nil, err
+		}
+		counts[episodeID] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return counts, nil
 }
 
 func (c *Catalog) ViewerMediaPath(ctx context.Context, bangumiID, mediaID int64) (string, error) {

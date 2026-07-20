@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -69,6 +70,7 @@ func run(logger *slog.Logger) error {
 		APIBaseURL: cfg.BangumiNextAPIURL, UserAgent: cfg.BangumiUserAgent,
 		APIInterval: 2 * time.Second, RequestTimeout: 20 * time.Second,
 		RequestLimiter: bangumiRequestLimiter,
+		SmileDir:       filepath.Join(cfg.CoverDir, "smiles"),
 	})
 	subscriptionService := subscription.NewService(db, systemService, logger)
 	downloadService := download.NewService(db, systemService, logger, download.Config{DownloadDir: cfg.DownloadDir})
@@ -105,7 +107,7 @@ func run(logger *slog.Logger) error {
 	}
 	viewerServer := &http.Server{
 		Addr:              cfg.ViewerAddr,
-		Handler:           httpapi.NewViewerHandler(viewerAuthService, viewerPushService, catalog, logger, cfg.CookieSecure, cfg.ViewerWebDir),
+		Handler:           httpapi.NewViewerHandler(viewerAuthService, viewerPushService, catalog, logger, cfg.CookieSecure, cfg.ViewerWebDir, filepath.Join(cfg.CoverDir, "smiles")),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
