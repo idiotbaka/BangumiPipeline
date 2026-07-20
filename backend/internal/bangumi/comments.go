@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,10 +20,11 @@ const (
 	defaultCommentBatchSize    = 10
 	maxCommentNestingDepth     = 20
 	maxCommentsPerEpisode      = 50_000
-	commentBackfillInsertLimit = 1_000
+	commentBackfillInsertLimit = defaultCommentBatchSize
+	commentSmileRetryDelay     = time.Hour
 
 	mediaEpisodeCommentJoin = `
-JOIN anime_episodes ae ON ae.episode_id = (
+JOIN anime_episodes ae ON ae.bangumi_id = mj.bangumi_id AND ae.episode_id = (
     SELECT episode.episode_id
     FROM anime_episodes episode
     WHERE episode.bangumi_id = mj.bangumi_id
@@ -85,6 +87,10 @@ type EpisodeCommentSyncer struct {
 	limiter  *RequestLimiter
 	smiles   *BangumiSmileStore
 	now      func() time.Time
+
+	smileAssetsReady       atomic.Bool
+	nextSmileCheckAt       atomic.Int64
+	historicalBackfillDone atomic.Bool
 }
 
 type episodeCommentAPI struct {
@@ -243,18 +249,32 @@ func (s *EpisodeCommentSyncer) Execute(ctx context.Context) error {
 }
 
 func (s *EpisodeCommentSyncer) ensureSmileAssets(ctx context.Context) error {
-	if s.smiles == nil {
+	if s.smiles == nil || s.smileAssetsReady.Load() {
+		return nil
+	}
+	if s.smiles.HasCompleteManifest() {
+		s.smileAssetsReady.Store(true)
+		return nil
+	}
+	now := s.now().UTC().Unix()
+	if nextCheckAt := s.nextSmileCheckAt.Load(); nextCheckAt > now {
 		return nil
 	}
 	network, err := s.settings.GetNetworkSettings(ctx)
 	if err != nil {
+		s.nextSmileCheckAt.Store(now + int64(commentSmileRetryDelay/time.Second))
 		return fmt.Errorf("读取 Bangumi 表情下载代理设置: %w", err)
 	}
 	result, err := s.smiles.Ensure(ctx, network)
 	if err != nil {
+		s.nextSmileCheckAt.Store(now + int64(commentSmileRetryDelay/time.Second))
 		s.logger.Warn("Bangumi 评论表情资源同步未完成，评论抓取将继续", "source", "bangumi",
 			"available", result.Available, "expected", result.Expected, "error", err)
 		return fmt.Errorf("同步 Bangumi 评论表情资源: %w", err)
+	}
+	if result.Complete {
+		s.smileAssetsReady.Store(true)
+		s.nextSmileCheckAt.Store(0)
 	}
 	return nil
 }
@@ -276,12 +296,24 @@ WHERE mj.id = ? AND mj.bangumi_id = ?
 		&candidate.MediaJobID, &candidate.BangumiID, &candidate.EpisodeID, &candidate.AnchorAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("已完成媒体任务 #%d 尚未匹配到 Bangumi 剧集 ID", mediaJobID)
+		err = fmt.Errorf("已完成媒体任务 #%d 尚未匹配到 Bangumi 剧集 ID", mediaJobID)
+		if resetErr := s.markHistoricalBackfillPending(ctx); resetErr != nil {
+			return errors.Join(err, resetErr)
+		}
+		return err
 	}
 	if err != nil {
+		if resetErr := s.markHistoricalBackfillPending(ctx); resetErr != nil {
+			return errors.Join(err, resetErr)
+		}
 		return err
 	}
 	_, err = s.enqueueEpisodeCommentSync(ctx, candidate, false)
+	if err != nil {
+		if resetErr := s.markHistoricalBackfillPending(ctx); resetErr != nil {
+			return errors.Join(err, resetErr)
+		}
+	}
 	return err
 }
 
@@ -537,7 +569,7 @@ func (s *EpisodeCommentSyncer) dueCommentSyncJobs(ctx context.Context, limit int
 func (s *EpisodeCommentSyncer) dueCommentSyncJobsBySource(ctx context.Context, now int64, backfill bool, limit int) ([]episodeCommentSyncJob, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT bangumi_id, episode_id, anchor_at, next_stage, attempts, is_backfill
-FROM bangumi_episode_comment_sync
+FROM bangumi_episode_comment_sync INDEXED BY idx_bangumi_episode_comment_sync_ready
 WHERE status = 'pending' AND next_fetch_at IS NOT NULL AND next_fetch_at <= ? AND is_backfill = ?
 ORDER BY next_fetch_at, episode_id
 LIMIT ?`, now, backfill, limit)
@@ -557,14 +589,21 @@ LIMIT ?`, now, backfill, limit)
 }
 
 func (s *EpisodeCommentSyncer) enqueueHistoricalEpisodes(ctx context.Context) (int, error) {
+	completed, err := s.historicalBackfillCompleted(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if completed {
+		return 0, nil
+	}
+	now := s.now().UTC().Unix()
 	rows, err := s.db.QueryContext(ctx, `
 SELECT mj.id, mj.bangumi_id, ae.episode_id,
        COALESCE(mj.completed_at, mj.updated_at, mj.created_at)
-FROM media_jobs mj
+FROM media_jobs mj INDEXED BY idx_media_jobs_comment_backfill
 `+mediaEpisodeCommentJoin+`
-LEFT JOIN bangumi_episode_comment_sync sync ON sync.episode_id = ae.episode_id
-WHERE mj.status = 'completed' AND mj.output_path != '' AND sync.episode_id IS NULL
-ORDER BY COALESCE(mj.completed_at, mj.updated_at, mj.created_at) DESC, mj.id DESC
+WHERE mj.status = 'completed' AND mj.output_path != '' AND mj.comment_sync_enqueued = 0
+ORDER BY mj.id DESC
 LIMIT ?`, commentBackfillInsertLimit)
 	if err != nil {
 		return 0, err
@@ -591,7 +630,75 @@ LIMIT ?`, commentBackfillInsertLimit)
 			inserted++
 		}
 	}
+	if len(candidates) < commentBackfillInsertLimit {
+		hasUnqueuedMedia, err := s.hasUnqueuedCompletedMedia(ctx)
+		if err != nil {
+			return inserted, err
+		}
+		if !hasUnqueuedMedia {
+			if _, err := s.db.ExecContext(ctx, `
+UPDATE bangumi_episode_comment_task_state
+SET historical_backfill_completed = 1, updated_at = ?
+WHERE id = 1`, now); err != nil {
+				return inserted, err
+			}
+			s.historicalBackfillDone.Store(true)
+		}
+	}
 	return inserted, nil
+}
+
+func (s *EpisodeCommentSyncer) historicalBackfillCompleted(ctx context.Context) (bool, error) {
+	if s.historicalBackfillDone.Load() {
+		return true, nil
+	}
+	var completed bool
+	if err := s.db.QueryRowContext(ctx, `
+SELECT historical_backfill_completed
+FROM bangumi_episode_comment_task_state
+WHERE id = 1`).Scan(&completed); err != nil {
+		return false, err
+	}
+	if completed {
+		hasUnqueuedMedia, err := s.hasUnqueuedCompletedMedia(ctx)
+		if err != nil {
+			return false, err
+		}
+		if hasUnqueuedMedia {
+			if err := s.markHistoricalBackfillPending(ctx); err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+		s.historicalBackfillDone.Store(true)
+	}
+	return completed, nil
+}
+
+func (s *EpisodeCommentSyncer) hasUnqueuedCompletedMedia(ctx context.Context) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS(
+    SELECT 1
+    FROM media_jobs INDEXED BY idx_media_jobs_comment_backfill
+    WHERE status = 'completed' AND output_path != '' AND comment_sync_enqueued = 0
+    LIMIT 1
+)`).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (s *EpisodeCommentSyncer) markHistoricalBackfillPending(ctx context.Context) error {
+	s.historicalBackfillDone.Store(false)
+	_, err := s.db.ExecContext(ctx, `
+UPDATE bangumi_episode_comment_task_state
+SET historical_backfill_completed = 0, updated_at = ?
+WHERE id = 1`, s.now().UTC().Unix())
+	if err != nil {
+		return fmt.Errorf("重新启用历史剧集评论兜底扫描: %w", err)
+	}
+	return nil
 }
 
 func (s *EpisodeCommentSyncer) enqueueEpisodeCommentSync(ctx context.Context, candidate completedMediaCommentCandidate, backfill bool) (bool, error) {
@@ -603,6 +710,7 @@ func (s *EpisodeCommentSyncer) enqueueEpisodeCommentSync(ctx context.Context, ca
 	if anchorAt <= 0 {
 		anchorAt = now
 	}
+	created := false
 	if backfill {
 		result, err := s.db.ExecContext(ctx, `
 INSERT OR IGNORE INTO bangumi_episode_comment_sync(
@@ -614,9 +722,12 @@ INSERT OR IGNORE INTO bangumi_episode_comment_sync(
 			return false, err
 		}
 		affected, err := result.RowsAffected()
-		return affected > 0, err
-	}
-	result, err := s.db.ExecContext(ctx, `
+		if err != nil {
+			return false, err
+		}
+		created = affected > 0
+	} else {
+		result, err := s.db.ExecContext(ctx, `
 INSERT INTO bangumi_episode_comment_sync(
     episode_id, bangumi_id, anchor_media_job_id, anchor_at, status,
     next_stage, next_fetch_at, is_backfill, created_at, updated_at
@@ -625,10 +736,29 @@ ON CONFLICT(episode_id) DO UPDATE SET
     anchor_media_job_id = COALESCE(bangumi_episode_comment_sync.anchor_media_job_id, excluded.anchor_media_job_id),
     is_backfill = 0,
     updated_at = excluded.updated_at`,
-		candidate.EpisodeID, candidate.BangumiID, candidate.MediaJobID, anchorAt, now, now, now)
+			candidate.EpisodeID, candidate.BangumiID, candidate.MediaJobID, anchorAt, now, now, now)
+		if err != nil {
+			return false, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		created = affected > 0
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE media_jobs
+SET comment_sync_enqueued = 1
+WHERE id = ? AND bangumi_id = ?`, candidate.MediaJobID, candidate.BangumiID)
 	if err != nil {
 		return false, err
 	}
 	affected, err := result.RowsAffected()
-	return affected > 0, err
+	if err != nil {
+		return false, err
+	}
+	if affected == 0 {
+		return false, fmt.Errorf("媒体任务 #%d 不存在，无法记录评论入队状态", candidate.MediaJobID)
+	}
+	return created, nil
 }

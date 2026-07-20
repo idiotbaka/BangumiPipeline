@@ -150,6 +150,40 @@ func LoadBangumiSmileManifest(directory string) (BangumiSmileManifest, error) {
 	return manifest, nil
 }
 
+// HasCompleteManifest performs the cheap startup check used by the scheduled
+// comment task. A complete manifest is the durable marker written only after
+// every expected asset has been downloaded and validated; the task therefore
+// does not reopen hundreds of immutable image files on every run or restart.
+func (s *BangumiSmileStore) HasCompleteManifest() bool {
+	manifest, err := LoadBangumiSmileManifest(s.config.Directory)
+	if err != nil || manifest.Version != BangumiSmileManifestVersion || !manifest.Complete {
+		return false
+	}
+	definitions := bangumiSmileDefinitions(s.config.BangumiBaseURL, s.config.LainBaseURL)
+	if manifest.ExpectedCount != len(definitions) || len(manifest.Assets) != len(definitions) {
+		return false
+	}
+	for _, definition := range definitions {
+		asset, _, ok := manifest.Resolve(s.config.Directory, definition.Code)
+		if !ok {
+			return false
+		}
+		switch filepath.Ext(asset.File) {
+		case ".gif":
+			if asset.ContentType != "image/gif" {
+				return false
+			}
+		case ".png":
+			if asset.ContentType != "image/png" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Resolve returns the manifest entry and its local path. It only accepts an
 // expected code and a safe basename produced by the smile synchronizer.
 func (m BangumiSmileManifest) Resolve(directory, code string) (BangumiSmileAsset, string, bool) {

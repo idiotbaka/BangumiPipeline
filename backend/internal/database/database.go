@@ -273,6 +273,19 @@ CREATE TABLE IF NOT EXISTS bangumi_episode_comment_sync (
 CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comment_sync_due
 ON bangumi_episode_comment_sync(status, next_fetch_at, is_backfill, episode_id);
 
+CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comment_sync_ready
+ON bangumi_episode_comment_sync(status, is_backfill, next_fetch_at, episode_id);
+
+CREATE TABLE IF NOT EXISTS bangumi_episode_comment_task_state (
+    id                            INTEGER PRIMARY KEY CHECK (id = 1),
+    historical_backfill_completed INTEGER NOT NULL DEFAULT 0 CHECK (historical_backfill_completed IN (0, 1)),
+    updated_at                    INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO bangumi_episode_comment_task_state(
+    id, historical_backfill_completed, updated_at
+) VALUES (1, 0, unixepoch());
+
 CREATE TABLE IF NOT EXISTS bangumi_episode_comments (
     bangumi_id        INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
     episode_id        INTEGER NOT NULL,
@@ -1244,6 +1257,46 @@ INSERT OR IGNORE INTO scheduled_tasks(
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (31, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 31 migration: %w", err)
+	}
+	applied, err = migrationApplied(ctx, db, 32)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		if err := ensureColumn(ctx, db, "media_jobs", "comment_sync_enqueued", "INTEGER NOT NULL DEFAULT 0 CHECK (comment_sync_enqueued IN (0, 1))"); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS bangumi_episode_comment_task_state (
+    id                            INTEGER PRIMARY KEY CHECK (id = 1),
+    historical_backfill_completed INTEGER NOT NULL DEFAULT 0 CHECK (historical_backfill_completed IN (0, 1)),
+    updated_at                    INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO bangumi_episode_comment_task_state(
+    id, historical_backfill_completed, updated_at
+) VALUES (1, 0, unixepoch());
+
+CREATE INDEX IF NOT EXISTS idx_bangumi_episode_comment_sync_ready
+ON bangumi_episode_comment_sync(status, is_backfill, next_fetch_at, episode_id);
+
+CREATE INDEX IF NOT EXISTS idx_media_jobs_comment_backfill
+ON media_jobs(id DESC)
+WHERE status = 'completed' AND output_path != '' AND comment_sync_enqueued = 0;
+
+UPDATE media_jobs
+SET comment_sync_enqueued = 1
+WHERE comment_sync_enqueued = 0
+  AND id IN (
+      SELECT anchor_media_job_id
+      FROM bangumi_episode_comment_sync
+      WHERE anchor_media_job_id IS NOT NULL
+  );
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (32, unixepoch());`); err != nil {
+			return fmt.Errorf("finish version 32 migration: %w", err)
+		}
 	}
 	return nil
 }

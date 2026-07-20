@@ -151,12 +151,107 @@ func TestEpisodeCommentSyncerBackfillsOldMediaOnlyOnce(t *testing.T) {
 	if err := syncer.Execute(ctx); err != nil {
 		t.Fatal(err)
 	}
-	assertCommentSyncState(t, ctx, db, 101001, "completed", len(commentMilestoneOffsets), 0, 0, 0)
-	if err := syncer.Execute(ctx); err != nil {
+	if !syncer.historicalBackfillDone.Load() {
+		t.Fatal("expected exhausted historical backfill to be marked complete in memory")
+	}
+	var backfillCompleted bool
+	if err := db.QueryRowContext(ctx, `
+SELECT historical_backfill_completed
+FROM bangumi_episode_comment_task_state
+WHERE id = 1`).Scan(&backfillCompleted); err != nil {
 		t.Fatal(err)
+	}
+	if !backfillCompleted {
+		t.Fatal("expected exhausted historical backfill to be marked complete in the database")
+	}
+	assertCommentSyncState(t, ctx, db, 101001, "completed", len(commentMilestoneOffsets), 0, 0, 0)
+	restartedSyncer := NewEpisodeCommentSyncer(db, system.NewService(db), discardLogger(), EpisodeCommentSyncerConfig{
+		APIBaseURL: server.URL, UserAgent: "test/BangumiPipeline-comments",
+		APIInterval: time.Millisecond, RequestTimeout: 2 * time.Second,
+	})
+	restartedSyncer.now = func() time.Time { return now.Add(time.Minute) }
+	if err := restartedSyncer.Execute(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !restartedSyncer.historicalBackfillDone.Load() {
+		t.Fatal("expected a restarted syncer to reuse the durable historical completion marker")
 	}
 	if requests.Load() != 1 {
 		t.Fatalf("expected one historical fetch, got %d", requests.Load())
+	}
+}
+
+func TestEpisodeCommentSyncerBoundsHistoricalDiscoveryPerRun(t *testing.T) {
+	ctx := context.Background()
+	db := openCommentTestDatabase(t, ctx)
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	for index := 0; index < commentBackfillInsertLimit+1; index++ {
+		bangumiID := int64(1_000 + index)
+		insertCommentTestMedia(t, ctx, db, bangumiID, bangumiID*1_000+1, "1", now.Add(time.Duration(index)*time.Second))
+	}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[]`)
+	}))
+	t.Cleanup(server.Close)
+	syncer := NewEpisodeCommentSyncer(db, system.NewService(db), discardLogger(), EpisodeCommentSyncerConfig{
+		APIBaseURL: server.URL, UserAgent: "test/BangumiPipeline-comments",
+		APIInterval: time.Millisecond, RequestTimeout: 2 * time.Second,
+	})
+	syncer.now = func() time.Time { return now }
+	if err := syncer.Execute(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var queued int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bangumi_episode_comment_sync`).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != commentBackfillInsertLimit || int(requests.Load()) != defaultCommentBatchSize {
+		t.Fatalf("historical discovery exceeded per-run bound: queued=%d requests=%d", queued, requests.Load())
+	}
+	if syncer.historicalBackfillDone.Load() {
+		t.Fatal("a full historical batch must remain pending for the next scheduled run")
+	}
+}
+
+func TestHistoricalCommentDiscoveryUsesBoundedIndexes(t *testing.T) {
+	ctx := context.Background()
+	db := openCommentTestDatabase(t, ctx)
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	mediaJobID := insertCommentTestMedia(t, ctx, db, 537904, 1561891, "1", now)
+	rows, err := db.QueryContext(ctx, `
+EXPLAIN QUERY PLAN
+SELECT mj.id, mj.bangumi_id, ae.episode_id,
+       COALESCE(mj.completed_at, mj.updated_at, mj.created_at)
+FROM media_jobs mj INDEXED BY idx_media_jobs_comment_backfill
+`+mediaEpisodeCommentJoin+`
+WHERE mj.status = 'completed' AND mj.output_path != '' AND mj.comment_sync_enqueued = 0
+ORDER BY mj.id DESC
+LIMIT ?`, commentBackfillInsertLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := make([]string, 0)
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(plan, "\n")
+	if strings.Contains(joined, "SCAN ae") ||
+		!strings.Contains(joined, "idx_media_jobs_comment_backfill") ||
+		!strings.Contains(joined, "bangumi_id=? AND episode_id=?") ||
+		strings.Contains(joined, "USE TEMP B-TREE FOR ORDER BY") {
+		t.Fatalf("historical discovery must use bounded indexes instead of full scans and outer sorting (media=%d):\n%s", mediaJobID, joined)
 	}
 }
 
@@ -183,6 +278,14 @@ FROM bangumi_episode_comment_sync WHERE episode_id = 303001`).Scan(
 		t.Fatalf("unexpected live enqueue state: media=%d anchor=%d next=%d backfill=%v",
 			anchorMediaJobID, anchorAt, nextFetchAt, isBackfill)
 	}
+	var mediaEnqueued bool
+	if err := db.QueryRowContext(ctx, `
+SELECT comment_sync_enqueued FROM media_jobs WHERE id = ?`, mediaJobID).Scan(&mediaEnqueued); err != nil {
+		t.Fatal(err)
+	}
+	if !mediaEnqueued {
+		t.Fatal("expected completed media to retain its durable comment enqueue marker")
+	}
 	if _, err := db.ExecContext(ctx, `
 UPDATE bangumi_episode_comment_sync
 SET status = 'completed', next_stage = 6, next_fetch_at = NULL, completed_at = ?
@@ -194,6 +297,26 @@ WHERE episode_id = 303001`, now.Unix()); err != nil {
 		t.Fatal(err)
 	}
 	assertCommentSyncState(t, ctx, db, 303001, "completed", 6, 0, 0, 0)
+	if _, err := db.ExecContext(ctx, `
+UPDATE bangumi_episode_comment_task_state
+SET historical_backfill_completed = 1
+WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	syncer.historicalBackfillDone.Store(true)
+	if err := syncer.EnqueueMediaCompleted(ctx, mediaJobID+999, 303); err == nil {
+		t.Fatal("expected an unknown completed media job to fail")
+	}
+	var backfillCompleted bool
+	if err := db.QueryRowContext(ctx, `
+SELECT historical_backfill_completed
+FROM bangumi_episode_comment_task_state
+WHERE id = 1`).Scan(&backfillCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if backfillCompleted || syncer.historicalBackfillDone.Load() {
+		t.Fatal("a live enqueue failure must reopen the historical fallback")
+	}
 }
 
 func TestEpisodeCommentSyncerMarks404NotFound(t *testing.T) {
@@ -243,7 +366,13 @@ func TestEpisodeCommentSyncerContinuesWhenSmileAssetsCannotBePrepared(t *testing
 	if err := syncer.Execute(ctx); err == nil || !strings.Contains(err.Error(), "表情") {
 		t.Fatalf("expected smile preparation error after comment sync, got %v", err)
 	}
+	if got, want := syncer.nextSmileCheckAt.Load(), now.Add(commentSmileRetryDelay).Unix(); got != want {
+		t.Fatalf("expected failed smile preparation to be delayed until %d, got %d", want, got)
+	}
 	assertStoredComment(t, ctx, db, 404001, 1, 0, "评论仍然入库(bgm24)", "", "")
+	if err := syncer.Execute(ctx); err != nil {
+		t.Fatalf("smile preparation should not retry on every minute: %v", err)
+	}
 }
 
 func TestNextEpisodeCommentMilestoneCollapsesMissedStages(t *testing.T) {

@@ -137,6 +137,9 @@ func TestBangumiSmileStoreDownloadsFallbackRetriesAndCaches(t *testing.T) {
 	assertResolvedSmile(t, manifest, directory, "(bgm24)", "bgm24.gif", "image/gif")
 	assertResolvedSmile(t, manifest, directory, "(bgm500)", "bgm500.png", "image/png")
 	assertResolvedSmile(t, manifest, directory, "(musume_06)", "musume_06.gif", "image/gif")
+	if !store.HasCompleteManifest() {
+		t.Fatal("expected the complete manifest to serve as the durable scheduled-task marker")
+	}
 
 	completeRequestCount := requests.Load()
 	result, err = store.Ensure(context.Background(), system.NetworkSettings{})
@@ -149,6 +152,9 @@ func TestBangumiSmileStoreDownloadsFallbackRetriesAndCaches(t *testing.T) {
 
 	if err := os.Remove(filepath.Join(directory, "bgm500.png")); err != nil {
 		t.Fatal(err)
+	}
+	if !store.HasCompleteManifest() {
+		t.Fatal("the cheap completion check must not reopen every immutable image file")
 	}
 	result, err = store.Ensure(context.Background(), system.NetworkSettings{})
 	if err != nil {

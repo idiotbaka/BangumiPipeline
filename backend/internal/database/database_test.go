@@ -337,6 +337,49 @@ SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 31)`).Scan(&applie
 	}
 }
 
+func TestVersion32MigrationAddsEpisodeCommentSchedulingIndexes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	assertTableExists(t, db, "bangumi_episode_comment_task_state")
+	var mediaEnqueueColumn bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(
+    SELECT 1 FROM pragma_table_info('media_jobs') WHERE name = 'comment_sync_enqueued'
+)`).Scan(&mediaEnqueueColumn); err != nil {
+		t.Fatal(err)
+	}
+	if !mediaEnqueueColumn {
+		t.Fatal("expected media_jobs.comment_sync_enqueued to exist")
+	}
+
+	for _, index := range []string{
+		"idx_bangumi_episode_comment_sync_ready",
+		"idx_media_jobs_comment_backfill",
+	} {
+		var exists bool
+		if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?)`, index).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			t.Fatalf("expected index %s to exist", index)
+		}
+	}
+	var applied bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 32)`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("expected version 32 migration to be recorded")
+	}
+}
+
 func assertTableExists(t *testing.T, db *sql.DB, table string) {
 	t.Helper()
 	var exists bool

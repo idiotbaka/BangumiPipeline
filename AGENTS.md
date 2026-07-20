@@ -122,11 +122,12 @@ SQLite 是唯一事实源。打开逻辑在 `backend/internal/database/database.
 - `anime_characters`、`actors`、`character_actors`：角色、声优、关联。
 - `anime_episodes`：分集元数据。
 - `bangumi_episode_comment_sync`：按 Bangumi episode ID 记录吐槽抓取里程碑、重试和历史回填状态。
+- `bangumi_episode_comment_task_state`：记录一次性历史评论回填是否已经耗尽，避免每分钟重复扫描成品媒体。
 - `bangumi_episode_comments`：剧集吐槽及楼中楼回复快照，保留用户、头像、签名、reactions 和原始 JSON。
 - `bangumi_custom_search_settings`：Bangumi 自定义标签抓取设置。
 - `subscription_settings`、`subscription_items`、`subscription_title_rules`：RSS、匹配、绑定、标题记忆。
 - `download_settings`、`download_jobs`：qBittorrent 设置与下载状态。
-- `media_jobs`：媒体处理状态、最终视频、封面图、转码信息。
+- `media_jobs`：媒体处理状态、最终视频、封面图、转码信息，以及评论链路入队完成标记。
 - `media_storage_settings`：额外成品视频存储根目录。
 - `llm_settings`：OpenAI Chat 兼容 LLM 配置。
 - `viewer_users`、`viewer_sessions`：观看端独立用户和 Session。
@@ -176,6 +177,10 @@ SQLite 是唯一事实源。打开逻辑在 `backend/internal/database/database.
 - 某话成品首次完成后立即入队，并在成品完成后的 2 小时、12 小时、24 小时、3 天和 7 天更新；超过 7 天且从未抓取的历史成品只兜底抓取一次。
 - 吐槽正文按接口原文保存，不直接替换 `(bgm38)`、`[s]`、`[mask]`、`[img]` 等内容标记。
 - 首次执行吐槽任务时检查 `BP_COVER_DIR/smiles`；表情资源不完整时使用系统代理补抓，并通过 `manifest.json` 将代码绑定到本地 GIF/PNG 文件。
+- 完整的 `manifest.json` 是表情资源的持久完成标记；自动任务成功后不再逐个打开 428 个文件，失败重试至少间隔 1 小时。需要重新校验或修复文件时使用手动同步脚本。
+- 历史成品兜底每轮最多发现 10 话；耗尽后写入 `bangumi_episode_comment_task_state.historical_backfill_completed` 并跳过每分钟扫描，新成品仍由媒体完成回调立即入队。`media_jobs.comment_sync_enqueued` 记录每个成品是否已进入评论链路；新成品入队失败时必须清除全局完成标记，服务重启时也要通过未入队成品部分索引兜住中断窗口。
+- 媒体与 Bangumi 分集匹配必须同时使用 `bangumi_id` 和 `episode_id` 命中复合索引，禁止仅按 `episode_id` 对 `anime_episodes` 做外层关联而触发全表扫描。
+- 评论到期查询使用 `(status, is_backfill, next_fetch_at, episode_id)` 索引；历史发现使用已完成媒体的部分索引，避免计划任务独占单连接 SQLite 并阻塞 HTTP API。
 - 表情保留原始 GIF/PNG，不能统一转为 JPG；格式不固定的资源先尝试 PNG，404 后尝试 GIF。
 - 表情目录共定义 428 个实际资源；官网未实现且上游 404 的 `(musume_97)`、`(musume_98)` 必须固定跳过。
 - 表情代码识别和清单解析集中在 `backend/internal/bangumi/smiles.go`；不要在 Viewer、Web 或 Mobile 端各自维护重复映射表。
