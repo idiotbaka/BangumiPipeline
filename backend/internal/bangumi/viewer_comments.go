@@ -79,6 +79,11 @@ FROM bangumi_episode_comments comments
 LEFT JOIN bangumi_comment_user_avatars avatars
        ON avatars.user_id = comments.user_id AND avatars.status = 'downloaded'
 WHERE bangumi_id = ? AND episode_id = ?
+  AND NOT EXISTS (
+      SELECT 1
+      FROM viewer_comment_username_filters filters
+      WHERE filters.username = comments.username COLLATE BINARY
+  )
 ORDER BY source_created_at DESC, sort_order DESC, comment_id DESC`, bangumiID, result.EpisodeID)
 	if err != nil {
 		return ViewerEpisodeComments{}, err

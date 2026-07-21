@@ -96,6 +96,10 @@ export interface ViewerSiteSettings {
   updatedAt: number
 }
 
+export interface ViewerCommentFilterSettings {
+  usernames: string[]
+}
+
 export interface ViewerCarouselItem {
   id: number
   bangumiId: number
@@ -683,6 +687,13 @@ export const api = {
     request<{ settings: ViewerSiteSettings }>('/api/viewer/site-settings', {
       method: 'PUT',
       body: JSON.stringify(settings),
+    }),
+  viewerCommentFilterSettings: () =>
+    request<{ settings: ViewerCommentFilterSettings }>('/api/viewer/site-settings/comment-filter'),
+  updateViewerCommentFilterSettings: (usernames: string[]) =>
+    request<{ settings: ViewerCommentFilterSettings }>('/api/viewer/site-settings/comment-filter', {
+      method: 'PUT',
+      body: JSON.stringify({ usernames }),
     }),
   uploadViewerFavicon: (file: File) => {
     const form = new FormData()

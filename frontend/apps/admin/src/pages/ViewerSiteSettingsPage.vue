@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { ChatLineSquare, Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
 import { api, type ViewerSiteSettings } from '../api'
 
 const settings = ref<ViewerSiteSettings | null>(null)
 const siteName = ref('')
 const registrationEnabled = ref(true)
 const inviteRequired = ref(false)
+const commentFilterUsernames = ref<string[]>([])
+const commentFilterDraft = ref('')
 const loading = ref(false)
 const saving = ref(false)
 const savingRegistration = ref(false)
+const savingCommentFilter = ref(false)
 const uploading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const faviconURL = computed(() => {
@@ -24,9 +27,14 @@ onMounted(loadSettings)
 async function loadSettings() {
   loading.value = true
   try {
-    const result = await api.viewerSiteSettings()
-    settings.value = result.settings
-    syncForm(result.settings)
+    const [siteResult, commentFilterResult] = await Promise.all([
+      api.viewerSiteSettings(),
+      api.viewerCommentFilterSettings(),
+    ])
+    settings.value = siteResult.settings
+    syncForm(siteResult.settings)
+    commentFilterUsernames.value = [...commentFilterResult.settings.usernames]
+    commentFilterDraft.value = ''
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载网站设置失败')
   } finally {
@@ -78,6 +86,41 @@ function syncForm(nextSettings: ViewerSiteSettings) {
   inviteRequired.value = nextSettings.inviteRequired
 }
 
+function addCommentFilterUsername() {
+  const username = commentFilterDraft.value.trim()
+  if (!username) return
+  if (commentFilterUsernames.value.includes(username)) {
+    ElMessage.warning('该用户名已经存在')
+    return
+  }
+  if (commentFilterUsernames.value.length >= 200) {
+    ElMessage.warning('最多可以配置 200 个用户名')
+    return
+  }
+  commentFilterUsernames.value.push(username)
+  commentFilterDraft.value = ''
+}
+
+function removeCommentFilterUsername(index: number) {
+  commentFilterUsernames.value.splice(index, 1)
+}
+
+async function saveCommentFilterSettings() {
+  if (savingCommentFilter.value) return
+  addCommentFilterUsername()
+  savingCommentFilter.value = true
+  try {
+    const result = await api.updateViewerCommentFilterSettings([...commentFilterUsernames.value])
+    commentFilterUsernames.value = [...result.settings.usernames]
+    commentFilterDraft.value = ''
+    ElMessage.success('评论过滤设置已保存')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存评论过滤设置失败')
+  } finally {
+    savingCommentFilter.value = false
+  }
+}
+
 function chooseFavicon() {
   fileInput.value?.click()
 }
@@ -123,7 +166,7 @@ function formatDate(value: number | null | undefined) {
       <div>
         <p class="eyebrow">FRONTEND</p>
         <h1>网站设置</h1>
-        <p>调整观看端展示名称和浏览器小图标。</p>
+        <p>调整观看端展示名称、评论过滤和浏览器小图标。</p>
       </div>
       <div class="page-header-actions">
         <el-button :icon="Refresh" :loading="loading" @click="loadSettings">刷新</el-button>
@@ -151,6 +194,49 @@ function formatDate(value: number | null | undefined) {
             <el-button type="primary" :loading="saving" @click="saveSiteName">保存名称</el-button>
           </div>
         </el-form>
+      </el-card>
+
+      <el-card class="settings-card" shadow="never">
+        <template #header>
+          <div class="settings-title">
+            <el-icon class="module-icon"><ChatLineSquare /></el-icon>
+            <div>
+              <h2>评论过滤</h2>
+              <p>按 Bangumi 用户名全匹配过滤该用户发表的吐槽。</p>
+            </div>
+          </div>
+        </template>
+        <div class="comment-filter-settings">
+          <div v-if="commentFilterUsernames.length" class="comment-filter-tags">
+            <el-tag
+              v-for="(username, index) in commentFilterUsernames"
+              :key="username"
+              closable
+              effect="plain"
+              @close="removeCommentFilterUsername(index)"
+            >
+              {{ username }}
+            </el-tag>
+          </div>
+          <div v-else class="comment-filter-empty">尚未添加需要过滤的用户名</div>
+          <div class="comment-filter-input-row">
+            <el-input
+              v-model="commentFilterDraft"
+              maxlength="80"
+              show-word-limit
+              placeholder="输入完整 Bangumi 用户名"
+              @keyup.enter.prevent="addCommentFilterUsername"
+            />
+            <el-button :icon="Plus" @click="addCommentFilterUsername">添加用户名</el-button>
+          </div>
+          <p class="form-help">仅匹配评论数据中的完整用户名，昵称或部分文字不会命中过滤规则。</p>
+          <div class="settings-actions comment-filter-actions">
+            <span>已配置 {{ commentFilterUsernames.length }} / 200 个用户名</span>
+            <el-button type="primary" :loading="savingCommentFilter" @click="saveCommentFilterSettings">
+              保存评论过滤
+            </el-button>
+          </div>
+        </div>
       </el-card>
 
       <el-card class="settings-card" shadow="never">
@@ -212,3 +298,46 @@ function formatDate(value: number | null | undefined) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.comment-filter-settings {
+  display: grid;
+  gap: 12px;
+}
+
+.comment-filter-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 34px;
+  padding: 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.comment-filter-empty {
+  display: grid;
+  place-items: center;
+  min-height: 58px;
+  color: #98a2b3;
+  font-size: 13px;
+  border: 1px dashed #d8dde6;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.comment-filter-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.comment-filter-settings .form-help {
+  margin: -3px 0 0;
+}
+
+.comment-filter-actions {
+  padding-top: 4px;
+}
+</style>

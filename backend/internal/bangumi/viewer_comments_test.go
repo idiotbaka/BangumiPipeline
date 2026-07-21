@@ -38,6 +38,11 @@ INSERT INTO bangumi_comment_user_avatars(
 		now.Unix(), now.Unix(), now.Unix()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO viewer_comment_username_filters(username, created_at)
+VALUES ('reply-b', ?), ('NEW', ?)`, now.Unix(), now.Unix()); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := NewCatalog(db).ViewerEpisodeComments(ctx, 537904, mediaID)
 	if err != nil {
@@ -46,14 +51,14 @@ INSERT INTO bangumi_comment_user_avatars(
 	if result.EpisodeID != 1561891 || result.SyncStatus != "completed" || result.FetchedAt == nil || *result.FetchedAt != now.Unix() {
 		t.Fatalf("unexpected episode comment metadata: %+v", result)
 	}
-	if result.CommentCount != 2 || result.TotalCount != 4 || len(result.Comments) != 2 {
+	if result.CommentCount != 2 || result.TotalCount != 3 || len(result.Comments) != 2 {
 		t.Fatalf("unexpected comment counts: %+v", result)
 	}
 	if result.Comments[0].CommentID != 200 || result.Comments[1].CommentID != 100 {
 		t.Fatalf("root comments are not newest first: %d, %d", result.Comments[0].CommentID, result.Comments[1].CommentID)
 	}
 	old := result.Comments[1]
-	if len(old.Replies) != 2 || old.Replies[0].CommentID != 102 || old.Replies[1].CommentID != 101 {
+	if len(old.Replies) != 1 || old.Replies[0].CommentID != 101 {
 		t.Fatalf("replies are not newest first: %+v", old.Replies)
 	}
 	if old.User == nil || old.User.Nickname != "旧用户" || old.User.Sign != "旧签名" || old.User.AvatarURL != "/api/bangumi-comment-avatars/1100" {
@@ -90,13 +95,18 @@ func TestViewerAnimeDetailCountsStoredTopLevelComments(t *testing.T) {
 	insertViewerComment(t, ctx, db, 537904, 1561891, 100, 0, 1000, 0, "主楼一", "one", "用户一", "", "", "", "")
 	insertViewerComment(t, ctx, db, 537904, 1561891, 101, 100, 1100, 1, "回复", "reply", "回复用户", "", "", "", "")
 	insertViewerComment(t, ctx, db, 537904, 1561891, 200, 0, 1200, 2, "主楼二", "two", "用户二", "", "", "", "")
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO viewer_comment_username_filters(username, created_at)
+VALUES ('two', ?)`, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
 
 	detail, err := NewCatalog(db).ViewerAnimeDetail(ctx, 537904)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(detail.Episodes) != 1 || detail.Episodes[0].CommentCount != 2 {
-		t.Fatalf("expected 2 stored top-level comments instead of stale metadata count: %+v", detail.Episodes)
+	if len(detail.Episodes) != 1 || detail.Episodes[0].CommentCount != 1 {
+		t.Fatalf("expected filtered stored top-level comment count: %+v", detail.Episodes)
 	}
 }
 

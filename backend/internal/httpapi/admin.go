@@ -83,6 +83,8 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("POST /api/viewer/invites", api.generateViewerInvite)
 	mux.HandleFunc("GET /api/viewer/site-settings", api.getViewerSiteSettings)
 	mux.HandleFunc("PUT /api/viewer/site-settings", api.updateViewerSiteSettings)
+	mux.HandleFunc("GET /api/viewer/site-settings/comment-filter", api.getViewerCommentFilterSettings)
+	mux.HandleFunc("PUT /api/viewer/site-settings/comment-filter", api.updateViewerCommentFilterSettings)
 	mux.HandleFunc("GET /api/viewer/site-settings/favicon", api.viewerFavicon)
 	mux.HandleFunc("PUT /api/viewer/site-settings/favicon", api.uploadViewerFavicon)
 	mux.HandleFunc("GET /api/viewer/carousels", api.listViewerCarousels)
@@ -435,6 +437,48 @@ func (a *AdminAPI) updateViewerSiteSettings(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) getViewerCommentFilterSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	settings, err := a.viewer.CommentFilterSettings(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) updateViewerCommentFilterSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	var input struct {
+		Usernames *[]string `json:"usernames"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if input.Usernames == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "usernames 字段不能为空")
+		return
+	}
+	settings, err := a.viewer.UpdateCommentFilterSettings(r.Context(), *input.Usernames)
+	if err != nil {
+		switch {
+		case errors.Is(err, viewer.ErrInvalidCommentFilterUsername):
+			writeError(w, http.StatusBadRequest, "invalid_comment_filter_username", "评论过滤用户名需要包含 1 到 80 个可显示字符")
+		case errors.Is(err, viewer.ErrTooManyCommentFilterUsernames):
+			writeError(w, http.StatusBadRequest, "too_many_comment_filter_usernames", "评论过滤最多可以配置 200 个用户名")
+		default:
+			a.internalError(w, err)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})

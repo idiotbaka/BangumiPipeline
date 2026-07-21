@@ -413,6 +413,26 @@ SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 33)`).Scan(&applie
 	}
 }
 
+func TestVersion34MigrationAddsViewerCommentUsernameFilters(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	assertTableExists(t, db, "viewer_comment_username_filters")
+	var applied bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 34)`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("expected version 34 migration to be recorded")
+	}
+}
+
 func assertTableExists(t *testing.T, db *sql.DB, table string) {
 	t.Helper()
 	var exists bool

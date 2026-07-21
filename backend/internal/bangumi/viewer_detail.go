@@ -217,6 +217,11 @@ SELECT comments.episode_id, COUNT(*)
 FROM anime_episodes episodes
 JOIN bangumi_episode_comments comments ON comments.episode_id = episodes.episode_id
 WHERE episodes.bangumi_id = ? AND comments.parent_comment_id = 0
+  AND NOT EXISTS (
+      SELECT 1
+      FROM viewer_comment_username_filters filters
+      WHERE filters.username = comments.username COLLATE BINARY
+  )
 GROUP BY comments.episode_id`, bangumiID)
 	if err != nil {
 		return nil, err

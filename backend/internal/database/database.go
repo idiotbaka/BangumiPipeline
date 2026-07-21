@@ -1328,6 +1328,21 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
 VALUES (33, unixepoch());`); err != nil {
 		return fmt.Errorf("finish version 33 migration: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS viewer_comment_username_filters (
+    username   TEXT PRIMARY KEY COLLATE BINARY
+               CHECK (length(username) BETWEEN 1 AND 80),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (34, unixepoch());`); err != nil {
+		return fmt.Errorf("finish version 34 migration: %w", err)
+	}
+	if err := ensureColumn(ctx, db, "viewer_comment_username_filters", "sort_order", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	return nil
 }
 

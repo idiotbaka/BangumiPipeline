@@ -95,6 +95,24 @@ func TestAdministratorSetupAndLoginLifecycle(t *testing.T) {
 		t.Fatalf("unexpected current user: %+v", mePayload.User)
 	}
 
+	commentFilter := doJSON(t, client, http.MethodPut, server.URL+"/api/viewer/site-settings/comment-filter", map[string]any{
+		"usernames": []string{"spam-user", "CaseUser"},
+	})
+	assertStatus(t, commentFilter, http.StatusOK)
+	var commentFilterPayload struct {
+		Settings viewer.CommentFilterSettings `json:"settings"`
+	}
+	decodeResponse(t, commentFilter, &commentFilterPayload)
+	if len(commentFilterPayload.Settings.Usernames) != 2 || commentFilterPayload.Settings.Usernames[0] != "spam-user" {
+		t.Fatalf("unexpected comment filter settings: %+v", commentFilterPayload.Settings)
+	}
+	commentFilter = doJSON(t, client, http.MethodGet, server.URL+"/api/viewer/site-settings/comment-filter", nil)
+	assertStatus(t, commentFilter, http.StatusOK)
+	decodeResponse(t, commentFilter, &commentFilterPayload)
+	if len(commentFilterPayload.Settings.Usernames) != 2 || commentFilterPayload.Settings.Usernames[1] != "CaseUser" {
+		t.Fatalf("comment filter settings were not persisted: %+v", commentFilterPayload.Settings)
+	}
+
 	tasks := doJSON(t, client, http.MethodGet, server.URL+"/api/scheduled-tasks", nil)
 	assertStatus(t, tasks, http.StatusOK)
 	var tasksPayload struct {
@@ -163,6 +181,9 @@ func TestAdministratorSetupAndLoginLifecycle(t *testing.T) {
 	unauthorizedTasks := doJSON(t, client, http.MethodGet, server.URL+"/api/scheduled-tasks", nil)
 	assertStatus(t, unauthorizedTasks, http.StatusUnauthorized)
 	unauthorizedTasks.Body.Close()
+	unauthorizedCommentFilter := doJSON(t, client, http.MethodGet, server.URL+"/api/viewer/site-settings/comment-filter", nil)
+	assertStatus(t, unauthorizedCommentFilter, http.StatusUnauthorized)
+	unauthorizedCommentFilter.Body.Close()
 
 	login := doJSON(t, client, http.MethodPost, server.URL+"/api/auth/login", map[string]string{
 		"username": "administrator",
