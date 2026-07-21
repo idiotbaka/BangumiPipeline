@@ -473,9 +473,9 @@ func (a *AdminAPI) updateViewerCommentFilterSettings(w http.ResponseWriter, r *h
 	if err != nil {
 		switch {
 		case errors.Is(err, viewer.ErrInvalidCommentFilterUsername):
-			writeError(w, http.StatusBadRequest, "invalid_comment_filter_username", "评论过滤用户名需要包含 1 到 80 个可显示字符")
+			writeError(w, http.StatusBadRequest, "invalid_comment_filter_username", "评论过滤用户名或昵称需要包含 1 到 80 个可显示字符")
 		case errors.Is(err, viewer.ErrTooManyCommentFilterUsernames):
-			writeError(w, http.StatusBadRequest, "too_many_comment_filter_usernames", "评论过滤最多可以配置 200 个用户名")
+			writeError(w, http.StatusBadRequest, "too_many_comment_filter_usernames", "评论过滤最多可以配置 200 个用户名或昵称")
 		default:
 			a.internalError(w, err)
 		}

@@ -90,7 +90,7 @@ function addCommentFilterUsername() {
   const username = commentFilterDraft.value.trim()
   if (!username) return
   if (commentFilterUsernames.value.includes(username)) {
-    ElMessage.warning('该用户名已经存在')
+    ElMessage.warning('该用户名或昵称已经存在')
     return
   }
   if (commentFilterUsernames.value.length >= 200) {
@@ -202,7 +202,7 @@ function formatDate(value: number | null | undefined) {
             <el-icon class="module-icon"><ChatLineSquare /></el-icon>
             <div>
               <h2>评论过滤</h2>
-              <p>按 Bangumi 用户名全匹配过滤该用户发表的吐槽。</p>
+              <p>按 Bangumi 用户名或昵称全匹配过滤该用户发表的吐槽。</p>
             </div>
           </div>
         </template>
@@ -218,20 +218,20 @@ function formatDate(value: number | null | undefined) {
               {{ username }}
             </el-tag>
           </div>
-          <div v-else class="comment-filter-empty">尚未添加需要过滤的用户名</div>
+          <div v-else class="comment-filter-empty">尚未添加需要过滤的用户名或昵称</div>
           <div class="comment-filter-input-row">
             <el-input
               v-model="commentFilterDraft"
               maxlength="80"
               show-word-limit
-              placeholder="输入完整 Bangumi 用户名"
+              placeholder="输入完整 Bangumi 用户名或昵称"
               @keyup.enter.prevent="addCommentFilterUsername"
             />
-            <el-button :icon="Plus" @click="addCommentFilterUsername">添加用户名</el-button>
+            <el-button :icon="Plus" @click="addCommentFilterUsername">添加</el-button>
           </div>
-          <p class="form-help">仅匹配评论数据中的完整用户名，昵称或部分文字不会命中过滤规则。</p>
+          <p class="form-help">完整匹配评论数据中的 username 或 nickname，部分文字不会命中过滤规则。</p>
           <div class="settings-actions comment-filter-actions">
-            <span>已配置 {{ commentFilterUsernames.length }} / 200 个用户名</span>
+            <span>已配置 {{ commentFilterUsernames.length }} / 200 项</span>
             <el-button type="primary" :loading="savingCommentFilter" @click="saveCommentFilterSettings">
               保存评论过滤
             </el-button>

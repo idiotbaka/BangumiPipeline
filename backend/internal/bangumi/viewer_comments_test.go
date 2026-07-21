@@ -40,7 +40,7 @@ INSERT INTO bangumi_comment_user_avatars(
 	}
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO viewer_comment_username_filters(username, created_at)
-VALUES ('reply-b', ?), ('NEW', ?)`, now.Unix(), now.Unix()); err != nil {
+VALUES ('回复乙', ?), ('NEW', ?)`, now.Unix(), now.Unix()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -97,7 +97,7 @@ func TestViewerAnimeDetailCountsStoredTopLevelComments(t *testing.T) {
 	insertViewerComment(t, ctx, db, 537904, 1561891, 200, 0, 1200, 2, "主楼二", "two", "用户二", "", "", "", "")
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO viewer_comment_username_filters(username, created_at)
-VALUES ('two', ?)`, now.Unix()); err != nil {
+VALUES ('用户二', ?)`, now.Unix()); err != nil {
 		t.Fatal(err)
 	}
 

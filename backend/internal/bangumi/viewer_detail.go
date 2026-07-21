@@ -221,6 +221,7 @@ WHERE episodes.bangumi_id = ? AND comments.parent_comment_id = 0
       SELECT 1
       FROM viewer_comment_username_filters filters
       WHERE filters.username = comments.username COLLATE BINARY
+         OR filters.username = comments.nickname COLLATE BINARY
   )
 GROUP BY comments.episode_id`, bangumiID)
 	if err != nil {
