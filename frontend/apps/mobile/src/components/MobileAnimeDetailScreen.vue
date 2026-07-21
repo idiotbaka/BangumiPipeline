@@ -3,14 +3,18 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import {
   api,
+  buildAPIURL,
   buildAuthenticatedMediaURL,
+  currentAuthToken,
   type ViewerAnimeActor,
   type ViewerAnimeCharacter,
   type ViewerAnimeDetail,
   type ViewerDetailEpisode,
   type ViewerEpisodeComments,
 } from '../api'
+import type { ImageViewerSource } from '../native/imageSaver'
 import MobileEpisodeCommentItem from './MobileEpisodeCommentItem.vue'
+import MobileImageViewer from './MobileImageViewer.vue'
 import MobileVideoPlayer from './MobileVideoPlayer.vue'
 
 interface Props {
@@ -52,6 +56,7 @@ const episodeComments = ref<ViewerEpisodeComments | null>(null)
 const commentSmiles = ref<Record<string, string>>({})
 const commentsLoading = ref(false)
 const commentsError = ref('')
+const imageViewerSource = ref<ImageViewerSource | null>(null)
 const episodeCardRefs = new Map<string, HTMLElement>()
 const commentsCache = new Map<number, { episode: ViewerEpisodeComments; smiles: Record<string, string> }>()
 let commentsController: AbortController | null = null
@@ -513,6 +518,52 @@ function actorImageURL(actor: ViewerAnimeActor) {
   return buildAuthenticatedMediaURL(`/api/actors/${actor.actorId}/image`)
 }
 
+function protectedImageViewerSource(path: string, suggestedName: string, alt: string): ImageViewerSource {
+  const token = currentAuthToken()
+  return {
+    src: buildAuthenticatedMediaURL(path),
+    downloadUrl: buildAPIURL(path),
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    suggestedName,
+    alt,
+  }
+}
+
+function openCharacterImage(character: ViewerAnimeCharacter) {
+  if (!imageAvailable(`character-${character.characterId}`, character.hasImage)) return
+  const path = `/api/anime/${props.bangumiId}/characters/${character.characterId}/image`
+  imageViewerSource.value = protectedImageViewerSource(path, `${character.name || `character-${character.characterId}`}.jpg`, character.name)
+}
+
+function openActorImage(actor: ViewerAnimeActor) {
+  if (!imageAvailable(`actor-${actor.actorId}`, actor.hasImage)) return
+  const path = `/api/actors/${actor.actorId}/image`
+  imageViewerSource.value = protectedImageViewerSource(path, `${actor.name || `actor-${actor.actorId}`}.jpg`, actor.name)
+}
+
+function openCommentImage(url: string) {
+  imageViewerSource.value = {
+    src: url,
+    downloadUrl: url,
+    suggestedName: commentImageFileName(url),
+    alt: '评论图片',
+  }
+}
+
+function commentImageFileName(url: string) {
+  try {
+    const name = decodeURIComponent(new URL(url, window.location.href).pathname.split('/').pop() || '')
+    if (name && /\.(?:avif|bmp|gif|hei[cf]|jpe?g|png|svg|webp)$/i.test(name)) return name
+  } catch {
+    // 原生侧会根据图片内容识别并补全实际扩展名。
+  }
+  return 'bangumi-comment-image.jpg'
+}
+
+function closeImageViewer() {
+  imageViewerSource.value = null
+}
+
 function imageAvailable(key: string, available: boolean) {
   return available && !failedImages.value.has(key)
 }
@@ -831,7 +882,16 @@ function formatInfoValue(value: unknown): string {
         </div>
         <div v-if="anime.characters.length" class="character-list">
           <article v-for="character in anime.characters" :key="character.characterId" class="character-card">
-            <div class="character-image">
+            <div
+              class="character-image"
+              :class="{ previewable: imageAvailable(`character-${character.characterId}`, character.hasImage) }"
+              :role="imageAvailable(`character-${character.characterId}`, character.hasImage) ? 'button' : undefined"
+              :tabindex="imageAvailable(`character-${character.characterId}`, character.hasImage) ? 0 : undefined"
+              :aria-label="imageAvailable(`character-${character.characterId}`, character.hasImage) ? `查看${character.name}原图` : undefined"
+              @click="openCharacterImage(character)"
+              @keydown.enter.prevent="openCharacterImage(character)"
+              @keydown.space.prevent="openCharacterImage(character)"
+            >
               <img
                 v-if="imageAvailable(`character-${character.characterId}`, character.hasImage)"
                 :src="characterImageURL(character)"
@@ -849,9 +909,16 @@ function formatInfoValue(value: unknown): string {
                 <div v-for="actor in character.actors" :key="actor.actorId" class="actor-chip">
                   <img
                     v-if="imageAvailable(`actor-${actor.actorId}`, actor.hasImage)"
+                    class="previewable"
                     :src="actorImageURL(actor)"
                     :alt="actor.name"
+                    role="button"
+                    tabindex="0"
+                    :aria-label="`查看${actor.name}原图`"
                     loading="lazy"
+                    @click.stop="openActorImage(actor)"
+                    @keydown.enter.stop.prevent="openActorImage(actor)"
+                    @keydown.space.stop.prevent="openActorImage(actor)"
                     @error="markImageFailed(`actor-${actor.actorId}`)"
                   />
                   <span v-else>CV</span>
@@ -903,6 +970,7 @@ function formatInfoValue(value: unknown): string {
               :key="comment.commentId"
               :comment="comment"
               :smiles="commentSmiles"
+              @open-image="openCommentImage"
             />
           </div>
           <div v-else class="comments-state">
@@ -980,6 +1048,7 @@ function formatInfoValue(value: unknown): string {
         </div>
       </Transition>
     </Teleport>
+    <MobileImageViewer :source="imageViewerSource" @close="closeImageViewer" />
   </section>
 </template>
 
@@ -2166,6 +2235,17 @@ function formatInfoValue(value: unknown): string {
   height: 100%;
   object-fit: cover;
   object-position: top center;
+}
+
+.character-image.previewable,
+.actor-chip img.previewable {
+  cursor: zoom-in;
+}
+
+.character-image.previewable:active,
+.actor-chip img.previewable:active {
+  opacity: 0.84;
+  transform: scale(0.98);
 }
 
 .character-main {

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-saveImage"
+description = "Enables the saveImage command without any pre-configured scope."
+commands.allow = ["saveImage"]
+
+[[permission]]
+identifier = "deny-saveImage"
+description = "Denies the saveImage command without any pre-configured scope."
+commands.deny = ["saveImage"]

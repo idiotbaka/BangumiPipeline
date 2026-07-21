@@ -1,0 +1,15 @@
+[package]
+name = "tauri-plugin-image-saver"
+version = "0.1.0"
+description = "Native public image saving for BakaVip2"
+authors = ["BangumiPipeline"]
+edition = "2021"
+links = "tauri-plugin-image-saver"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2" }

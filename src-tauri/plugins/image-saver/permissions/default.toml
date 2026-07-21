@@ -1,0 +1,12 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Allows BakaVip2 to prepare images and save them to the public Pictures folder."
+permissions = [
+  "allow-prepareImage",
+  "allow-saveImage",
+  "allow-discardImage",
+  "allow-prepare-image",
+  "allow-save-image",
+  "allow-discard-image",
+]

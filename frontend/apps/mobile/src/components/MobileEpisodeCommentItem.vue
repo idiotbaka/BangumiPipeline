@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
   smiles: Record<string, string>
   depth?: number
 }>(), { depth: 0 })
+const emit = defineEmits<{ (event: 'open-image', url: string): void }>()
 
 const avatarFailed = ref(false)
 const contentNodes = computed(() => parseCommentContent(props.comment.content, props.smiles))
@@ -65,7 +66,11 @@ function commentDateTime(timestamp: number) {
     </header>
 
     <div class="comment-body">
-      <MobileCommentContentNodes v-if="contentNodes.length" :nodes="contentNodes" />
+      <MobileCommentContentNodes
+        v-if="contentNodes.length"
+        :nodes="contentNodes"
+        @open-image="emit('open-image', $event)"
+      />
       <span v-else class="comment-filtered">内容不可显示</span>
     </div>
 
@@ -76,6 +81,7 @@ function commentDateTime(timestamp: number) {
         :comment="reply"
         :smiles="smiles"
         :depth="depth + 1"
+        @open-image="emit('open-image', $event)"
       />
     </div>
   </article>

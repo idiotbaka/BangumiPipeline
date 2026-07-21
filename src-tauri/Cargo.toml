@@ -16,4 +16,5 @@ tauri-build = { version = "2", features = [] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-image-saver = { path = "plugins/image-saver" }
 tauri-plugin-player = { path = "plugins/player" }
