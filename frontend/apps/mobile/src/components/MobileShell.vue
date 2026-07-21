@@ -20,6 +20,7 @@ import tauriConfig from '../../../../../src-tauri/tauri.conf.json'
 import homeNavIcon from '../assets/nav-home.svg?raw'
 import libraryNavIcon from '../assets/nav-library.svg?raw'
 import profileNavIcon from '../assets/nav-profile.svg?raw'
+import refreshIcon from '../assets/pull-refresh.svg'
 import scheduleNavIcon from '../assets/nav-schedule.svg?raw'
 import searchIcon from '../assets/search.svg?raw'
 import MobileAnimeDetailScreen from './MobileAnimeDetailScreen.vue'
@@ -40,6 +41,7 @@ const emit = defineEmits<{
 }>()
 
 type MainTab = 'home' | 'schedule' | 'library' | 'profile'
+type RefreshableTab = Exclude<MainTab, 'profile'>
 type RoutePage = 'search' | 'follows' | 'history' | 'settings' | 'server-address' | 'about' | 'detail' | null
 type SubRoutePage = Exclude<RoutePage, 'detail' | null>
 type DetailReturnPage = Exclude<RoutePage, 'detail'>
@@ -68,6 +70,9 @@ const tabs: Array<{ key: MainTab; label: string; icon: string }> = [
   { key: 'profile', label: '我的', icon: profileNavIcon },
 ]
 const libraryPageSize = 30
+const pullRefreshThreshold = 64
+const pullRefreshMaximum = 96
+const pullRefreshMinimumDuration = 480
 const weekdays = [
   { value: 1, label: '周一' },
   { value: 2, label: '周二' },
@@ -127,6 +132,10 @@ const libraryFiltersError = ref('')
 const libraryLoading = ref(false)
 const libraryError = ref('')
 
+const pullRefreshDistance = ref(0)
+const pullRefreshDragging = ref(false)
+const pullRefreshingTab = ref<RefreshableTab | null>(null)
+
 const follows = ref<ViewerFollowedAnime[]>([])
 const history = ref<ViewerWatchHistoryItem[]>([])
 const profileLoaded = ref(false)
@@ -140,6 +149,11 @@ let refreshTokenSeed = 0
 let shellHistoryIndex = 0
 let previousScrollRestoration: ScrollRestoration | null = null
 let pendingTransitionScrollTop: number | null = null
+let pullRefreshGesture: {
+  x: number
+  y: number
+  direction: 'pending' | 'vertical'
+} | null = null
 const tabScrollPositions: Record<MainTab, number> = {
   home: 0,
   schedule: 0,
@@ -160,6 +174,38 @@ const selectedLibraryTagCount = computed(() =>
 )
 const visibleLibraryItems = computed(() => library.value.items.slice(0, libraryVisibleCount.value))
 const hasMoreLibraryItems = computed(() => libraryVisibleCount.value < library.value.items.length)
+const pullRefreshEnabled = computed(() =>
+  routePage.value === null && isRefreshableTab(activeTab.value) && !pageTransitionActive.value,
+)
+const activePullRefreshing = computed(() =>
+  routePage.value === null && pullRefreshingTab.value === activeTab.value,
+)
+const pullRefreshReady = computed(() =>
+  activePullRefreshing.value || pullRefreshDistance.value >= pullRefreshThreshold,
+)
+const pullRefreshVisible = computed(() =>
+  pullRefreshEnabled.value &&
+  (activePullRefreshing.value || (pullRefreshingTab.value === null && pullRefreshDistance.value > 0)),
+)
+const pullRefreshIndicatorStyle = computed<Record<string, string>>(() => {
+  const distance = activePullRefreshing.value
+    ? pullRefreshThreshold
+    : pullRefreshingTab.value === null
+      ? pullRefreshDistance.value
+      : 0
+  const overshoot = Math.max(distance - pullRefreshThreshold, 0) * 0.18
+  const travel = Math.min(distance, pullRefreshThreshold) + overshoot
+  const progress = Math.min(distance / pullRefreshThreshold, 1)
+  return {
+    opacity: String(Math.min(progress * 1.35, 1)),
+    transform: `translate3d(-50%, ${-48 + travel}px, 0) scale(${0.72 + progress * 0.28})`,
+    '--pull-refresh-rotation': `${Math.min(distance / pullRefreshThreshold, 1.5) * 300}deg`,
+  }
+})
+const pullRefreshLabel = computed(() => {
+  if (activePullRefreshing.value) return '正在刷新'
+  return pullRefreshReady.value ? '松开刷新' : '下拉刷新'
+})
 const pageTitle = computed(() => {
   if (routePage.value === 'search') return '搜索结果'
   if (routePage.value === 'follows') return '我的追番'
@@ -204,6 +250,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  pullRefreshGesture = null
   if (relativeTimer !== null) {
     clearInterval(relativeTimer)
   }
@@ -294,6 +341,7 @@ function finishPageTransition() {
 }
 
 function handleShellPopState(event: PopStateEvent) {
+  cancelPullRefreshGesture()
   if (!isShellHistoryState(event.state)) {
     return
   }
@@ -417,6 +465,7 @@ function ensureCurrentViewData() {
 }
 
 function showTab(tab: MainTab) {
+  cancelPullRefreshGesture()
   if (routePage.value === null && activeTab.value === tab) {
     if (tab === 'home') {
       refreshHomeIfNeeded()
@@ -448,6 +497,7 @@ function showTab(tab: MainTab) {
 }
 
 function openRoute(page: SubRoutePage) {
+  cancelPullRefreshGesture()
   saveCurrentTabScroll()
   beginPageTransition('page-slide-forward', 0)
   routePage.value = page
@@ -522,6 +572,7 @@ function openAnimeDetail(bangumiId: number, mediaId = 0, positionSeconds = 0) {
   if (!Number.isFinite(bangumiId) || bangumiId <= 0) {
     return
   }
+  cancelPullRefreshGesture()
   markPlaybackDataNeedsRefresh()
   if (routePage.value === null) {
     saveCurrentTabScroll()
@@ -732,6 +783,110 @@ function loadMoreLibraryItems() {
     return
   }
   libraryVisibleCount.value = Math.min(libraryVisibleCount.value + libraryPageSize, library.value.items.length)
+}
+
+function isRefreshableTab(tab: MainTab): tab is RefreshableTab {
+  return tab === 'home' || tab === 'schedule' || tab === 'library'
+}
+
+function refreshableTabLoading(tab: RefreshableTab) {
+  if (pullRefreshingTab.value !== null) return true
+  if (tab === 'home') return homeLoading.value
+  if (tab === 'schedule') return scheduleLoading.value
+  return libraryLoading.value || libraryFiltersLoading.value
+}
+
+function startPullRefresh(event: TouchEvent) {
+  cancelPullRefreshGesture()
+  if (!pullRefreshEnabled.value || !isRefreshableTab(activeTab.value) || refreshableTabLoading(activeTab.value)) return
+  if (currentScrollTop() > 1 || event.touches.length !== 1) return
+  const touch = event.touches[0]
+  if (!touch) return
+  pullRefreshGesture = {
+    x: touch.clientX,
+    y: touch.clientY,
+    direction: 'pending',
+  }
+}
+
+function movePullRefresh(event: TouchEvent) {
+  const gesture = pullRefreshGesture
+  const touch = event.touches[0]
+  if (!gesture || !touch || !pullRefreshEnabled.value) return
+
+  const horizontal = touch.clientX - gesture.x
+  const vertical = touch.clientY - gesture.y
+  if (gesture.direction === 'pending') {
+    if (Math.max(Math.abs(horizontal), Math.abs(vertical)) < 6) return
+    if (vertical <= 0 || Math.abs(horizontal) > Math.abs(vertical)) {
+      cancelPullRefreshGesture()
+      return
+    }
+    gesture.direction = 'vertical'
+  }
+
+  if (gesture.direction !== 'vertical' || vertical <= 0 || currentScrollTop() > 1) {
+    cancelPullRefreshGesture()
+    return
+  }
+
+  event.preventDefault()
+  pullRefreshDragging.value = true
+  const resistedDistance = vertical * 0.56
+  const distance = resistedDistance <= pullRefreshThreshold
+    ? resistedDistance
+    : pullRefreshThreshold + (resistedDistance - pullRefreshThreshold) * 0.24
+  pullRefreshDistance.value = Math.min(distance, pullRefreshMaximum)
+}
+
+function finishPullRefresh() {
+  const shouldRefresh =
+    pullRefreshGesture?.direction === 'vertical' &&
+    pullRefreshDistance.value >= pullRefreshThreshold &&
+    isRefreshableTab(activeTab.value) &&
+    pullRefreshingTab.value === null
+
+  pullRefreshGesture = null
+  pullRefreshDragging.value = false
+  if (!shouldRefresh || !isRefreshableTab(activeTab.value)) {
+    pullRefreshDistance.value = 0
+    return
+  }
+
+  const tab = activeTab.value
+  pullRefreshingTab.value = tab
+  pullRefreshDistance.value = pullRefreshThreshold
+  void refreshPulledTab(tab)
+}
+
+function cancelPullRefreshGesture() {
+  pullRefreshGesture = null
+  pullRefreshDragging.value = false
+  if (pullRefreshingTab.value === null) pullRefreshDistance.value = 0
+}
+
+async function refreshPulledTab(tab: RefreshableTab) {
+  failedImages.value = new Set()
+  const minimumVisibleTime = new Promise<void>((resolve) => {
+    window.setTimeout(resolve, pullRefreshMinimumDuration)
+  })
+  try {
+    const refreshRequest = tab === 'home'
+      ? loadHome()
+      : tab === 'schedule'
+        ? loadSchedule()
+        : Promise.all([loadLibraryFilters(), loadLibrary()])
+    await Promise.all([refreshRequest, minimumVisibleTime])
+  } finally {
+    if (pullRefreshingTab.value === tab) {
+      pullRefreshingTab.value = null
+      pullRefreshDistance.value = 0
+    }
+  }
+}
+
+function currentScrollTop() {
+  return Math.max(window.scrollY, document.documentElement.scrollTop, document.body.scrollTop)
 }
 
 function saveCurrentTabScroll() {
@@ -964,11 +1119,32 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
       </header>
     </Transition>
 
+    <div
+      v-if="pullRefreshEnabled"
+      class="pull-refresh-indicator"
+      :class="{
+        visible: pullRefreshVisible,
+        dragging: pullRefreshDragging,
+        ready: pullRefreshReady,
+        refreshing: activePullRefreshing,
+      }"
+      :style="pullRefreshIndicatorStyle"
+      role="status"
+      :aria-hidden="!pullRefreshVisible"
+      :aria-label="pullRefreshLabel"
+    >
+      <img :src="refreshIcon" alt="" />
+    </div>
+
     <section
       ref="appPage"
       class="app-page"
       :class="{ 'transition-active': pageTransitionActive }"
       :style="pageTransitionStyle"
+      @touchstart.passive="startPullRefresh"
+      @touchmove="movePullRefresh"
+      @touchend.passive="finishPullRefresh"
+      @touchcancel.passive="cancelPullRefreshGesture"
     >
       <Transition :name="pageTransitionName" @after-enter="finishPageTransition" @after-leave="finishPageTransition">
         <div :key="pageViewKey" class="page-view">
@@ -1194,7 +1370,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             <p class="section-title">我的追番</p>
             <button class="section-link" type="button" @click="openRoute('follows')">全部 &gt;</button>
           </div>
-          <div v-if="homeLoading" class="follow-rail skeleton-follow-rail" aria-label="正在加载追番">
+          <div v-if="homeLoading && pullRefreshingTab !== 'home'" class="follow-rail skeleton-follow-rail" aria-label="正在加载追番">
             <article v-for="index in 2" :key="index" class="continue-card skeleton-continue-card">
               <div class="episode-cover skeleton-block" />
               <div class="skeleton-line skeleton-block" />
@@ -1237,7 +1413,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <div class="section-head">
             <p class="section-title">最近更新</p>
           </div>
-          <div v-if="homeLoading" class="poster-grid" aria-label="正在加载最近更新">
+          <div v-if="homeLoading && pullRefreshingTab !== 'home'" class="poster-grid" aria-label="正在加载最近更新">
             <article v-for="index in 6" :key="index" class="poster-card skeleton-card">
               <div class="poster-cover skeleton-block" />
               <div class="skeleton-line skeleton-block" />
@@ -1276,7 +1452,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <div class="section-head">
             <p class="section-title">热播推荐</p>
           </div>
-          <div v-if="homeLoading" class="poster-grid" aria-label="正在加载热播推荐">
+          <div v-if="homeLoading && pullRefreshingTab !== 'home'" class="poster-grid" aria-label="正在加载热播推荐">
             <article v-for="index in 6" :key="index" class="poster-card skeleton-card">
               <div class="poster-cover skeleton-block" />
               <div class="skeleton-line skeleton-block" />
@@ -1339,7 +1515,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           </div>
         </section>
 
-        <div v-if="scheduleLoading" class="result-list schedule-list" aria-label="正在加载时间表">
+        <div v-if="scheduleLoading && pullRefreshingTab !== 'schedule'" class="result-list schedule-list" aria-label="正在加载时间表">
           <article v-for="index in 6" :key="index" class="list-row poster-row skeleton-list-row">
             <div class="poster-fallback small skeleton-block" />
             <div>
@@ -1390,7 +1566,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             </button>
           </div>
 
-          <div v-if="libraryFiltersLoading" class="library-filter-list skeleton-filter-list" aria-label="正在加载筛选标签">
+          <div v-if="libraryFiltersLoading && pullRefreshingTab !== 'library'" class="library-filter-list skeleton-filter-list" aria-label="正在加载筛选标签">
             <section v-for="index in 3" :key="index" class="library-filter-row">
               <div class="skeleton-filter-title skeleton-block" />
               <div class="tag-rail">
@@ -1423,7 +1599,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
         </section>
 
         <section class="library-results">
-          <div v-if="libraryLoading" class="poster-grid">
+          <div v-if="libraryLoading && pullRefreshingTab !== 'library'" class="poster-grid">
             <article v-for="index in 9" :key="index" class="library-card skeleton-card">
               <div class="library-cover skeleton-block" />
               <div class="skeleton-line skeleton-block" />
@@ -1567,6 +1743,55 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   border-bottom: 1px solid rgba(32, 40, 62, 0.06);
   box-shadow: 0 6px 18px rgba(32, 40, 62, 0.04);
   backdrop-filter: blur(14px);
+}
+
+.pull-refresh-indicator {
+  position: fixed;
+  top: var(--mobile-topbar-height);
+  left: 50%;
+  z-index: 19;
+  width: 42px;
+  height: 42px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  padding: 11px;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(238, 63, 134, 0.16);
+  border-radius: 50%;
+  box-shadow: 0 8px 20px rgba(32, 40, 62, 0.12);
+  transition:
+    opacity 150ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 160ms ease;
+  will-change: transform, opacity;
+}
+
+.pull-refresh-indicator.dragging {
+  transition: box-shadow 160ms ease;
+}
+
+.pull-refresh-indicator.ready {
+  box-shadow:
+    0 8px 22px rgba(238, 63, 134, 0.2),
+    0 0 0 4px rgba(238, 63, 134, 0.08);
+}
+
+.pull-refresh-indicator img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  transform: rotate(var(--pull-refresh-rotation));
+  transform-origin: center;
+}
+
+.pull-refresh-indicator.refreshing img {
+  animation: pull-refresh-spin 760ms linear infinite;
+}
+
+@keyframes pull-refresh-spin {
+  to { transform: rotate(360deg); }
 }
 
 .topbar-slide-forward-enter-active,
