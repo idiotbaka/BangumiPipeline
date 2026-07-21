@@ -64,7 +64,7 @@ function externalImageStyle(node: Extract<CommentContentNode, { type: 'image' }>
 .comment-strike { text-decoration-thickness: 1.5px; text-decoration-color: rgba(82, 96, 120, .8); }
 .comment-mask { padding: 1px 3px; color: transparent; text-shadow: 0 0 8px rgba(32, 40, 62, .92); background: rgba(32, 40, 62, .82); border-radius: 3px; outline: none; transition: color 150ms ease, text-shadow 150ms ease, background 150ms ease; }
 .comment-mask:hover, .comment-mask:focus { color: inherit; text-shadow: none; background: rgba(255, 225, 236, .72); }
-.comment-smile { display: inline-block; max-width: 76px; max-height: 76px; width: auto; height: auto; margin: 0 2px; vertical-align: middle; object-fit: contain; }
+.comment-smile { display: inline-block; max-width: 76px; max-height: 76px; width: auto; height: auto; margin: 0 2px; vertical-align: bottom; object-fit: contain; }
 .comment-external-image { display: block; box-sizing: border-box; width: auto; height: auto; max-width: min(100%, 360px); max-height: 280px; margin: 8px 0 3px; object-fit: contain; object-position: left center; border: 1px solid rgba(85,119,217,.14); background: rgba(246,249,253,.82); }
 .comment-external-image--sized { display: inline-block; max-width: min(calc(100% - 20px), 360px); margin-right: 20px; vertical-align: top; }
 </style>

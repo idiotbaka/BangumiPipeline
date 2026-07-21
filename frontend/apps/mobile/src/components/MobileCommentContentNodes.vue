@@ -95,7 +95,7 @@ function externalImageStyle(node: Extract<CommentContentNode, { type: 'image' }>
   max-height: 70px;
   margin: 0 2px;
   object-fit: contain;
-  vertical-align: middle;
+  vertical-align: bottom;
 }
 
 .comment-external-image {
