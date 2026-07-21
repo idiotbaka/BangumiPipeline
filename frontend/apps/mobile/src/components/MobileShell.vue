@@ -5,6 +5,7 @@ import {
   api,
   buildAuthenticatedMediaURL,
   type ViewerAnimeCard,
+  type ViewerAnimeDetail,
   type ViewerFilterDimension,
   type ViewerFollowedAnime,
   type ViewerHome,
@@ -73,6 +74,8 @@ const libraryPageSize = 30
 const pullRefreshThreshold = 64
 const pullRefreshMaximum = 96
 const pullRefreshMinimumDuration = 480
+const animeCardLongPressDelay = 520
+const animeCardLongPressTolerance = 12
 const weekdays = [
   { value: 1, label: '周一' },
   { value: 2, label: '周二' },
@@ -142,6 +145,23 @@ const profileLoaded = ref(false)
 const profileLoading = ref(false)
 const profileError = ref('')
 const profileRefreshToken = ref(0)
+interface AnimeCardActionItem {
+  bangumiId: number
+  title: string
+  coverURL: string
+}
+
+interface AnimeCardActionData {
+  anime: ViewerAnimeDetail
+  followed: boolean
+}
+
+const animeActionItem = ref<AnimeCardActionItem | null>(null)
+const animeActionDetail = ref<ViewerAnimeDetail | null>(null)
+const animeActionFollowed = ref<boolean | null>(null)
+const animeActionLoading = ref(false)
+const animeActionSaving = ref(false)
+const animeActionError = ref('')
 
 let relativeTimer: ReturnType<typeof setInterval> | null = null
 let libraryRequestID = 0
@@ -154,6 +174,18 @@ let pullRefreshGesture: {
   y: number
   direction: 'pending' | 'vertical'
 } | null = null
+let animeLongPressTimer: number | null = null
+let animeLongPressGesture: {
+  pointerId: number
+  x: number
+  y: number
+  bangumiId: number
+} | null = null
+let suppressedAnimeClick: { bangumiId: number; expiresAt: number } | null = null
+let animeActionHistoryPushed = false
+let ignoreNextAnimeActionPopState = false
+let animeActionRequestID = 0
+const animeActionCache = new Map<number, AnimeCardActionData>()
 const tabScrollPositions: Record<MainTab, number> = {
   home: 0,
   schedule: 0,
@@ -244,6 +276,7 @@ onMounted(() => {
   void loadHome()
   window.addEventListener('scroll', handleWindowScroll, { passive: true })
   window.addEventListener('popstate', handleShellPopState)
+  window.addEventListener('blur', resetTransientGestureState)
   relativeTimer = setInterval(() => {
     relativeTimeNow.value = Date.now()
   }, 60_000)
@@ -251,12 +284,14 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   pullRefreshGesture = null
+  cancelAnimeCardLongPress()
   if (relativeTimer !== null) {
     clearInterval(relativeTimer)
   }
   restoreBrowserScrollRestoration()
   window.removeEventListener('scroll', handleWindowScroll)
   window.removeEventListener('popstate', handleShellPopState)
+  window.removeEventListener('blur', resetTransientGestureState)
 })
 
 function initializeShellHistory() {
@@ -342,6 +377,15 @@ function finishPageTransition() {
 
 function handleShellPopState(event: PopStateEvent) {
   cancelPullRefreshGesture()
+  if (ignoreNextAnimeActionPopState) {
+    ignoreNextAnimeActionPopState = false
+    return
+  }
+  if (animeActionItem.value) {
+    animeActionHistoryPushed = false
+    closeAnimeActionsDirect()
+    return
+  }
   if (!isShellHistoryState(event.state)) {
     return
   }
@@ -616,6 +660,9 @@ function closeAnimeDetailDirect() {
 }
 
 function handleDetailFollowChanged() {
+  if (detailAnimeId.value > 0) {
+    animeActionCache.delete(detailAnimeId.value)
+  }
   markPlaybackDataNeedsRefresh()
 }
 
@@ -962,6 +1009,230 @@ async function loadProfile() {
   }
 }
 
+function startAnimeCardLongPress(event: PointerEvent, bangumiId: number, title: string, coverURL: string) {
+  if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0) || animeActionSaving.value) return
+  cancelAnimeCardLongPress()
+  const gesture = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    bangumiId,
+  }
+  animeLongPressGesture = gesture
+  animeLongPressTimer = window.setTimeout(() => {
+    if (animeLongPressGesture !== gesture) return
+    animeLongPressTimer = null
+    animeLongPressGesture = null
+    suppressedAnimeClick = {
+      bangumiId,
+      expiresAt: performance.now() + 900,
+    }
+    openAnimeActions(bangumiId, title, coverURL)
+  }, animeCardLongPressDelay)
+}
+
+function moveAnimeCardLongPress(event: PointerEvent) {
+  const gesture = animeLongPressGesture
+  if (!gesture || gesture.pointerId !== event.pointerId) return
+  if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > animeCardLongPressTolerance) {
+    cancelAnimeCardLongPress()
+  }
+}
+
+function cancelAnimeCardLongPress() {
+  if (animeLongPressTimer !== null) {
+    window.clearTimeout(animeLongPressTimer)
+    animeLongPressTimer = null
+  }
+  animeLongPressGesture = null
+}
+
+function resetTransientGestureState() {
+  cancelPullRefreshGesture()
+  cancelAnimeCardLongPress()
+}
+
+function handleAnimeCardPointerDown(event: PointerEvent) {
+  const card = animeCardFromEvent(event)
+  const bangumiId = Number(card?.dataset.animeId)
+  if (!card || !Number.isFinite(bangumiId) || bangumiId <= 0) return
+  startAnimeCardLongPress(event, bangumiId, card.dataset.animeTitle || '番剧', animeCardCoverURL(card))
+}
+
+function handleCardContextMenu(event: MouseEvent) {
+  const card = animeCardFromEvent(event)
+  const bangumiId = Number(card?.dataset.animeId)
+  if (!card || !Number.isFinite(bangumiId) || bangumiId <= 0) return
+  event.preventDefault()
+  resetTransientGestureState()
+  openAnimeActions(bangumiId, card.dataset.animeTitle || '番剧', animeCardCoverURL(card))
+}
+
+function handleCardDragStart(event: DragEvent) {
+  if (!animeCardFromEvent(event)) return
+  event.preventDefault()
+  resetTransientGestureState()
+}
+
+function animeCardFromEvent(event: Event) {
+  const target = event.target
+  return target instanceof Element ? target.closest<HTMLElement>('[data-anime-card="true"]') : null
+}
+
+function animeCardCoverURL(card: HTMLElement) {
+  const image = card.querySelector<HTMLImageElement>('img')
+  return image?.currentSrc || image?.src || ''
+}
+
+function openAnimeCard(bangumiId: number, mediaId = 0, positionSeconds = 0) {
+  const suppressed = suppressedAnimeClick
+  suppressedAnimeClick = null
+  if (suppressed && suppressed.bangumiId === bangumiId && suppressed.expiresAt >= performance.now()) return
+  openAnimeDetail(bangumiId, mediaId, positionSeconds)
+}
+
+function openAnimeActions(bangumiId: number, title: string, coverURL = '') {
+  if (animeActionSaving.value || !Number.isFinite(bangumiId) || bangumiId <= 0) return
+  cancelAnimeCardLongPress()
+  suppressedAnimeClick = {
+    bangumiId,
+    expiresAt: performance.now() + 900,
+  }
+  animeActionItem.value = { bangumiId, title, coverURL }
+  animeActionError.value = ''
+
+  const cached = animeActionCache.get(bangumiId)
+  animeActionDetail.value = cached?.anime ?? null
+  animeActionFollowed.value = cached?.followed ?? (isAnimeKnownFollowed(bangumiId) ? true : null)
+  animeActionLoading.value = !cached
+  if (!cached) {
+    void loadAnimeActionData(bangumiId)
+  }
+
+  if (!animeActionHistoryPushed) {
+    window.history.pushState({ bpMobileAnimeActions: true }, '', window.location.href)
+    animeActionHistoryPushed = true
+  }
+}
+
+function isAnimeKnownFollowed(bangumiId: number) {
+  return home.value.myFollows.some((item) => item.bangumiId === bangumiId)
+    || follows.value.some((item) => item.bangumiId === bangumiId)
+}
+
+async function loadAnimeActionData(bangumiId: number, force = false) {
+  const cached = animeActionCache.get(bangumiId)
+  if (cached && !force) {
+    if (animeActionItem.value?.bangumiId === bangumiId) {
+      animeActionDetail.value = cached.anime
+      animeActionFollowed.value = cached.followed
+      animeActionLoading.value = false
+    }
+    return
+  }
+
+  const requestID = ++animeActionRequestID
+  animeActionLoading.value = true
+  animeActionError.value = ''
+  try {
+    const result = await api.animeDetail(bangumiId)
+    const data: AnimeCardActionData = { anime: result.anime, followed: result.followed }
+    animeActionCache.set(bangumiId, data)
+    if (requestID === animeActionRequestID && animeActionItem.value?.bangumiId === bangumiId) {
+      animeActionDetail.value = data.anime
+      animeActionFollowed.value = data.followed
+    }
+  } catch (error) {
+    if (requestID === animeActionRequestID && animeActionItem.value?.bangumiId === bangumiId) {
+      animeActionError.value = error instanceof Error ? error.message : '番剧信息加载失败'
+    }
+  } finally {
+    if (requestID === animeActionRequestID && animeActionItem.value?.bangumiId === bangumiId) {
+      animeActionLoading.value = false
+    }
+  }
+}
+
+function retryAnimeActionData() {
+  const item = animeActionItem.value
+  if (!item || animeActionLoading.value) return
+  animeActionCache.delete(item.bangumiId)
+  void loadAnimeActionData(item.bangumiId, true)
+}
+
+function closeAnimeActions() {
+  if (animeActionSaving.value) return
+  dismissAnimeActions()
+}
+
+function dismissAnimeActions() {
+  const shouldPopHistory = animeActionHistoryPushed
+  animeActionHistoryPushed = false
+  closeAnimeActionsDirect()
+  if (shouldPopHistory) {
+    ignoreNextAnimeActionPopState = true
+    window.history.back()
+  }
+}
+
+function closeAnimeActionsDirect() {
+  animeActionRequestID += 1
+  animeActionItem.value = null
+  animeActionDetail.value = null
+  animeActionFollowed.value = null
+  animeActionLoading.value = false
+  animeActionError.value = ''
+}
+
+async function toggleSelectedAnimeFollow() {
+  const item = animeActionItem.value
+  const followed = animeActionFollowed.value
+  if (!item || followed === null || animeActionSaving.value) return
+  const nextFollowed = !followed
+  animeActionSaving.value = true
+  animeActionError.value = ''
+  try {
+    const result = await api.updateAnimeFollow(item.bangumiId, nextFollowed)
+    if (result.followed !== nextFollowed) throw new Error(`${nextFollowed ? '追番' : '取消追番'}未生效，请稍后重试`)
+    const cached = animeActionCache.get(item.bangumiId)
+    if (cached) {
+      animeActionCache.set(item.bangumiId, { ...cached, followed: result.followed })
+    }
+    if (!result.followed) {
+      home.value = {
+        ...home.value,
+        myFollows: home.value.myFollows.filter((follow) => follow.bangumiId !== item.bangumiId),
+      }
+      follows.value = follows.value.filter((follow) => follow.bangumiId !== item.bangumiId)
+    }
+    markPlaybackDataNeedsRefresh()
+    if (routePage.value === null && activeTab.value === 'home') {
+      void loadHome()
+    }
+    dismissAnimeActions()
+  } catch (error) {
+    if (animeActionItem.value?.bangumiId === item.bangumiId) {
+      animeActionError.value = error instanceof Error ? error.message : `${nextFollowed ? '追番' : '取消追番'}失败`
+    }
+  } finally {
+    animeActionSaving.value = false
+  }
+}
+
+function animeActionWeekday(value: number) {
+  return weekdays.find((day) => day.value === normalizedWeekday(value))?.label ?? '日期未定'
+}
+
+function handleAnimeActionCoverError() {
+  const item = animeActionItem.value
+  if (!item) return
+  if (item.coverURL) {
+    animeActionItem.value = { ...item, coverURL: '' }
+    return
+  }
+  markImageFailed(`anime-actions-${item.bangumiId}`)
+}
+
 function normalizedWeekday(value: number) {
   return value >= 1 && value <= 7 ? value : 8
 }
@@ -1095,7 +1366,11 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 </script>
 
 <template>
-  <main class="mobile-shell" :class="{ 'route-mode': routePage !== null, 'detail-mode': routePage === 'detail' }">
+  <main
+    class="mobile-shell"
+    :class="{ 'route-mode': routePage !== null, 'detail-mode': routePage === 'detail' }"
+    @pointerdown.capture="resetTransientGestureState"
+  >
     <Transition :name="topbarTransitionName">
       <header v-if="topbarMode === 'main'" :key="topbarKey" class="app-topbar">
         <div class="brand-mini">
@@ -1145,6 +1420,12 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
       @touchmove="movePullRefresh"
       @touchend.passive="finishPullRefresh"
       @touchcancel.passive="cancelPullRefreshGesture"
+      @pointerdown="handleAnimeCardPointerDown"
+      @pointermove="moveAnimeCardLongPress"
+      @pointerup="cancelAnimeCardLongPress"
+      @pointercancel="cancelAnimeCardLongPress"
+      @contextmenu="handleCardContextMenu"
+      @dragstart="handleCardDragStart"
     >
       <Transition :name="pageTransitionName" @after-enter="finishPageTransition" @after-leave="finishPageTransition">
         <div :key="pageViewKey" class="page-view">
@@ -1174,7 +1455,11 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             class="list-row poster-row"
             role="button"
             tabindex="0"
-            @click="openAnimeDetail(item.bangumiId)"
+            data-anime-card="true"
+            :data-anime-id="item.bangumiId"
+            :data-anime-title="item.title"
+            :aria-label="`${item.title}，按住可查看番剧信息与追番操作`"
+            @click="openAnimeCard(item.bangumiId)"
             @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
             @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
           >
@@ -1298,10 +1583,14 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <article
             v-for="item in follows"
             :key="item.bangumiId"
-            class="list-row media-row"
+            class="list-row media-row anime-long-press-card"
             role="button"
             tabindex="0"
-            @click="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
+            data-anime-card="true"
+            :data-anime-id="item.bangumiId"
+            :data-anime-title="item.animeTitle"
+            :aria-label="`${item.animeTitle}，按住可查看番剧信息与取消追番`"
+            @click="openAnimeCard(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
             @keydown.enter.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
             @keydown.space.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
           >
@@ -1338,7 +1627,11 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             class="list-row media-row"
             role="button"
             tabindex="0"
-            @click="openAnimeDetail(item.bangumiId, item.mediaId, item.completed ? 0 : item.positionSeconds)"
+            data-anime-card="true"
+            :data-anime-id="item.bangumiId"
+            :data-anime-title="item.animeTitle"
+            :aria-label="`${item.animeTitle}，按住可查看番剧信息与追番操作`"
+            @click="openAnimeCard(item.bangumiId, item.mediaId, item.completed ? 0 : item.positionSeconds)"
             @keydown.enter.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.completed ? 0 : item.positionSeconds)"
             @keydown.space.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.completed ? 0 : item.positionSeconds)"
           >
@@ -1382,10 +1675,14 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             <article
               v-for="item in homeFollows"
               :key="item.bangumiId"
-              class="continue-card"
+              class="continue-card anime-long-press-card"
               role="button"
               tabindex="0"
-              @click="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
+              data-anime-card="true"
+              :data-anime-id="item.bangumiId"
+              :data-anime-title="item.animeTitle"
+              :aria-label="`${item.animeTitle}，按住可查看番剧信息与取消追番`"
+              @click="openAnimeCard(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
               @keydown.enter.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
               @keydown.space.prevent="openAnimeDetail(item.bangumiId, item.mediaId, item.watchCompleted ? 0 : item.positionSeconds)"
             >
@@ -1428,7 +1725,11 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
               class="poster-card"
               role="button"
               tabindex="0"
-              @click="openAnimeDetail(item.bangumiId)"
+              data-anime-card="true"
+              :data-anime-id="item.bangumiId"
+              :data-anime-title="item.title"
+              :aria-label="`${item.title}，按住可查看番剧信息与追番操作`"
+              @click="openAnimeCard(item.bangumiId)"
               @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
               @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
             >
@@ -1466,7 +1767,11 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
               class="poster-card"
               role="button"
               tabindex="0"
-              @click="openAnimeDetail(item.bangumiId)"
+              data-anime-card="true"
+              :data-anime-id="item.bangumiId"
+              :data-anime-title="item.title"
+              :aria-label="`${item.title}，按住可查看番剧信息与追番操作`"
+              @click="openAnimeCard(item.bangumiId)"
               @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
               @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
             >
@@ -1534,7 +1839,11 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             class="list-row poster-row"
             role="button"
             tabindex="0"
-            @click="openAnimeDetail(item.bangumiId)"
+            data-anime-card="true"
+            :data-anime-id="item.bangumiId"
+            :data-anime-title="item.title"
+            :aria-label="`${item.title}，按住可查看番剧信息与追番操作`"
+            @click="openAnimeCard(item.bangumiId)"
             @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
             @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
           >
@@ -1622,7 +1931,11 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
                 class="library-card"
                 role="button"
                 tabindex="0"
-                @click="openAnimeDetail(item.bangumiId)"
+                data-anime-card="true"
+                :data-anime-id="item.bangumiId"
+                :data-anime-title="item.title"
+                :aria-label="`${item.title}，按住可查看番剧信息与追番操作`"
+                @click="openAnimeCard(item.bangumiId)"
                 @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
                 @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
               >
@@ -1702,6 +2015,98 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
         <span>{{ tab.label }}</span>
       </button>
     </nav>
+
+    <Teleport to="body">
+      <Transition name="anime-actions">
+        <div
+          v-if="animeActionItem"
+          class="anime-actions-layer"
+          role="presentation"
+          @click.self="closeAnimeActions"
+        >
+          <section
+            class="anime-actions-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="anime-actions-title"
+            :aria-busy="animeActionLoading || animeActionSaving"
+          >
+            <div class="anime-actions-handle" aria-hidden="true" />
+            <div class="anime-actions-content">
+              <div class="anime-actions-cover">
+                <img
+                  v-if="animeActionItem.coverURL || (animeActionDetail && imageAvailable(`anime-actions-${animeActionItem.bangumiId}`, animeActionDetail.hasCover))"
+                  :src="animeActionItem.coverURL || animeCoverURL(animeActionItem.bangumiId)"
+                  :alt="animeActionDetail?.title || animeActionItem.title"
+                  @error="handleAnimeActionCoverError"
+                />
+                <div v-else class="poster-fallback">{{ (animeActionDetail?.title || animeActionItem.title).slice(0, 2) }}</div>
+              </div>
+
+              <div class="anime-actions-copy">
+                <span class="anime-actions-kicker">番剧信息</span>
+                <h2 id="anime-actions-title">{{ animeActionDetail?.title || animeActionItem.title }}</h2>
+                <p
+                  v-if="animeActionDetail?.originalTitle && animeActionDetail.originalTitle !== animeActionDetail.title"
+                  class="anime-actions-original-title"
+                >
+                  {{ animeActionDetail.originalTitle }}
+                </p>
+                <div v-if="animeActionDetail" class="anime-actions-metadata">
+                  <span>{{ formatAirDate(animeActionDetail.airDate) }} · {{ animeActionWeekday(animeActionDetail.airWeekday) }}</span>
+                  <span>{{ totalEpisodesText(animeActionDetail.totalEpisodes) }}</span>
+                  <span v-if="animeActionDetail.platform">{{ animeActionDetail.platform }}</span>
+                  <span v-if="animeActionDetail.ratingScore !== null">评分 {{ ratingText(animeActionDetail.ratingScore) }}</span>
+                </div>
+                <div v-else-if="animeActionLoading" class="anime-actions-loading" aria-label="正在加载番剧信息">
+                  <i />
+                  <i />
+                </div>
+              </div>
+            </div>
+
+            <p v-if="animeActionDetail" class="anime-actions-summary">
+              {{ animeActionDetail.summary || '暂无剧情简介' }}
+            </p>
+            <div v-if="animeActionDetail?.tags.length" class="anime-actions-tags" aria-label="番剧标签">
+              <span v-for="tag in animeActionDetail.tags.slice(0, 4)" :key="tag.name">{{ tag.name }}</span>
+            </div>
+
+            <div v-if="animeActionError" class="anime-actions-error" role="alert">
+              <span>{{ animeActionError }}</span>
+              <button
+                v-if="!animeActionDetail || animeActionFollowed === null"
+                type="button"
+                :disabled="animeActionLoading"
+                @click="retryAnimeActionData"
+              >
+                重新加载
+              </button>
+            </div>
+
+            <div class="anime-actions-buttons">
+              <button
+                :class="animeActionFollowed ? 'anime-action-danger' : 'anime-action-primary'"
+                type="button"
+                :disabled="animeActionLoading || animeActionSaving || animeActionFollowed === null"
+                @click="toggleSelectedAnimeFollow"
+              >
+                {{
+                  animeActionSaving
+                    ? (animeActionFollowed ? '正在取消追番...' : '正在追番...')
+                    : animeActionLoading || animeActionFollowed === null
+                      ? '正在读取追番状态...'
+                      : animeActionFollowed
+                        ? '取消追番'
+                        : '追番'
+                }}
+              </button>
+              <button type="button" :disabled="animeActionSaving" @click="closeAnimeActions">关闭</button>
+            </div>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
   </main>
 </template>
 
@@ -1792,6 +2197,256 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 @keyframes pull-refresh-spin {
   to { transform: rotate(360deg); }
+}
+
+[data-anime-card='true'] {
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+[data-anime-card='true'] img {
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.anime-actions-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-top: max(48px, env(safe-area-inset-top));
+  background: rgba(7, 10, 18, 0.5);
+  backdrop-filter: blur(3px);
+  overscroll-behavior: contain;
+  touch-action: none;
+}
+
+.anime-actions-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 520px);
+  height: 35dvh;
+  padding: 0 14px calc(14px + env(safe-area-inset-bottom));
+  overflow: hidden;
+  color: var(--ink-900);
+  background: rgba(247, 248, 252, 0.99);
+  border: 1px solid rgba(32, 40, 62, 0.08);
+  border-bottom: 0;
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -18px 48px rgba(7, 10, 18, 0.24);
+  touch-action: manipulation;
+}
+
+.anime-actions-handle {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 4px;
+  margin: 9px auto 8px;
+  background: rgba(32, 40, 62, 0.16);
+  border-radius: 999px;
+}
+
+.anime-actions-content {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  flex: 0 0 auto;
+  gap: 12px;
+  min-height: 116px;
+}
+
+.anime-actions-cover {
+  width: 82px;
+  height: 116px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #fff2f7, #eff2f8);
+  border-radius: 10px;
+  box-shadow: 0 7px 18px rgba(32, 40, 62, 0.12);
+}
+
+.anime-actions-cover img,
+.anime-actions-cover .poster-fallback {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.anime-actions-copy {
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.anime-actions-kicker {
+  color: var(--ink-400);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.anime-actions-copy h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.anime-actions-original-title {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--ink-400);
+  font-size: 10px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.anime-actions-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.anime-actions-metadata span,
+.anime-actions-tags span {
+  padding: 3px 7px;
+  color: var(--ink-600);
+  font-size: 10px;
+  line-height: 1.25;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(32, 40, 62, 0.06);
+  border-radius: 999px;
+}
+
+.anime-actions-loading {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.anime-actions-loading i {
+  width: 88%;
+  height: 10px;
+  background: linear-gradient(90deg, rgba(32, 40, 62, 0.06), rgba(255, 255, 255, 0.9), rgba(32, 40, 62, 0.06));
+  background-size: 220% 100%;
+  border-radius: 999px;
+  animation: anime-actions-shimmer 1.2s linear infinite;
+}
+
+.anime-actions-loading i:last-child {
+  width: 62%;
+}
+
+@keyframes anime-actions-shimmer {
+  to { background-position: -120% 0; }
+}
+
+.anime-actions-summary {
+  display: -webkit-box;
+  flex: 0 0 auto;
+  overflow: hidden;
+  margin: 10px 2px 0;
+  color: var(--ink-600);
+  font-size: 12px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.anime-actions-tags {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  margin: 8px 2px 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.anime-actions-tags span {
+  color: var(--pink-600);
+  background: rgba(255, 238, 245, 0.92);
+  border-color: rgba(241, 91, 149, 0.1);
+}
+
+.anime-actions-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 8px;
+  margin: 8px 2px 0;
+  color: var(--pink-600);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.anime-actions-error button {
+  padding: 3px 8px;
+  color: var(--pink-600);
+  font-size: 11px;
+  background: #ffffff;
+  border: 1px solid rgba(241, 91, 149, 0.2);
+  border-radius: 999px;
+}
+
+.anime-actions-buttons {
+  display: grid;
+  grid-template-columns: 1fr 0.72fr;
+  flex: 0 0 auto;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.anime-actions-buttons button {
+  min-height: 46px;
+  color: var(--ink-700);
+  font-size: 14px;
+  font-weight: 600;
+  background: #ffffff;
+  border: 1px solid rgba(32, 40, 62, 0.07);
+  border-radius: 10px;
+  box-shadow: 0 6px 16px rgba(32, 40, 62, 0.05);
+}
+
+.anime-actions-buttons .anime-action-primary,
+.anime-actions-buttons .anime-action-danger {
+  color: #ffffff;
+  background: var(--pink-600);
+  border-color: transparent;
+}
+
+.anime-actions-buttons button:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.anime-actions-buttons button:disabled {
+  opacity: 0.56;
+}
+
+.anime-actions-enter-active,
+.anime-actions-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.anime-actions-enter-active .anime-actions-panel,
+.anime-actions-leave-active .anime-actions-panel {
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.anime-actions-enter-from,
+.anime-actions-leave-to {
+  opacity: 0;
+}
+
+.anime-actions-enter-from .anime-actions-panel,
+.anime-actions-leave-to .anime-actions-panel {
+  transform: translate3d(0, 100%, 0);
 }
 
 .topbar-slide-forward-enter-active,
