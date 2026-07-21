@@ -125,6 +125,7 @@ export interface ViewerDetailEpisode {
   type: number
   hasMedia: boolean
   hasCover: boolean
+  commentCount: number
   opSkip: ViewerOPSkipSegment | null
 }
 
@@ -189,6 +190,34 @@ export interface ViewerFollowedAnime {
   caughtUp: boolean
   lastWatchedAt: number
   followedAt: number
+}
+
+export interface ViewerEpisodeCommentUser {
+  userId: number
+  username: string
+  nickname: string
+  avatarUrl: string
+  group: number
+  sign: string
+}
+
+export interface ViewerEpisodeComment {
+  commentId: number
+  parentCommentId: number
+  createdAt: number
+  content: string
+  state: number
+  user: ViewerEpisodeCommentUser | null
+  replies: ViewerEpisodeComment[]
+}
+
+export interface ViewerEpisodeComments {
+  episodeId: number
+  syncStatus: 'not_started' | 'pending' | 'completed' | 'not_found' | string
+  fetchedAt: number | null
+  commentCount: number
+  totalCount: number
+  comments: ViewerEpisodeComment[]
 }
 
 interface AuthResponse {
@@ -335,6 +364,11 @@ export const api = {
   animeDetail: (bangumiId: number) =>
     request<{ anime: ViewerAnimeDetail; watchProgress: ViewerWatchProgress | null; followed: boolean }>(
       `/api/anime/${bangumiId}/detail`,
+    ),
+  episodeComments: (bangumiId: number, mediaId: number, signal?: AbortSignal) =>
+    request<{ episode: ViewerEpisodeComments; smiles: Record<string, string> }>(
+      `/api/anime/${bangumiId}/media/${mediaId}/comments`,
+      { signal },
     ),
   updateAnimeFollow: (bangumiId: number, followed: boolean) =>
     request<{ followed: boolean }>(`/api/anime/${bangumiId}/follow`, {

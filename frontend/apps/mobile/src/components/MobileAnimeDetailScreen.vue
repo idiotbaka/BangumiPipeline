@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import {
   api,
@@ -8,7 +8,9 @@ import {
   type ViewerAnimeCharacter,
   type ViewerAnimeDetail,
   type ViewerDetailEpisode,
+  type ViewerEpisodeComments,
 } from '../api'
+import MobileEpisodeCommentItem from './MobileEpisodeCommentItem.vue'
 import MobileVideoPlayer from './MobileVideoPlayer.vue'
 
 interface Props {
@@ -37,7 +39,31 @@ const failedImages = ref<Set<string>>(new Set())
 const episodeRail = ref<HTMLElement | null>(null)
 const episodeSheetOpen = ref(false)
 const episodeSheetList = ref<HTMLElement | null>(null)
+const detailTab = ref<'info' | 'comments'>('info')
+const detailTabPanels = ref<HTMLElement | null>(null)
+const detailInfoPanel = ref<HTMLElement | null>(null)
+const detailCommentsPanel = ref<HTMLElement | null>(null)
+const infoPanelHeight = ref(0)
+const commentsPanelHeight = ref(0)
+const tabDragging = ref(false)
+const tabDragOffset = ref(0)
+const tabSwipeWidth = ref(0)
+const episodeComments = ref<ViewerEpisodeComments | null>(null)
+const commentSmiles = ref<Record<string, string>>({})
+const commentsLoading = ref(false)
+const commentsError = ref('')
 const episodeCardRefs = new Map<string, HTMLElement>()
+const commentsCache = new Map<number, { episode: ViewerEpisodeComments; smiles: Record<string, string> }>()
+let commentsController: AbortController | null = null
+let commentsRequestID = 0
+let commentsLoadingMediaID = 0
+let tabSwipeStart: {
+  x: number
+  y: number
+  startedAt: number
+  direction: 'pending' | 'horizontal' | 'vertical'
+} | null = null
+let tabPanelResizeObserver: ResizeObserver | null = null
 let progressSaving = false
 let queuedProgress: { mediaId: number; positionSeconds: number; durationSeconds: number } | null = null
 
@@ -46,6 +72,36 @@ const weekdays = ['', '周一', '周二', '周三', '周四', '周五', '周六'
 const selectedEpisode = computed(() =>
   anime.value?.episodes.find((episode) => episode.key === selectedEpisodeKey.value) ?? null,
 )
+const selectedCommentCount = computed(() =>
+  episodeComments.value?.commentCount ?? selectedEpisode.value?.commentCount ?? 0,
+)
+const detailTabIndex = computed(() => detailTab.value === 'info' ? 0 : 1)
+const detailTabTrackStyle = computed(() => ({
+  transform: `translate3d(calc(${-detailTabIndex.value * 100}% + ${tabDragOffset.value}px), 0, 0)`,
+}))
+const detailTabIndicatorStyle = computed(() => {
+  const dragProgress = tabDragging.value && tabSwipeWidth.value
+    ? tabDragOffset.value / tabSwipeWidth.value
+    : 0
+  const position = Math.max(0, Math.min(1, detailTabIndex.value - dragProgress))
+  return { transform: `translate3d(${position * 100}%, 0, 0)` }
+})
+const displayedPanelHeight = computed(() => {
+  const heights = [infoPanelHeight.value, commentsPanelHeight.value]
+  const currentIndex = detailTabIndex.value
+  const currentHeight = heights[currentIndex] ?? 0
+  if (!tabDragging.value || !tabDragOffset.value || !tabSwipeWidth.value) return currentHeight
+
+  const targetIndex = currentIndex + (tabDragOffset.value < 0 ? 1 : -1)
+  const targetHeight = heights[targetIndex]
+  if (!targetHeight) return currentHeight
+  const progress = Math.min(Math.abs(tabDragOffset.value) / tabSwipeWidth.value, 1)
+  return currentHeight + (targetHeight - currentHeight) * progress
+})
+const detailTabPanelsStyle = computed(() => {
+  const height = Math.ceil(displayedPanelHeight.value)
+  return height > 0 ? { height: `${height}px` } : undefined
+})
 const playableEpisodes = computed(() => anime.value?.episodes.filter((episode) => episode.hasMedia) ?? [])
 const playerEpisodes = computed(() =>
   playableEpisodes.value.map((episode) => ({
@@ -122,9 +178,30 @@ const displayTags = computed(() => {
 })
 
 onMounted(loadDetail)
+onMounted(() => {
+  tabPanelResizeObserver = new ResizeObserver(measureDetailPanelHeights)
+  observeDetailPanels()
+})
 watch(() => props.bangumiId, loadDetail)
+watch([detailInfoPanel, detailCommentsPanel], observeDetailPanels, { flush: 'post' })
+watch(() => selectedEpisode.value?.mediaId ?? 0, (mediaID, previousMediaID) => {
+  if (mediaID === previousMediaID) return
+  if (mediaID > 0) {
+    void loadEpisodeComments(mediaID)
+    return
+  }
+  resetEpisodeComments()
+})
+onBeforeUnmount(() => {
+  commentsController?.abort()
+  tabPanelResizeObserver?.disconnect()
+})
 
 async function loadDetail() {
+  commentsCache.clear()
+  resetEpisodeComments()
+  detailTab.value = 'info'
+  selectedEpisodeKey.value = ''
   loading.value = true
   errorMessage.value = ''
   followError.value = ''
@@ -183,6 +260,167 @@ function selectEpisode(episode: ViewerDetailEpisode) {
 function selectEpisodeByKey(key: string) {
   const episode = anime.value?.episodes.find((item) => item.key === key)
   if (episode) selectEpisode(episode)
+}
+
+function selectDetailTab(tab: 'info' | 'comments') {
+  detailTab.value = tab
+  if (tab === 'comments' && selectedEpisode.value?.mediaId && !episodeComments.value && !commentsLoading.value) {
+    void loadEpisodeComments(selectedEpisode.value.mediaId)
+  }
+}
+
+async function loadEpisodeComments(mediaID = selectedEpisode.value?.mediaId ?? 0, force = false) {
+  if (!mediaID) {
+    resetEpisodeComments()
+    return
+  }
+  if (!force && commentsLoadingMediaID === mediaID) return
+
+  commentsController?.abort()
+  commentsController = null
+  const requestID = ++commentsRequestID
+  commentsLoadingMediaID = 0
+
+  const cached = commentsCache.get(mediaID)
+  if (cached && !force) {
+    episodeComments.value = cached.episode
+    commentSmiles.value = cached.smiles
+    commentsLoading.value = false
+    commentsError.value = ''
+    return
+  }
+
+  const controller = new AbortController()
+  commentsController = controller
+  commentsLoadingMediaID = mediaID
+  commentsLoading.value = true
+  commentsError.value = ''
+  if (!cached) {
+    episodeComments.value = null
+    commentSmiles.value = {}
+  }
+
+  try {
+    const result = await api.episodeComments(props.bangumiId, mediaID, controller.signal)
+    if (requestID !== commentsRequestID || selectedEpisode.value?.mediaId !== mediaID) return
+    const smiles = authenticatedSmileURLs(result.smiles)
+    commentsCache.set(mediaID, { episode: result.episode, smiles })
+    episodeComments.value = result.episode
+    commentSmiles.value = smiles
+  } catch (error) {
+    if (controller.signal.aborted || requestID !== commentsRequestID) return
+    commentsError.value = error instanceof Error ? error.message : '评论加载失败'
+  } finally {
+    if (requestID === commentsRequestID) {
+      commentsController = null
+      commentsLoadingMediaID = 0
+      commentsLoading.value = false
+    }
+  }
+}
+
+function retryEpisodeComments() {
+  void loadEpisodeComments(selectedEpisode.value?.mediaId ?? 0, true)
+}
+
+function resetEpisodeComments() {
+  commentsController?.abort()
+  commentsController = null
+  commentsRequestID++
+  commentsLoadingMediaID = 0
+  commentsLoading.value = false
+  commentsError.value = ''
+  episodeComments.value = null
+  commentSmiles.value = {}
+}
+
+function authenticatedSmileURLs(smiles: Record<string, string>) {
+  const result: Record<string, string> = {}
+  for (const [code, source] of Object.entries(smiles)) {
+    result[code] = source.startsWith('/') ? buildAuthenticatedMediaURL(source) : source
+  }
+  return result
+}
+
+function startTabSwipe(event: TouchEvent) {
+  const target = event.target
+  if (target instanceof Element && target.closest('button, a, input, [role="button"], .episode-rail')) {
+    tabSwipeStart = null
+    return
+  }
+  const touch = event.touches[0]
+  if (!touch) return
+  tabSwipeWidth.value = detailTabPanels.value?.clientWidth || window.innerWidth
+  tabSwipeStart = {
+    x: touch.clientX,
+    y: touch.clientY,
+    startedAt: performance.now(),
+    direction: 'pending',
+  }
+}
+
+function moveTabSwipe(event: TouchEvent) {
+  const start = tabSwipeStart
+  if (!start) return
+  const touch = event.touches[0]
+  if (!touch) return
+  const horizontal = touch.clientX - start.x
+  const vertical = touch.clientY - start.y
+
+  if (start.direction === 'pending') {
+    if (Math.hypot(horizontal, vertical) < 8) return
+    start.direction = Math.abs(horizontal) > Math.abs(vertical) * 1.08 ? 'horizontal' : 'vertical'
+    if (start.direction === 'vertical') return
+    tabDragging.value = true
+  }
+  if (start.direction !== 'horizontal') return
+
+  const beyondFirstPanel = detailTab.value === 'info' && horizontal > 0
+  const beyondLastPanel = detailTab.value === 'comments' && horizontal < 0
+  tabDragOffset.value = beyondFirstPanel || beyondLastPanel ? horizontal * 0.18 : horizontal
+  event.preventDefault()
+}
+
+function finishTabSwipe(event: TouchEvent) {
+  const start = tabSwipeStart
+  const touch = event.changedTouches[0]
+  if (!start || start.direction !== 'horizontal' || !touch) {
+    cancelTabSwipe()
+    return
+  }
+
+  const horizontal = touch.clientX - start.x
+  const elapsed = Math.max(performance.now() - start.startedAt, 1)
+  const velocity = Math.abs(horizontal) / elapsed
+  const distanceThreshold = Math.max(tabSwipeWidth.value * 0.22, 64)
+  const shouldSwitch = Math.abs(horizontal) >= distanceThreshold || velocity >= 0.55
+  const canSwitchToComments = horizontal < 0 && detailTab.value === 'info'
+  const canSwitchToInfo = horizontal > 0 && detailTab.value === 'comments'
+
+  tabSwipeStart = null
+  tabDragging.value = false
+  tabDragOffset.value = 0
+  if (shouldSwitch && canSwitchToComments) selectDetailTab('comments')
+  if (shouldSwitch && canSwitchToInfo) selectDetailTab('info')
+}
+
+function cancelTabSwipe() {
+  tabSwipeStart = null
+  tabDragging.value = false
+  tabDragOffset.value = 0
+}
+
+function observeDetailPanels() {
+  if (!tabPanelResizeObserver) return
+  tabPanelResizeObserver.disconnect()
+  if (detailInfoPanel.value) tabPanelResizeObserver.observe(detailInfoPanel.value)
+  if (detailCommentsPanel.value) tabPanelResizeObserver.observe(detailCommentsPanel.value)
+  measureDetailPanelHeights()
+}
+
+function measureDetailPanelHeights() {
+  infoPanelHeight.value = detailInfoPanel.value ? Math.ceil(detailInfoPanel.value.scrollHeight) : 0
+  commentsPanelHeight.value = detailCommentsPanel.value ? Math.ceil(detailCommentsPanel.value.scrollHeight) : 0
 }
 
 async function openEpisodeSheet() {
@@ -383,6 +621,7 @@ function formatInfoValue(value: unknown): string {
     </div>
 
     <div v-else-if="anime" class="detail-content">
+      <div class="playback-sticky">
       <div class="player-wrap">
         <MobileVideoPlayer
           v-if="selectedEpisode"
@@ -413,6 +652,63 @@ function formatInfoValue(value: unknown): string {
         <button class="floating-back" type="button" aria-label="返回" @click="emit('back')">‹</button>
       </div>
 
+      <nav class="detail-tabs" role="tablist" aria-label="播放器页面内容">
+        <button
+          id="mobile-detail-info-tab"
+          class="detail-tab"
+          :class="{ active: detailTab === 'info' }"
+          type="button"
+          role="tab"
+          :aria-selected="detailTab === 'info'"
+          aria-controls="mobile-detail-info-panel"
+          @click="selectDetailTab('info')"
+        >
+          <span>番剧信息</span>
+        </button>
+        <button
+          id="mobile-detail-comments-tab"
+          class="detail-tab"
+          :class="{ active: detailTab === 'comments' }"
+          type="button"
+          role="tab"
+          :aria-selected="detailTab === 'comments'"
+          aria-controls="mobile-detail-comments-panel"
+          @click="selectDetailTab('comments')"
+        >
+          <span>该集吐槽</span>
+          <em v-if="selectedCommentCount > 0">{{ selectedCommentCount }}</em>
+          <i v-else-if="commentsLoading" aria-label="正在加载评论" />
+        </button>
+        <span
+          class="detail-tab-indicator"
+          :class="{ dragging: tabDragging }"
+          :style="detailTabIndicatorStyle"
+          aria-hidden="true"
+        ><i /></span>
+      </nav>
+      </div>
+
+      <div
+        ref="detailTabPanels"
+        class="detail-tab-panels"
+        :class="{ dragging: tabDragging }"
+        :style="detailTabPanelsStyle"
+        @touchstart.passive="startTabSwipe"
+        @touchmove="moveTabSwipe"
+        @touchend.passive="finishTabSwipe"
+        @touchcancel.passive="cancelTabSwipe"
+      >
+        <div class="detail-tab-track" :class="{ dragging: tabDragging }" :style="detailTabTrackStyle">
+        <div
+          ref="detailInfoPanel"
+          id="mobile-detail-info-panel"
+          class="detail-tab-panel detail-info-panel"
+          :class="{ active: detailTab === 'info' }"
+          role="tabpanel"
+          aria-labelledby="mobile-detail-info-tab"
+          :aria-hidden="detailTab !== 'info'"
+          :inert="detailTab !== 'info'"
+        >
       <section class="title-section">
         <div class="title-copy">
           <p class="detail-title">{{ anime.title }}</p>
@@ -567,6 +863,60 @@ function formatInfoValue(value: unknown): string {
         </div>
         <div v-else class="detail-empty">暂无角色与声优资料</div>
       </section>
+        </div>
+
+        <section
+          ref="detailCommentsPanel"
+          id="mobile-detail-comments-panel"
+          class="detail-tab-panel episode-comments-panel"
+          :class="{ active: detailTab === 'comments' }"
+          role="tabpanel"
+          aria-labelledby="mobile-detail-comments-tab"
+          :aria-busy="commentsLoading"
+          :aria-hidden="detailTab !== 'comments'"
+          :inert="detailTab !== 'comments'"
+        >
+          <header class="comments-heading">
+            <div>
+              <span>{{ selectedEpisode?.label || '当前选集' }}</span>
+              <h2>{{ selectedEpisode?.title || selectedEpisode?.originalTitle || anime.title }}</h2>
+            </div>
+            <small v-if="episodeComments">共 {{ episodeComments.totalCount }} 条内容</small>
+            <small v-else-if="selectedCommentCount > 0">{{ selectedCommentCount }} 条吐槽</small>
+          </header>
+
+          <div v-if="commentsLoading && !episodeComments" class="comments-loading-list" aria-hidden="true">
+            <article v-for="index in 3" :key="`comment-skeleton-${index}`">
+              <i />
+              <div><span /><span /></div>
+              <p />
+            </article>
+          </div>
+          <div v-else-if="commentsError" class="comments-state comments-error-state">
+            <span>!</span>
+            <p>{{ commentsError }}</p>
+            <button type="button" @click="retryEpisodeComments">重新加载</button>
+          </div>
+          <div v-else-if="episodeComments?.comments.length" class="comments-list">
+            <MobileEpisodeCommentItem
+              v-for="comment in episodeComments.comments"
+              :key="comment.commentId"
+              :comment="comment"
+              :smiles="commentSmiles"
+            />
+          </div>
+          <div v-else class="comments-state">
+            <span>···</span>
+            <p v-if="!selectedEpisode">请先选择一个可播放话数</p>
+            <p v-else-if="episodeComments?.syncStatus === 'not_started' || episodeComments?.syncStatus === 'pending'">
+              本话评论正在等待首次同步
+            </p>
+            <p v-else-if="episodeComments?.syncStatus === 'not_found'">Bangumi 暂无该话评论数据</p>
+            <p v-else>本话暂时没有评论</p>
+          </div>
+        </section>
+        </div>
+      </div>
     </div>
 
     <Teleport to="body">
@@ -861,6 +1211,19 @@ function formatInfoValue(value: unknown): string {
   margin-top: 6px;
 }
 
+.playback-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  width: 100%;
+  background: #ffffff;
+  box-shadow: 0 10px 26px rgba(32, 40, 62, 0.12);
+}
+
+:global(body.mobile-player-fullscreen) .playback-sticky {
+  z-index: 1100;
+}
+
 .player-wrap {
   position: relative;
   background: #070a12;
@@ -934,6 +1297,279 @@ function formatInfoValue(value: unknown): string {
 .player-empty span {
   color: rgba(255, 255, 255, 0.62);
   font-size: 12px;
+}
+
+.detail-tabs {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom: 1px solid rgba(85, 119, 217, 0.1);
+}
+
+.detail-tab {
+  position: relative;
+  min-height: 50px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--ink-400);
+  font-size: 14px;
+  transition: color 160ms var(--ease-soft), background 160ms var(--ease-soft);
+}
+
+.detail-tab.active {
+  color: var(--pink-600);
+  font-weight: 600;
+  background: linear-gradient(180deg, transparent, rgba(255, 244, 248, 0.62));
+}
+
+.detail-tab-indicator {
+  position: absolute;
+  bottom: 0;
+  left: 12px;
+  width: calc((100% - 24px) / 2);
+  height: 2px;
+  padding: 0 18px;
+  pointer-events: none;
+  will-change: transform;
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.detail-tab-indicator.dragging {
+  transition: none;
+}
+
+.detail-tab-indicator > i {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: linear-gradient(90deg, var(--pink-500), var(--cyan-400));
+  border-radius: 999px 999px 0 0;
+}
+
+.detail-tab em {
+  min-width: 19px;
+  height: 19px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  color: var(--pink-600);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 500;
+  background: var(--pink-50);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+}
+
+.detail-tab > i {
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--line);
+  border-top-color: var(--pink-500);
+  border-radius: 50%;
+  animation: bp-spin 0.8s linear infinite;
+}
+
+.detail-tab-panels {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  touch-action: pan-y;
+  transition: height 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.detail-tab-panels.dragging {
+  user-select: none;
+  transition: none;
+}
+
+.detail-tab-track {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  will-change: transform;
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.detail-tab-track.dragging {
+  transition: none;
+}
+
+.detail-tab-panel {
+  min-width: 0;
+  flex: 0 0 100%;
+  pointer-events: none;
+}
+
+.detail-tab-panel.active {
+  pointer-events: auto;
+}
+
+.detail-info-panel {
+  min-width: 0;
+}
+
+.episode-comments-panel {
+  min-height: 430px;
+  padding: 15px 12px 24px;
+}
+
+.comments-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 3px 4px 13px;
+  border-bottom: 1px solid rgba(85, 119, 217, 0.1);
+}
+
+.comments-heading > div {
+  min-width: 0;
+}
+
+.comments-heading span,
+.comments-heading h2 {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comments-heading span {
+  color: var(--pink-600);
+  font-size: 12px;
+}
+
+.comments-heading h2 {
+  margin-top: 2px;
+  color: var(--ink-900);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.comments-heading small {
+  flex: 0 0 auto;
+  color: var(--ink-400);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.comments-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.comments-state {
+  min-height: 330px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--ink-400);
+  font-size: 13px;
+  text-align: center;
+}
+
+.comments-state > span {
+  min-width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  color: var(--pink-500);
+  font-size: 14px;
+  background: linear-gradient(145deg, var(--pink-50), var(--cyan-50));
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+
+.comments-error-state {
+  color: #c73567;
+}
+
+.comments-error-state button {
+  min-height: 34px;
+  padding: 0 15px;
+  color: var(--pink-600);
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.comments-loading-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.comments-loading-list article {
+  min-height: 116px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 9px;
+  padding: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(32, 40, 62, 0.05);
+  border-radius: 9px;
+}
+
+.comments-loading-list i,
+.comments-loading-list span,
+.comments-loading-list p {
+  position: relative;
+  overflow: hidden;
+  background: #e9edf3;
+}
+
+.comments-loading-list i::after,
+.comments-loading-list span::after,
+.comments-loading-list p::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+  background: linear-gradient(100deg, transparent 18%, rgba(255, 255, 255, 0.82) 45%, transparent 72%);
+  animation: detail-skeleton-sweep 1.1s ease-in-out infinite;
+}
+
+.comments-loading-list i {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+}
+
+.comments-loading-list article > div {
+  display: grid;
+  align-content: center;
+  gap: 7px;
+}
+
+.comments-loading-list span {
+  display: block;
+  width: 38%;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.comments-loading-list span:last-child {
+  width: 62%;
+  height: 7px;
+}
+
+.comments-loading-list p {
+  grid-column: 1 / -1;
+  width: 84%;
+  height: 30px;
+  margin-top: 6px;
+  border-radius: 5px;
 }
 
 .title-section {

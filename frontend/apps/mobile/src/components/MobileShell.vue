@@ -1830,6 +1830,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 .detail-mode {
   --mobile-topbar-height: 0px;
+  overflow-x: visible;
   padding-top: 0;
   background: #f6f7fb;
 }
@@ -1837,7 +1838,15 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 .detail-mode .app-page {
   width: 100%;
   min-height: 100dvh;
+  overflow-x: visible;
   padding: 0;
+}
+
+@supports (overflow: clip) {
+  .detail-mode,
+  .detail-mode .app-page {
+    overflow-x: clip;
+  }
 }
 
 .page-stack {

@@ -1,0 +1,5 @@
+{
+  "name": "@bangumi-pipeline/shared",
+  "private": true,
+  "type": "module"
+}
