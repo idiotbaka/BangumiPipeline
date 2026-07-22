@@ -1,6 +1,6 @@
 [package]
 name = "bangumi-pipeline-mobile"
-version = "1.2.0"
+version = "1.2.1"
 description = "BakaVip2 mobile client"
 authors = ["BangumiPipeline"]
 edition = "2021"
