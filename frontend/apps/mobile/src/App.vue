@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import {
   APIError,
@@ -36,15 +36,33 @@ const confirmPassword = ref('')
 const inviteCode = ref('')
 const message = ref('')
 const serverMessage = ref('')
+const serverExpanded = ref(false)
+const passwordVisible = ref(false)
+const confirmPasswordVisible = ref(false)
+const authViewportHeight = ref(0)
 const checkingAppUpdate = ref(false)
 const appUpdateCheckMessage = ref('')
 const appUpdateRelease = ref<AppRelease | null>(null)
 const openingAppDownload = ref(false)
 const appUpdateDialogError = ref('')
 let appUpdateRequestID = 0
+let authFocusTimers: number[] = []
 
-const formTitle = computed(() => (mode.value === 'login' ? '欢迎回来' : '注册并进入'))
-const formSubtitle = computed(() => (mode.value === 'login' ? '登录后继续观看番剧' : '创建账号后会自动登录'))
+const formTitle = computed(() => (mode.value === 'login' ? '欢迎回来' : '创建你的账号'))
+const formSubtitle = computed(() =>
+  mode.value === 'login' ? '登录后，从上次离开的地方继续。' : '完成注册，即刻开启你的番剧时光。',
+)
+const serverDisplayName = computed(() => {
+  try {
+    const url = new URL(apiBaseUrl.value)
+    return url.port ? `${url.hostname}:${url.port}` : url.hostname
+  } catch {
+    return apiBaseUrl.value || 'https://baka.vip/'
+  }
+})
+const authScreenStyle = computed(() =>
+  authViewportHeight.value > 0 ? { '--auth-viewport-height': `${Math.round(authViewportHeight.value)}px` } : undefined,
+)
 const submitLabel = computed(() => {
   if (loading.value) {
     return mode.value === 'login' ? '登录中' : '注册中'
@@ -55,6 +73,10 @@ const submitDisabled = computed(() => loading.value || (mode.value === 'register
 
 onMounted(async () => {
   document.title = appName
+  syncAuthViewport()
+  window.visualViewport?.addEventListener('resize', syncAuthViewport)
+  window.visualViewport?.addEventListener('scroll', syncAuthViewport)
+  window.addEventListener('resize', syncAuthViewport)
   const config = await loadAppConfig()
   apiBaseUrl.value = config.apiBaseUrl
   configureAPI(config.apiBaseUrl)
@@ -72,6 +94,56 @@ onMounted(async () => {
   }
 })
 
+onBeforeUnmount(() => {
+  window.visualViewport?.removeEventListener('resize', syncAuthViewport)
+  window.visualViewport?.removeEventListener('scroll', syncAuthViewport)
+  window.removeEventListener('resize', syncAuthViewport)
+  clearAuthFocusTimers()
+})
+
+function syncAuthViewport() {
+  authViewportHeight.value = window.visualViewport?.height ?? window.innerHeight
+}
+
+function clearAuthFocusTimers() {
+  for (const timer of authFocusTimers) {
+    window.clearTimeout(timer)
+  }
+  authFocusTimers = []
+}
+
+function keepAuthFieldVisible(event: FocusEvent) {
+  const input = event.currentTarget
+  if (!(input instanceof HTMLElement)) {
+    return
+  }
+  clearAuthFocusTimers()
+  for (const [index, delay] of [100, 320].entries()) {
+    authFocusTimers.push(
+      window.setTimeout(() => {
+        input.scrollIntoView({ behavior: index === 0 ? 'auto' : 'smooth', block: 'center' })
+      }, delay),
+    )
+  }
+}
+
+function focusAuthInput(inputID: string) {
+  document.getElementById(inputID)?.focus()
+}
+
+async function toggleServerEditor() {
+  if (loading.value) {
+    return
+  }
+  serverExpanded.value = !serverExpanded.value
+  serverMessage.value = ''
+  if (!serverExpanded.value) {
+    return
+  }
+  await nextTick()
+  document.querySelector<HTMLInputElement>('#auth-server-address')?.focus({ preventScroll: true })
+}
+
 function switchMode(nextMode: 'login' | 'register') {
   if (loading.value) {
     return
@@ -83,9 +155,12 @@ function switchMode(nextMode: 'login' | 'register') {
   mode.value = nextMode
   message.value = ''
   serverMessage.value = ''
+  serverExpanded.value = false
   password.value = ''
   confirmPassword.value = ''
   inviteCode.value = ''
+  passwordVisible.value = false
+  confirmPasswordVisible.value = false
 }
 
 async function submit() {
@@ -285,7 +360,7 @@ function saveAndApplyAPIBaseURL() {
 </script>
 
 <template>
-  <main v-if="!ready" class="boot-screen">
+  <main v-if="!ready" class="boot-screen" aria-label="应用加载中">
     <div class="boot-grid" aria-hidden="true" />
     <div class="boot-float-card card-one" aria-hidden="true">
       <span />
@@ -296,12 +371,6 @@ function saveAndApplyAPIBaseURL() {
       <i />
       <em />
     </div>
-    <section class="boot-status" aria-label="应用加载中">
-      <span class="boot-kicker">MOBILE VIEWER</span>
-      <p class="boot-title">{{ appName }}</p>
-      <div class="boot-line"><span /></div>
-      <p>LOADING</p>
-    </section>
     <img class="boot-chara" :src="charaImage" alt="" draggable="false" />
   </main>
 
@@ -317,85 +386,216 @@ function saveAndApplyAPIBaseURL() {
     @check-app-update="checkAppUpdate(true)"
   />
 
-  <main v-else class="auth-screen">
+  <main v-else class="auth-screen" :style="authScreenStyle">
     <div class="grid-layer" aria-hidden="true" />
-    <section class="hero-panel" aria-label="站点视觉">
-      <div class="brand-block">
-        <span class="brand-kicker">MOBILE VIEWER</span>
-        <p class="brand-title">{{ appName }}</p>
-      </div>
-      <div class="visual-card" aria-hidden="true">
-        <div class="plate plate-a" />
-        <div class="plate plate-b" />
-        <div class="float-card float-card-a">
-          <span />
-          <i />
-          <em />
-        </div>
-        <div class="float-card float-card-b">
-          <span />
-          <i />
-        </div>
-        <div class="float-card float-card-c">
-          <span />
-          <i />
-          <em />
-        </div>
-        <div class="dash dash-a" />
-        <div class="dash dash-b" />
-      </div>
-    </section>
+    <div class="auth-glow auth-glow-primary" aria-hidden="true" />
+    <div class="auth-glow auth-glow-secondary" aria-hidden="true" />
+    <img class="auth-chara-background" :src="charaImage" alt="" aria-hidden="true" draggable="false" />
 
-    <section class="auth-card" :class="{ 'register-card': mode === 'register' }" aria-label="账号登录和注册">
-      <form :key="mode" class="auth-form" @submit.prevent="submit">
-        <div class="form-head">
-          <button v-if="mode === 'register'" class="back-button" :disabled="loading" type="button" @click="switchMode('login')">
-            返回登录
+    <section class="auth-layout" aria-label="账号登录和注册">
+      <header class="auth-header">
+        <div class="auth-brand">
+          <span class="auth-brand-copy">
+            <strong>{{ appName }}</strong>
+            <small>你的私人番剧放映室</small>
+          </span>
+        </div>
+
+        <div class="auth-heading">
+          <button
+            v-if="mode === 'register'"
+            class="auth-back-button"
+            :disabled="loading"
+            type="button"
+            aria-label="返回登录"
+            @click="switchMode('login')"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m14.5 6-6 6 6 6" />
+            </svg>
           </button>
-          <span class="panel-tag">{{ mode === 'login' ? 'LOGIN' : 'REGISTER' }}</span>
-          <p class="form-title">{{ formTitle }}</p>
-          <p class="form-subtitle">{{ formSubtitle }}</p>
+          <div>
+            <h1>{{ formTitle }}</h1>
+            <p>{{ formSubtitle }}</p>
+          </div>
+        </div>
+      </header>
+
+      <form :key="mode" class="auth-form" @submit.prevent="submit">
+        <button
+          class="server-disclosure"
+          :class="{ expanded: serverExpanded }"
+          :aria-expanded="serverExpanded"
+          :disabled="loading"
+          type="button"
+          @click="toggleServerEditor"
+        >
+          <span class="server-status-dot" aria-hidden="true" />
+          <span class="server-disclosure-copy">
+            <small>当前服务器</small>
+            <strong>{{ serverDisplayName }}</strong>
+          </span>
+          <span class="server-edit-label">{{ serverExpanded ? '收起' : '更改' }}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m8 10 4 4 4-4" />
+          </svg>
+        </button>
+
+        <Transition name="server-editor">
+          <div v-if="serverExpanded" class="server-editor">
+            <label for="auth-server-address">服务器地址</label>
+            <div class="server-editor-row">
+              <input
+                id="auth-server-address"
+                v-model.trim="apiBaseUrl"
+                autocomplete="url"
+                enterkeyhint="go"
+                inputmode="url"
+                required
+                type="url"
+                @focus="keepAuthFieldVisible"
+                @keydown.enter.prevent="refreshSiteSettings(true)"
+              />
+              <button :disabled="checkingServer || loading" type="button" @click="refreshSiteSettings(true)">
+                {{ checkingServer ? '连接中' : '连接' }}
+              </button>
+            </div>
+            <small v-if="serverMessage" :class="{ success: serverMessage === '服务器已连接' }" role="status">
+              {{ serverMessage }}
+            </small>
+          </div>
+        </Transition>
+
+        <div class="auth-fields">
+          <div class="auth-field">
+            <label for="auth-username">用户名</label>
+            <span class="auth-input-shell">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="8" r="3.5" />
+                <path d="M5.5 19c.5-3.5 2.7-5.3 6.5-5.3s6 1.8 6.5 5.3" />
+              </svg>
+              <input
+                id="auth-username"
+                v-model.trim="username"
+                autocapitalize="none"
+                autocomplete="username"
+                enterkeyhint="next"
+                maxlength="32"
+                minlength="3"
+                placeholder="请输入用户名"
+                required
+                spellcheck="false"
+                type="text"
+                @focus="keepAuthFieldVisible"
+                @keydown.enter.prevent="focusAuthInput('auth-password')"
+              />
+            </span>
+          </div>
+
+          <div class="auth-field">
+            <label for="auth-password">密码</label>
+            <span class="auth-input-shell">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="5.5" y="10" width="13" height="9.5" rx="3" />
+                <path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10" />
+              </svg>
+              <input
+                id="auth-password"
+                v-model="password"
+                :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+                :enterkeyhint="mode === 'login' ? 'done' : 'next'"
+                maxlength="128"
+                minlength="10"
+                placeholder="请输入密码"
+                required
+                :type="passwordVisible ? 'text' : 'password'"
+                @focus="keepAuthFieldVisible"
+                @keydown.enter.prevent="mode === 'login' ? submit() : focusAuthInput('auth-confirm-password')"
+              />
+              <button
+                class="password-toggle"
+                type="button"
+                :aria-label="passwordVisible ? '隐藏密码' : '显示密码'"
+                @click="passwordVisible = !passwordVisible"
+              >
+                <svg v-if="passwordVisible" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3.5 12s3-5 8.5-5 8.5 5 8.5 5-3 5-8.5 5-8.5-5-8.5-5Z" />
+                  <circle cx="12" cy="12" r="2.5" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 4 20 20M9.5 7.4A9 9 0 0 1 12 7c5.5 0 8.5 5 8.5 5a13.6 13.6 0 0 1-2.3 2.8M14.7 16.5c-.8.3-1.7.5-2.7.5-5.5 0-8.5-5-8.5-5a13 13 0 0 1 3-3.3" />
+                </svg>
+              </button>
+            </span>
+          </div>
+
+          <div v-if="mode === 'register'" class="auth-field">
+            <label for="auth-confirm-password">确认密码</label>
+            <span class="auth-input-shell">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="5.5" y="10" width="13" height="9.5" rx="3" />
+                <path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10" />
+              </svg>
+              <input
+                id="auth-confirm-password"
+                v-model="confirmPassword"
+                autocomplete="new-password"
+                :enterkeyhint="inviteRequired ? 'next' : 'done'"
+                maxlength="128"
+                minlength="10"
+                placeholder="请再次输入密码"
+                required
+                :type="confirmPasswordVisible ? 'text' : 'password'"
+                @focus="keepAuthFieldVisible"
+                @keydown.enter.prevent="inviteRequired ? focusAuthInput('auth-invite-code') : submit()"
+              />
+              <button
+                class="password-toggle"
+                type="button"
+                :aria-label="confirmPasswordVisible ? '隐藏确认密码' : '显示确认密码'"
+                @click="confirmPasswordVisible = !confirmPasswordVisible"
+              >
+                <svg v-if="confirmPasswordVisible" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3.5 12s3-5 8.5-5 8.5 5 8.5 5-3 5-8.5 5-8.5-5-8.5-5Z" />
+                  <circle cx="12" cy="12" r="2.5" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 4 20 20M9.5 7.4A9 9 0 0 1 12 7c5.5 0 8.5 5 8.5 5a13.6 13.6 0 0 1-2.3 2.8M14.7 16.5c-.8.3-1.7.5-2.7.5-5.5 0-8.5-5-8.5-5a13 13 0 0 1 3-3.3" />
+                </svg>
+              </button>
+            </span>
+          </div>
+
+          <div v-if="mode === 'register' && inviteRequired" class="auth-field">
+            <label for="auth-invite-code">邀请码</label>
+            <span class="auth-input-shell">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4.5 7.5h15v10h-15zM8 7.5v10M16 7.5v10M4.5 11h15" />
+              </svg>
+              <input
+                id="auth-invite-code"
+                v-model.trim="inviteCode"
+                autocapitalize="characters"
+                autocomplete="off"
+                enterkeyhint="done"
+                maxlength="32"
+                placeholder="请输入邀请码"
+                required
+                spellcheck="false"
+                type="text"
+                @focus="keepAuthFieldVisible"
+                @keydown.enter.prevent="submit"
+              />
+            </span>
+          </div>
         </div>
 
-        <label class="field server-field">
-          <span>服务器</span>
-          <div class="server-row">
-            <input v-model.trim="apiBaseUrl" autocomplete="url" inputmode="url" required type="url" />
-            <button :disabled="checkingServer || loading" type="button" @click="refreshSiteSettings(true)">
-              {{ checkingServer ? '连接中' : '连接' }}
-            </button>
-          </div>
-          <small v-if="serverMessage">{{ serverMessage }}</small>
-        </label>
-
-        <label class="field">
-          <span>用户名</span>
-          <input v-model.trim="username" autocomplete="username" maxlength="32" minlength="3" required type="text" />
-        </label>
-
-        <label class="field">
-          <span>密码</span>
-          <input
-            v-model="password"
-            :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
-            maxlength="128"
-            minlength="10"
-            required
-            type="password"
-          />
-        </label>
-
-        <label v-if="mode === 'register'" class="field">
-          <span>确认密码</span>
-          <input v-model="confirmPassword" autocomplete="new-password" maxlength="128" minlength="10" required type="password" />
-        </label>
-
-        <label v-if="mode === 'register' && inviteRequired" class="field">
-          <span>邀请码</span>
-          <input v-model.trim="inviteCode" autocomplete="off" maxlength="32" required type="text" />
-        </label>
-
-        <p class="form-message" :class="{ show: message }">{{ message }}</p>
+        <Transition name="form-message">
+          <p v-if="message" class="form-message" role="alert">
+            <span aria-hidden="true">!</span>
+            {{ message }}
+          </p>
+        </Transition>
 
         <button class="submit-button" :class="{ loading }" :disabled="submitDisabled" type="submit">
           <span>{{ submitLabel }}</span>

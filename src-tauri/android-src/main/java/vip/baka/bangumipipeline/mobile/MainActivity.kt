@@ -4,6 +4,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
+import android.view.WindowManager
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -60,9 +61,10 @@ class MainActivity : TauriActivity() {
     super.onDestroy()
   }
 
+  @Suppress("DEPRECATION")
   private fun applyNormalSystemBars() {
+    window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     WindowCompat.setDecorFitsSystemWindows(window, true)
-    @Suppress("DEPRECATION")
     window.decorView.systemUiVisibility = normalSystemUiVisibilityFlags()
     val controller = WindowCompat.getInsetsController(window, window.decorView)
     controller.isAppearanceLightStatusBars = true
