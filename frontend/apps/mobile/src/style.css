@@ -32,7 +32,7 @@
   font-family: var(--font-cn);
   font-synthesis: none;
   background: #ffffff;
-  text-rendering: optimizeLegibility;
+  text-rendering: auto;
   -webkit-font-smoothing: antialiased;
 }
 

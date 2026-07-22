@@ -45,13 +45,13 @@ const episodeSheetOpen = ref(false)
 const episodeSheetList = ref<HTMLElement | null>(null)
 const detailTab = ref<'info' | 'comments'>('info')
 const detailTabPanels = ref<HTMLElement | null>(null)
+const detailTabTrack = ref<HTMLElement | null>(null)
+const detailTabIndicator = ref<HTMLElement | null>(null)
 const detailInfoPanel = ref<HTMLElement | null>(null)
 const detailCommentsPanel = ref<HTMLElement | null>(null)
-const infoPanelHeight = ref(0)
-const commentsPanelHeight = ref(0)
 const tabDragging = ref(false)
-const tabDragOffset = ref(0)
-const tabSwipeWidth = ref(0)
+const tabSettling = ref(false)
+const tabGestureActive = ref(false)
 const episodeComments = ref<ViewerEpisodeComments | null>(null)
 const commentSmiles = ref<Record<string, string>>({})
 const commentsLoading = ref(false)
@@ -68,7 +68,14 @@ let tabSwipeStart: {
   startedAt: number
   direction: 'pending' | 'horizontal' | 'vertical'
 } | null = null
-let tabPanelResizeObserver: ResizeObserver | null = null
+let tabSwipeWidth = 0
+let tabDragOffset = 0
+let tabGestureReady = false
+let tabGestureFrame = 0
+let tabSettleTimer = 0
+let episodeSheetHistoryPushed = false
+let ignoreNextEpisodeSheetPopState = false
+let deferredCommentsMediaID = 0
 let progressSaving = false
 let queuedProgress: { mediaId: number; positionSeconds: number; durationSeconds: number } | null = null
 
@@ -81,32 +88,9 @@ const selectedCommentCount = computed(() =>
   episodeComments.value?.commentCount ?? selectedEpisode.value?.commentCount ?? 0,
 )
 const detailTabIndex = computed(() => detailTab.value === 'info' ? 0 : 1)
-const detailTabTrackStyle = computed(() => ({
-  transform: `translate3d(calc(${-detailTabIndex.value * 100}% + ${tabDragOffset.value}px), 0, 0)`,
-}))
-const detailTabIndicatorStyle = computed(() => {
-  const dragProgress = tabDragging.value && tabSwipeWidth.value
-    ? tabDragOffset.value / tabSwipeWidth.value
-    : 0
-  const position = Math.max(0, Math.min(1, detailTabIndex.value - dragProgress))
-  return { transform: `translate3d(${position * 100}%, 0, 0)` }
-})
-const displayedPanelHeight = computed(() => {
-  const heights = [infoPanelHeight.value, commentsPanelHeight.value]
-  const currentIndex = detailTabIndex.value
-  const currentHeight = heights[currentIndex] ?? 0
-  if (!tabDragging.value || !tabDragOffset.value || !tabSwipeWidth.value) return currentHeight
-
-  const targetIndex = currentIndex + (tabDragOffset.value < 0 ? 1 : -1)
-  const targetHeight = heights[targetIndex]
-  if (!targetHeight) return currentHeight
-  const progress = Math.min(Math.abs(tabDragOffset.value) / tabSwipeWidth.value, 1)
-  return currentHeight + (targetHeight - currentHeight) * progress
-})
-const detailTabPanelsStyle = computed(() => {
-  const height = Math.ceil(displayedPanelHeight.value)
-  return height > 0 ? { height: `${height}px` } : undefined
-})
+const tabTransitioning = computed(() => tabDragging.value || tabSettling.value)
+const renderInfoPanel = computed(() => detailTab.value === 'info' || tabGestureActive.value)
+const renderCommentsPanel = computed(() => detailTab.value === 'comments' || tabGestureActive.value)
 const playableEpisodes = computed(() => anime.value?.episodes.filter((episode) => episode.hasMedia) ?? [])
 const playerEpisodes = computed(() =>
   playableEpisodes.value.map((episode) => ({
@@ -183,28 +167,26 @@ const displayTags = computed(() => {
 })
 
 onMounted(loadDetail)
-onMounted(() => {
-  tabPanelResizeObserver = new ResizeObserver(measureDetailPanelHeights)
-  observeDetailPanels()
-})
+window.addEventListener('popstate', handleEpisodeSheetPopState)
 watch(() => props.bangumiId, loadDetail)
-watch([detailInfoPanel, detailCommentsPanel], observeDetailPanels, { flush: 'post' })
 watch(() => selectedEpisode.value?.mediaId ?? 0, (mediaID, previousMediaID) => {
   if (mediaID === previousMediaID) return
-  if (mediaID > 0) {
-    void loadEpisodeComments(mediaID)
-    return
-  }
   resetEpisodeComments()
+  if (mediaID > 0 && detailTab.value === 'comments') {
+    void loadEpisodeComments(mediaID)
+  }
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('popstate', handleEpisodeSheetPopState)
   commentsController?.abort()
-  tabPanelResizeObserver?.disconnect()
+  window.cancelAnimationFrame(tabGestureFrame)
+  window.clearTimeout(tabSettleTimer)
 })
 
 async function loadDetail() {
   commentsCache.clear()
   resetEpisodeComments()
+  resetTabGestureDOM()
   detailTab.value = 'info'
   selectedEpisodeKey.value = ''
   loading.value = true
@@ -267,10 +249,24 @@ function selectEpisodeByKey(key: string) {
   if (episode) selectEpisode(episode)
 }
 
-function selectDetailTab(tab: 'info' | 'comments') {
-  detailTab.value = tab
-  if (tab === 'comments' && selectedEpisode.value?.mediaId && !episodeComments.value && !commentsLoading.value) {
-    void loadEpisodeComments(selectedEpisode.value.mediaId)
+async function selectDetailTab(tab: 'info' | 'comments') {
+  if (tab === detailTab.value || tabSettling.value || tabDragging.value) return
+
+  tabGestureActive.value = true
+  if (tab === 'comments') ensureEpisodeComments()
+  await nextTick()
+  if (!prepareTabGesture()) {
+    detailTab.value = tab
+    tabGestureActive.value = false
+    return
+  }
+  settleTabGesture(tab === 'info' ? 0 : 1)
+}
+
+function ensureEpisodeComments() {
+  const mediaID = selectedEpisode.value?.mediaId ?? 0
+  if (mediaID && !episodeComments.value && !commentsLoading.value) {
+    void loadEpisodeComments(mediaID)
   }
 }
 
@@ -288,6 +284,12 @@ async function loadEpisodeComments(mediaID = selectedEpisode.value?.mediaId ?? 0
 
   const cached = commentsCache.get(mediaID)
   if (cached && !force) {
+    if (shouldDeferCommentsPresentation()) {
+      deferredCommentsMediaID = mediaID
+      commentsLoading.value = true
+      commentsError.value = ''
+      return
+    }
     episodeComments.value = cached.episode
     commentSmiles.value = cached.smiles
     commentsLoading.value = false
@@ -310,8 +312,12 @@ async function loadEpisodeComments(mediaID = selectedEpisode.value?.mediaId ?? 0
     if (requestID !== commentsRequestID || selectedEpisode.value?.mediaId !== mediaID) return
     const smiles = authenticatedSmileURLs(result.smiles)
     commentsCache.set(mediaID, { episode: result.episode, smiles })
-    episodeComments.value = result.episode
-    commentSmiles.value = smiles
+    if (shouldDeferCommentsPresentation()) {
+      deferredCommentsMediaID = mediaID
+    } else if (detailTab.value === 'comments') {
+      episodeComments.value = result.episode
+      commentSmiles.value = smiles
+    }
   } catch (error) {
     if (controller.signal.aborted || requestID !== commentsRequestID) return
     commentsError.value = error instanceof Error ? error.message : '评论加载失败'
@@ -319,7 +325,7 @@ async function loadEpisodeComments(mediaID = selectedEpisode.value?.mediaId ?? 0
     if (requestID === commentsRequestID) {
       commentsController = null
       commentsLoadingMediaID = 0
-      commentsLoading.value = false
+      commentsLoading.value = deferredCommentsMediaID === mediaID
     }
   }
 }
@@ -333,10 +339,27 @@ function resetEpisodeComments() {
   commentsController = null
   commentsRequestID++
   commentsLoadingMediaID = 0
+  deferredCommentsMediaID = 0
   commentsLoading.value = false
   commentsError.value = ''
   episodeComments.value = null
   commentSmiles.value = {}
+}
+
+function shouldDeferCommentsPresentation() {
+  return tabGestureActive.value
+}
+
+function presentDeferredComments() {
+  const mediaID = selectedEpisode.value?.mediaId ?? 0
+  if (!mediaID || deferredCommentsMediaID !== mediaID) return
+  const cached = commentsCache.get(mediaID)
+  deferredCommentsMediaID = 0
+  commentsLoading.value = false
+  if (!cached) return
+  episodeComments.value = cached.episode
+  commentSmiles.value = cached.smiles
+  commentsError.value = ''
 }
 
 function authenticatedSmileURLs(smiles: Record<string, string>) {
@@ -355,7 +378,6 @@ function startTabSwipe(event: TouchEvent) {
   }
   const touch = event.touches[0]
   if (!touch) return
-  tabSwipeWidth.value = detailTabPanels.value?.clientWidth || window.innerWidth
   tabSwipeStart = {
     x: touch.clientX,
     y: touch.clientY,
@@ -376,17 +398,18 @@ function moveTabSwipe(event: TouchEvent) {
     if (Math.hypot(horizontal, vertical) < 8) return
     start.direction = Math.abs(horizontal) > Math.abs(vertical) * 1.08 ? 'horizontal' : 'vertical'
     if (start.direction === 'vertical') return
-    tabDragging.value = true
+    beginTabGesture(horizontal)
   }
   if (start.direction !== 'horizontal') return
 
   const beyondFirstPanel = detailTab.value === 'info' && horizontal > 0
   const beyondLastPanel = detailTab.value === 'comments' && horizontal < 0
-  tabDragOffset.value = beyondFirstPanel || beyondLastPanel ? horizontal * 0.18 : horizontal
+  tabDragOffset = beyondFirstPanel || beyondLastPanel ? horizontal * 0.18 : horizontal
+  scheduleTabGestureFrame()
   event.preventDefault()
 }
 
-function finishTabSwipe(event: TouchEvent) {
+async function finishTabSwipe(event: TouchEvent) {
   const start = tabSwipeStart
   const touch = event.changedTouches[0]
   if (!start || start.direction !== 'horizontal' || !touch) {
@@ -397,46 +420,193 @@ function finishTabSwipe(event: TouchEvent) {
   const horizontal = touch.clientX - start.x
   const elapsed = Math.max(performance.now() - start.startedAt, 1)
   const velocity = Math.abs(horizontal) / elapsed
-  const distanceThreshold = Math.max(tabSwipeWidth.value * 0.22, 64)
+  const distanceThreshold = Math.max(tabSwipeWidth * 0.22, 64)
   const shouldSwitch = Math.abs(horizontal) >= distanceThreshold || velocity >= 0.55
   const canSwitchToComments = horizontal < 0 && detailTab.value === 'info'
   const canSwitchToInfo = horizontal > 0 && detailTab.value === 'comments'
 
   tabSwipeStart = null
-  tabDragging.value = false
-  tabDragOffset.value = 0
-  if (shouldSwitch && canSwitchToComments) selectDetailTab('comments')
-  if (shouldSwitch && canSwitchToInfo) selectDetailTab('info')
+  if (!tabGestureReady) {
+    await nextTick()
+    prepareTabGesture()
+  }
+  const targetIndex = shouldSwitch && canSwitchToComments
+    ? 1
+    : shouldSwitch && canSwitchToInfo
+      ? 0
+      : detailTabIndex.value
+  if (targetIndex === 1) ensureEpisodeComments()
+  settleTabGesture(targetIndex)
 }
 
 function cancelTabSwipe() {
   tabSwipeStart = null
+  if (tabGestureReady) {
+    settleTabGesture(detailTabIndex.value)
+    return
+  }
+  resetTabGestureDOM()
+}
+
+function beginTabGesture(horizontal: number) {
+  if (tabSettling.value || tabGestureActive.value) return
+  tabGestureActive.value = true
+  if (detailTab.value === 'info' && horizontal < 0) ensureEpisodeComments()
+  void nextTick(() => {
+    if (!tabSwipeStart || tabSwipeStart.direction !== 'horizontal') return
+    if (prepareTabGesture()) scheduleTabGestureFrame()
+  })
+}
+
+function prepareTabGesture() {
+  if (tabGestureReady) return true
+  const viewport = detailTabPanels.value
+  const track = detailTabTrack.value
+  const info = detailInfoPanel.value
+  const comments = detailCommentsPanel.value
+  const current = detailTabIndex.value === 0 ? info : comments
+  if (!viewport || !track || !info || !comments || !current) return false
+
+  tabSwipeWidth = Math.max(viewport.clientWidth, 1)
+  track.style.height = `${Math.ceil(current.scrollHeight)}px`
+  info.style.transition = 'none'
+  comments.style.transition = 'none'
+  if (detailTabIndicator.value) detailTabIndicator.value.style.transition = 'none'
+  tabGestureReady = true
+  tabDragging.value = true
+  applyTabGestureFrame()
+  return true
+}
+
+function scheduleTabGestureFrame() {
+  if (!tabGestureReady || tabGestureFrame) return
+  tabGestureFrame = window.requestAnimationFrame(() => {
+    tabGestureFrame = 0
+    applyTabGestureFrame()
+  })
+}
+
+function applyTabGestureFrame(targetIndex = detailTabIndex.value, offset = tabDragOffset) {
+  const width = Math.max(tabSwipeWidth, 1)
+  const pixelOffset = Math.round(offset)
+  if (detailInfoPanel.value) {
+    detailInfoPanel.value.style.transform = `translate3d(${(0 - targetIndex) * width + pixelOffset}px, 0, 0)`
+  }
+  if (detailCommentsPanel.value) {
+    detailCommentsPanel.value.style.transform = `translate3d(${(1 - targetIndex) * width + pixelOffset}px, 0, 0)`
+  }
+  if (detailTabIndicator.value) {
+    const indicatorPosition = Math.max(0, Math.min(1, targetIndex - pixelOffset / width))
+    detailTabIndicator.value.style.transform = `translate3d(${indicatorPosition * 100}%, 0, 0)`
+  }
+}
+
+function settleTabGesture(targetIndex: 0 | 1 | number) {
+  if (!tabGestureReady) {
+    detailTab.value = targetIndex === 0 ? 'info' : 'comments'
+    resetTabGestureDOM()
+    return
+  }
+
+  window.cancelAnimationFrame(tabGestureFrame)
+  tabGestureFrame = 0
+  applyTabGestureFrame()
   tabDragging.value = false
-  tabDragOffset.value = 0
+  tabSettling.value = true
+  detailTab.value = targetIndex === 0 ? 'info' : 'comments'
+
+  const transition = 'transform 230ms cubic-bezier(0.22, 1, 0.36, 1)'
+  window.requestAnimationFrame(() => {
+    if (detailInfoPanel.value) detailInfoPanel.value.style.transition = transition
+    if (detailCommentsPanel.value) detailCommentsPanel.value.style.transition = transition
+    if (detailTabIndicator.value) detailTabIndicator.value.style.transition = transition
+    window.requestAnimationFrame(() => applyTabGestureFrame(targetIndex, 0))
+  })
+
+  window.clearTimeout(tabSettleTimer)
+  tabSettleTimer = window.setTimeout(finishTabGesture, 260)
 }
 
-function observeDetailPanels() {
-  if (!tabPanelResizeObserver) return
-  tabPanelResizeObserver.disconnect()
-  if (detailInfoPanel.value) tabPanelResizeObserver.observe(detailInfoPanel.value)
-  if (detailCommentsPanel.value) tabPanelResizeObserver.observe(detailCommentsPanel.value)
-  measureDetailPanelHeights()
+function finishTabGesture() {
+  tabSettling.value = false
+  tabDragOffset = 0
+  tabGestureReady = false
+  if (detailTab.value === 'comments') presentDeferredComments()
+  void nextTick(() => resetTabGestureDOM())
 }
 
-function measureDetailPanelHeights() {
-  infoPanelHeight.value = detailInfoPanel.value ? Math.ceil(detailInfoPanel.value.scrollHeight) : 0
-  commentsPanelHeight.value = detailCommentsPanel.value ? Math.ceil(detailCommentsPanel.value.scrollHeight) : 0
+function resetTabGestureDOM() {
+  window.cancelAnimationFrame(tabGestureFrame)
+  window.clearTimeout(tabSettleTimer)
+  tabGestureFrame = 0
+  tabSettleTimer = 0
+  tabDragging.value = false
+  tabSettling.value = false
+  tabGestureReady = false
+  tabDragOffset = 0
+  tabSwipeWidth = 0
+  if (detailTabTrack.value) detailTabTrack.value.style.height = ''
+  for (const panel of [detailInfoPanel.value, detailCommentsPanel.value]) {
+    if (!panel) continue
+    panel.style.transition = ''
+    panel.style.transform = ''
+  }
+  if (detailTabIndicator.value) {
+    detailTabIndicator.value.style.transition = ''
+    detailTabIndicator.value.style.transform = ''
+  }
+  tabGestureActive.value = false
+  if (detailTab.value === 'info') {
+    deferredCommentsMediaID = 0
+    commentsLoading.value = false
+  }
 }
 
 async function openEpisodeSheet() {
   if (!anime.value?.episodes.length) return
   episodeSheetOpen.value = true
+  if (!episodeSheetHistoryPushed) {
+    const currentState = window.history.state
+    const baseState = currentState && typeof currentState === 'object' ? currentState : {}
+    window.history.pushState(
+      { ...baseState, bpMobileEpisodeSheet: true, bangumiId: props.bangumiId },
+      '',
+      window.location.href,
+    )
+    episodeSheetHistoryPushed = true
+  }
   await nextTick()
   window.requestAnimationFrame(() => scrollSelectedSheetEpisodeIntoView('auto'))
 }
 
-function closeEpisodeSheet() {
+function closeEpisodeSheet(options: { fromPopState?: boolean } = {}) {
+  if (!episodeSheetOpen.value) return
   episodeSheetOpen.value = false
+  if (!options.fromPopState && episodeSheetHistoryPushed) {
+    ignoreNextEpisodeSheetPopState = true
+    window.history.back()
+  }
+  episodeSheetHistoryPushed = false
+}
+
+function handleEpisodeSheetPopState(event: PopStateEvent) {
+  if (ignoreNextEpisodeSheetPopState) {
+    ignoreNextEpisodeSheetPopState = false
+    return
+  }
+
+  const state = event.state as { bpMobileEpisodeSheet?: boolean; bangumiId?: number } | null
+  const targetsCurrentSheet = state?.bpMobileEpisodeSheet === true && state.bangumiId === props.bangumiId
+  if (episodeSheetOpen.value && !targetsCurrentSheet) {
+    episodeSheetHistoryPushed = false
+    closeEpisodeSheet({ fromPopState: true })
+    return
+  }
+  if (!episodeSheetOpen.value && targetsCurrentSheet) {
+    episodeSheetHistoryPushed = true
+    episodeSheetOpen.value = true
+    void nextTick(() => window.requestAnimationFrame(() => scrollSelectedSheetEpisodeIntoView('auto')))
+  }
 }
 
 function selectEpisodeFromSheet(episode: ViewerDetailEpisode) {
@@ -693,6 +863,7 @@ function formatInfoValue(value: unknown): string {
             v-if="imageAvailable('anime-cover', anime.hasCover)"
             :src="animeCoverURL()"
             alt=""
+            decoding="async"
             @error="markImageFailed('anime-cover')"
           />
           <div class="empty-shade" />
@@ -731,9 +902,9 @@ function formatInfoValue(value: unknown): string {
           <i v-else-if="commentsLoading" aria-label="正在加载评论" />
         </button>
         <span
+          ref="detailTabIndicator"
           class="detail-tab-indicator"
-          :class="{ dragging: tabDragging }"
-          :style="detailTabIndicatorStyle"
+          :class="{ dragging: tabTransitioning, comments: detailTab === 'comments' }"
           aria-hidden="true"
         ><i /></span>
       </nav>
@@ -742,15 +913,19 @@ function formatInfoValue(value: unknown): string {
       <div
         ref="detailTabPanels"
         class="detail-tab-panels"
-        :class="{ dragging: tabDragging }"
-        :style="detailTabPanelsStyle"
+        :class="{ dragging: tabDragging, settling: tabSettling }"
         @touchstart.passive="startTabSwipe"
         @touchmove="moveTabSwipe"
         @touchend.passive="finishTabSwipe"
         @touchcancel.passive="cancelTabSwipe"
       >
-        <div class="detail-tab-track" :class="{ dragging: tabDragging }" :style="detailTabTrackStyle">
         <div
+          ref="detailTabTrack"
+          class="detail-tab-track"
+          :class="{ dragging: tabDragging, settling: tabSettling }"
+        >
+        <div
+          v-if="renderInfoPanel"
           ref="detailInfoPanel"
           id="mobile-detail-info-panel"
           class="detail-tab-panel detail-info-panel"
@@ -823,6 +998,7 @@ function formatInfoValue(value: unknown): string {
             :class="{ selected: selectedEpisodeKey === episode.key, unavailable: !episode.hasMedia }"
             role="button"
             tabindex="0"
+            :aria-current="selectedEpisodeKey === episode.key ? 'true' : undefined"
             @click="selectEpisode(episode)"
             @keydown.enter.prevent="selectEpisode(episode)"
             @keydown.space.prevent="selectEpisode(episode)"
@@ -833,10 +1009,18 @@ function formatInfoValue(value: unknown): string {
                 :src="episodeCoverURL(episode)"
                 :alt="episode.title || episode.label"
                 loading="lazy"
+                decoding="async"
                 @error="markImageFailed(`episode-${episode.mediaId}`)"
               />
               <div v-else class="episode-fallback">{{ episode.label }}</div>
               <span v-if="!episode.hasMedia">{{ episodeAvailability(episode) }}</span>
+              <div
+                v-if="selectedEpisodeKey === episode.key"
+                class="episode-playing-indicator"
+                aria-label="正在播放"
+              >
+                <i /><i /><i /><i />
+              </div>
             </div>
             <p>{{ episode.label }}</p>
             <small>{{ episode.title || episode.originalTitle || episode.label }}</small>
@@ -897,6 +1081,7 @@ function formatInfoValue(value: unknown): string {
                 :src="characterImageURL(character)"
                 :alt="character.name"
                 loading="lazy"
+                decoding="async"
                 @error="markImageFailed(`character-${character.characterId}`)"
               />
               <span v-else>{{ character.name.slice(0, 1) }}</span>
@@ -916,6 +1101,7 @@ function formatInfoValue(value: unknown): string {
                     tabindex="0"
                     :aria-label="`查看${actor.name}原图`"
                     loading="lazy"
+                    decoding="async"
                     @click.stop="openActorImage(actor)"
                     @keydown.enter.stop.prevent="openActorImage(actor)"
                     @keydown.space.stop.prevent="openActorImage(actor)"
@@ -933,6 +1119,7 @@ function formatInfoValue(value: unknown): string {
         </div>
 
         <section
+          v-if="renderCommentsPanel"
           ref="detailCommentsPanel"
           id="mobile-detail-comments-panel"
           class="detail-tab-panel episode-comments-panel"
@@ -988,12 +1175,12 @@ function formatInfoValue(value: unknown): string {
     </div>
 
     <Teleport to="body">
-      <Transition name="episode-sheet">
+      <Transition name="episode-sheet" :duration="220">
         <div
           v-if="episodeSheetOpen && anime"
           class="episode-sheet-layer"
           role="presentation"
-          @click.self="closeEpisodeSheet"
+          @click.self="closeEpisodeSheet()"
         >
           <section
             id="mobile-episode-sheet"
@@ -1001,7 +1188,7 @@ function formatInfoValue(value: unknown): string {
             role="dialog"
             aria-modal="true"
             aria-label="选集"
-            @keydown.esc="closeEpisodeSheet"
+            @keydown.esc="closeEpisodeSheet()"
           >
             <div class="episode-sheet-handle" aria-hidden="true" />
             <header>
@@ -1009,7 +1196,7 @@ function formatInfoValue(value: unknown): string {
                 <h2>选集</h2>
                 <span>{{ playableEpisodes.length }} / {{ anime.episodes.length }} 集可播放</span>
               </div>
-              <button type="button" aria-label="关闭选集列表" @click="closeEpisodeSheet">×</button>
+              <button type="button" aria-label="关闭选集列表" @click="closeEpisodeSheet()">×</button>
             </header>
 
             <div ref="episodeSheetList" class="episode-sheet-list">
@@ -1029,6 +1216,7 @@ function formatInfoValue(value: unknown): string {
                     :src="episodeCoverURL(episode)"
                     :alt="episode.title || episode.label"
                     loading="lazy"
+                    decoding="async"
                     @error="markImageFailed(`episode-${episode.mediaId}`)"
                   />
                   <span v-else>{{ episode.label }}</span>
@@ -1287,6 +1475,8 @@ function formatInfoValue(value: unknown): string {
   width: 100%;
   background: #ffffff;
   box-shadow: 0 10px 26px rgba(32, 40, 62, 0.12);
+  contain: layout paint;
+  isolation: isolate;
 }
 
 :global(body.mobile-player-fullscreen) .playback-sticky {
@@ -1314,7 +1504,6 @@ function formatInfoValue(value: unknown): string {
   background: rgba(7, 10, 18, 0.42);
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 999px;
-  backdrop-filter: blur(10px);
   padding-bottom: 8px;
   transition: transform 140ms var(--ease-soft), background 140ms var(--ease-soft);
 }
@@ -1404,8 +1593,11 @@ function formatInfoValue(value: unknown): string {
   height: 2px;
   padding: 0 18px;
   pointer-events: none;
-  will-change: transform;
-  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 230ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.detail-tab-indicator.comments {
+  transform: translate3d(100%, 0, 0);
 }
 
 .detail-tab-indicator.dragging {
@@ -1450,34 +1642,40 @@ function formatInfoValue(value: unknown): string {
   min-width: 0;
   overflow: hidden;
   touch-action: pan-y;
-  transition: height 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .detail-tab-panels.dragging {
   user-select: none;
-  transition: none;
 }
 
 .detail-tab-track {
+  position: relative;
   width: 100%;
-  display: flex;
-  align-items: flex-start;
-  will-change: transform;
-  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.detail-tab-track.dragging {
-  transition: none;
 }
 
 .detail-tab-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
   min-width: 0;
-  flex: 0 0 100%;
+  visibility: hidden;
   pointer-events: none;
 }
 
 .detail-tab-panel.active {
+  position: relative;
+  visibility: visible;
   pointer-events: auto;
+}
+
+.detail-tab-track.dragging .detail-tab-panel,
+.detail-tab-track.settling .detail-tab-panel {
+  position: absolute;
+  visibility: visible;
+  contain: paint;
+  backface-visibility: hidden;
+  will-change: transform;
 }
 
 .detail-info-panel {
@@ -1775,6 +1973,7 @@ function formatInfoValue(value: unknown): string {
   max-height: 76px;
   margin-top: 10px;
   overflow: hidden;
+  contain: layout paint;
   transition: max-height 260ms var(--ease-soft);
 }
 
@@ -1845,6 +2044,9 @@ function formatInfoValue(value: unknown): string {
   scroll-snap-align: start;
   color: var(--ink-700);
   outline: 0;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 154px 126px;
 }
 
 .episode-card.unavailable {
@@ -1889,10 +2091,6 @@ function formatInfoValue(value: unknown): string {
   background: rgba(7, 10, 18, 0.7);
 }
 
-.episode-card.selected .episode-cover {
-  box-shadow: 0 0 0 2px var(--pink-500);
-}
-
 .episode-card p {
   margin-top: 7px;
   color: var(--pink-600);
@@ -1910,6 +2108,84 @@ function formatInfoValue(value: unknown): string {
   -webkit-line-clamp: 2;
 }
 
+.episode-card.selected small {
+  color: var(--pink-600);
+  font-weight: 600;
+}
+
+.episode-playing-indicator {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  z-index: 2;
+  width: 30px;
+  height: 24px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  padding: 5px 6px;
+  color: var(--pink-300);
+  background: rgba(18, 22, 34, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 7px;
+  box-shadow: 0 4px 12px rgba(7, 10, 18, 0.28);
+  pointer-events: none;
+}
+
+.episode-playing-indicator i {
+  width: 3px;
+  height: 100%;
+  display: block;
+  background: currentColor;
+  border-radius: 999px;
+  transform: scaleY(0.42);
+  transform-origin: center bottom;
+  animation: episode-playing-bar 680ms ease-in-out infinite alternate;
+}
+
+.episode-playing-indicator i:nth-child(2) {
+  animation-delay: -420ms;
+  animation-duration: 540ms;
+}
+
+.episode-playing-indicator i:nth-child(3) {
+  animation-delay: -180ms;
+  animation-duration: 760ms;
+}
+
+.episode-playing-indicator i:nth-child(4) {
+  animation-delay: -560ms;
+  animation-duration: 610ms;
+}
+
+@keyframes episode-playing-bar {
+  0% {
+    transform: scaleY(0.28);
+  }
+  55% {
+    transform: scaleY(0.72);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .episode-playing-indicator i {
+    animation: none;
+  }
+
+  .episode-playing-indicator i:nth-child(2),
+  .episode-playing-indicator i:nth-child(4) {
+    transform: scaleY(0.58);
+  }
+
+  .episode-playing-indicator i:nth-child(3) {
+    transform: scaleY(1);
+  }
+}
+
 .episode-sheet-layer {
   position: fixed;
   inset: 0;
@@ -1918,8 +2194,8 @@ function formatInfoValue(value: unknown): string {
   align-items: flex-end;
   justify-content: center;
   padding-top: max(48px, env(safe-area-inset-top));
-  background: rgba(7, 10, 18, 0.48);
-  backdrop-filter: blur(2px);
+  background: rgba(7, 10, 18, 0.62);
+  isolation: isolate;
   overscroll-behavior: contain;
 }
 
@@ -2005,6 +2281,9 @@ function formatInfoValue(value: unknown): string {
   border: 1px solid transparent;
   border-bottom-color: rgba(32, 40, 62, 0.06);
   border-radius: 9px;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 92px;
   transition: background 140ms var(--ease-soft), border-color 140ms var(--ease-soft), transform 140ms var(--ease-soft);
 }
 
@@ -2097,19 +2376,10 @@ function formatInfoValue(value: unknown): string {
   -webkit-line-clamp: 3;
 }
 
-.episode-sheet-enter-active,
-.episode-sheet-leave-active {
-  transition: opacity 180ms var(--ease-soft);
-}
-
 .episode-sheet-enter-active .episode-sheet-panel,
 .episode-sheet-leave-active .episode-sheet-panel {
   transition: transform 220ms cubic-bezier(0.2, 0.82, 0.2, 1);
-}
-
-.episode-sheet-enter-from,
-.episode-sheet-leave-to {
-  opacity: 0;
+  will-change: transform;
 }
 
 .episode-sheet-enter-from .episode-sheet-panel,
@@ -2154,6 +2424,7 @@ function formatInfoValue(value: unknown): string {
   position: relative;
   max-height: 205px;
   overflow: hidden;
+  contain: layout paint;
   transition: max-height 260ms var(--ease-soft);
 }
 
@@ -2218,6 +2489,9 @@ function formatInfoValue(value: unknown): string {
   padding: 9px;
   background: #f8faff;
   border-radius: 8px;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 110px;
 }
 
 .character-image {

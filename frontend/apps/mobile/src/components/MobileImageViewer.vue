@@ -16,12 +16,13 @@ const prepared = ref<PreparedImage | null>(null)
 const preparing = ref(false)
 const saving = ref(false)
 const prepareError = ref('')
-const saveMessage = ref('')
+const saveToast = ref<{ message: string; type: 'success' | 'error' } | null>(null)
 const imageLoading = ref(false)
 const imageError = ref(false)
 let prepareRequestID = 0
 let historyPushed = false
 let ignoreNextPopState = false
+let saveToastTimer: ReturnType<typeof window.setTimeout> | null = null
 
 const sizeLabel = computed(() => formatByteSize(prepared.value?.byteSize ?? 0))
 const saveButtonLabel = computed(() => {
@@ -39,7 +40,7 @@ watch(() => props.source, (source) => {
   document.body.classList.add('mobile-image-viewer-open')
   imageLoading.value = true
   imageError.value = false
-  saveMessage.value = ''
+  clearSaveToast()
   if (!historyPushed) {
     window.history.pushState({ bpMobileImageViewer: true }, '', window.location.href)
     historyPushed = true
@@ -52,6 +53,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('popstate', handlePopState)
   document.body.classList.remove('mobile-image-viewer-open')
   prepareRequestID++
+  clearSaveToast()
   void releasePreparedImage()
 })
 
@@ -61,7 +63,7 @@ async function prepareCurrentImage(source = props.source) {
   await releasePreparedImage()
   preparing.value = true
   prepareError.value = ''
-  saveMessage.value = ''
+  clearSaveToast()
   try {
     const result = await prepareImage(source)
     if (requestID !== prepareRequestID || props.source !== source) {
@@ -85,15 +87,32 @@ async function saveImage() {
     return
   }
   saving.value = true
-  saveMessage.value = ''
+  clearSaveToast()
   try {
     const result = await savePreparedImage(prepared.value)
-    saveMessage.value = `已保存至 ${result.path}`
+    showSaveToast(`已保存至 ${result.path}`, 'success')
   } catch (error) {
-    saveMessage.value = error instanceof Error ? error.message : '保存原图失败'
+    showSaveToast(error instanceof Error ? error.message : '保存原图失败', 'error')
   } finally {
     saving.value = false
   }
+}
+
+function showSaveToast(message: string, type: 'success' | 'error') {
+  clearSaveToast()
+  saveToast.value = { message, type }
+  saveToastTimer = window.setTimeout(() => {
+    saveToast.value = null
+    saveToastTimer = null
+  }, 2_000)
+}
+
+function clearSaveToast() {
+  if (saveToastTimer !== null) {
+    window.clearTimeout(saveToastTimer)
+    saveToastTimer = null
+  }
+  saveToast.value = null
 }
 
 function requestClose() {
@@ -122,7 +141,7 @@ function closeViewerState() {
   preparing.value = false
   saving.value = false
   prepareError.value = ''
-  saveMessage.value = ''
+  clearSaveToast()
   imageLoading.value = false
   imageError.value = false
   void releasePreparedImage()
@@ -150,7 +169,20 @@ function formatByteSize(bytes: number) {
       <section v-if="source" class="image-viewer" role="dialog" aria-modal="true" :aria-label="source.alt || '图片查看器'">
         <button class="image-viewer-close" type="button" aria-label="关闭图片查看器" @click="requestClose">×</button>
 
-        <div class="image-viewer-stage">
+        <Transition name="image-save-toast">
+          <div
+            v-if="saveToast"
+            class="image-save-toast"
+            :class="saveToast.type"
+            :role="saveToast.type === 'error' ? 'alert' : 'status'"
+            aria-live="polite"
+          >
+            <i aria-hidden="true">{{ saveToast.type === 'success' ? '✓' : '!' }}</i>
+            <span>{{ saveToast.message }}</span>
+          </div>
+        </Transition>
+
+        <div class="image-viewer-stage" @click.self="requestClose">
           <span v-if="imageLoading" class="image-viewer-spinner" aria-label="正在加载图片" />
           <img
             v-show="!imageError"
@@ -165,8 +197,7 @@ function formatByteSize(bytes: number) {
         </div>
 
         <footer class="image-viewer-actions">
-          <p v-if="saveMessage" :class="{ error: !saveMessage.startsWith('已保存至') }">{{ saveMessage }}</p>
-          <p v-else-if="prepareError" class="error">{{ prepareError }}</p>
+          <p v-if="prepareError" class="error">{{ prepareError }}</p>
           <button type="button" :disabled="preparing || saving" @click="saveImage">{{ saveButtonLabel }}</button>
         </footer>
       </section>
@@ -207,6 +238,69 @@ function formatByteSize(bytes: number) {
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 50%;
   backdrop-filter: blur(8px);
+}
+
+.image-save-toast {
+  position: fixed;
+  top: calc(18px + env(safe-area-inset-top));
+  left: 50%;
+  z-index: 4;
+  width: max-content;
+  max-width: min(calc(100vw - 112px), 420px);
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 13px 9px 10px;
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.45;
+  background: rgba(43, 23, 34, 0.96);
+  border: 1px solid rgba(255, 95, 158, 0.42);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.image-save-toast.error {
+  background: rgba(42, 23, 28, 0.96);
+  border-color: rgba(253, 164, 175, 0.38);
+}
+
+.image-save-toast i {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 700;
+  background: var(--pink-500);
+  border-radius: 50%;
+}
+
+.image-save-toast.error i {
+  color: #4c0519;
+  background: #fda4af;
+}
+
+.image-save-toast span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.image-save-toast-enter-active,
+.image-save-toast-leave-active {
+  transition: opacity 160ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.image-save-toast-enter-from,
+.image-save-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -8px);
 }
 
 .image-viewer-stage {

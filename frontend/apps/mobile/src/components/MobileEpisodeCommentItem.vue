@@ -1,3 +1,14 @@
+<script lang="ts">
+const mobileCommentTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+</script>
+
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 
@@ -27,14 +38,7 @@ const avatarURL = computed(() => {
 
 function formatCommentTime(timestamp: number) {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return '时间未知'
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(timestamp * 1000))
+  return mobileCommentTimeFormatter.format(new Date(timestamp * 1000))
 }
 
 function commentDateTime(timestamp: number) {
@@ -95,6 +99,12 @@ function commentDateTime(timestamp: number) {
   border: 1px solid rgba(32, 40, 62, 0.06);
   border-radius: 9px;
   box-shadow: 0 10px 24px rgba(32, 40, 62, 0.035);
+}
+
+.comment-item:not(.reply) {
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 140px;
 }
 
 .comment-item.reply {

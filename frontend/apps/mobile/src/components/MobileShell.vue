@@ -2227,8 +2227,9 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   display: flex;
   flex-direction: column;
   width: min(100%, 520px);
-  height: 35dvh;
-  padding: 0 14px calc(14px + env(safe-area-inset-bottom));
+  height: clamp(320px, 39dvh, 420px);
+  max-height: calc(100dvh - max(48px, env(safe-area-inset-top)));
+  padding: 0 16px max(28px, calc(18px + env(safe-area-inset-bottom)));
   overflow: hidden;
   color: var(--ink-900);
   background: rgba(247, 248, 252, 0.99);
@@ -2404,7 +2405,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 }
 
 .anime-actions-buttons button {
-  min-height: 46px;
+  min-height: 48px;
   color: var(--ink-700);
   font-size: 14px;
   font-weight: 600;

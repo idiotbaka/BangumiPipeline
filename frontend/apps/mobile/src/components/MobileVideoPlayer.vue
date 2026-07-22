@@ -61,7 +61,9 @@ let controlsTimer: ReturnType<typeof setTimeout> | null = null
 let bufferTimer: ReturnType<typeof setInterval> | null = null
 let tapTimer: ReturnType<typeof setTimeout> | null = null
 let fullscreenHistoryPushed = false
+let episodePickerHistoryPushed = false
 let ignoreNextPopState = false
+let ignoreNextEpisodePickerPopState = false
 let lastTap:
   | {
       time: number
@@ -593,20 +595,32 @@ async function toggleEpisodePicker() {
     return
   }
 
-  episodePickerOpen.value = !episodePickerOpen.value
-  showControls()
-  if (!episodePickerOpen.value) {
-    scheduleControlsHide()
+  if (episodePickerOpen.value) {
+    closeFullscreenEpisodePicker()
     return
   }
+
+  episodePickerOpen.value = true
+  if (!episodePickerHistoryPushed) {
+    const currentState = window.history.state
+    const baseState = currentState && typeof currentState === 'object' ? currentState : {}
+    window.history.pushState({ ...baseState, bpMobilePlayerEpisodePicker: true }, '', window.location.href)
+    episodePickerHistoryPushed = true
+  }
+  showControls()
 
   await nextTick()
   window.requestAnimationFrame(() => scrollSelectedPickerEpisodeIntoView('auto'))
 }
 
-function closeFullscreenEpisodePicker() {
+function closeFullscreenEpisodePicker(options: { fromPopState?: boolean } = {}) {
   if (!episodePickerOpen.value) return
   episodePickerOpen.value = false
+  if (!options.fromPopState && episodePickerHistoryPushed) {
+    ignoreNextEpisodePickerPopState = true
+    window.history.back()
+  }
+  episodePickerHistoryPushed = false
   showControls()
   scheduleControlsHide()
 }
@@ -663,6 +677,7 @@ async function enterFullscreen() {
 async function exitFullscreen(options: { fromPopState?: boolean; fromUnmount?: boolean } = {}) {
   if (!nativeFullscreen.value) return
   episodePickerOpen.value = false
+  episodePickerHistoryPushed = false
   nativeFullscreen.value = false
   document.body.classList.remove('mobile-player-fullscreen')
   await exitNativeFullscreen()
@@ -673,9 +688,26 @@ async function exitFullscreen(options: { fromPopState?: boolean; fromUnmount?: b
   fullscreenHistoryPushed = false
 }
 
-function handlePopState() {
+function handlePopState(event: PopStateEvent) {
+  if (ignoreNextEpisodePickerPopState) {
+    ignoreNextEpisodePickerPopState = false
+    return
+  }
   if (ignoreNextPopState) {
     ignoreNextPopState = false
+    return
+  }
+  const state = event.state as { bpMobilePlayerEpisodePicker?: boolean } | null
+  if (episodePickerOpen.value && state?.bpMobilePlayerEpisodePicker !== true) {
+    episodePickerHistoryPushed = false
+    closeFullscreenEpisodePicker({ fromPopState: true })
+    return
+  }
+  if (nativeFullscreen.value && !episodePickerOpen.value && state?.bpMobilePlayerEpisodePicker === true) {
+    episodePickerHistoryPushed = true
+    episodePickerOpen.value = true
+    showControls()
+    void nextTick(() => window.requestAnimationFrame(() => scrollSelectedPickerEpisodeIntoView('auto')))
     return
   }
   if (nativeFullscreen.value) {
@@ -832,12 +864,12 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
       </div>
     </div>
 
-    <Transition name="fullscreen-episode-picker">
+    <Transition name="fullscreen-episode-picker" :duration="210">
       <div
         v-if="nativeFullscreen && episodePickerOpen"
         class="fullscreen-episode-picker"
         role="presentation"
-        @click.self="closeFullscreenEpisodePicker"
+        @click.self="closeFullscreenEpisodePicker()"
       >
         <aside id="mobile-player-episode-picker" role="dialog" aria-modal="true" aria-label="选集">
           <header>
@@ -846,7 +878,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
               <h2>选集</h2>
             </div>
             <small>{{ episodes.length }} 集可播放</small>
-            <button type="button" aria-label="关闭选集列表" @click="closeFullscreenEpisodePicker">×</button>
+            <button type="button" aria-label="关闭选集列表" @click="closeFullscreenEpisodePicker()">×</button>
           </header>
 
           <div ref="episodePickerList" class="fullscreen-episode-list">
@@ -865,6 +897,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
                   :src="episode.coverURL"
                   :alt="episode.title || episode.label"
                   loading="lazy"
+                  decoding="async"
                   @error="markEpisodeCoverFailed(episode.key)"
                 />
                 <span v-else>{{ episode.label }}</span>
@@ -896,6 +929,8 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
   background: #070a12;
   outline: 0;
   touch-action: pan-y;
+  contain: layout paint;
+  isolation: isolate;
 }
 
 .mobile-player.fullscreen {
@@ -994,12 +1029,11 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
   gap: 3px;
   padding: 10px 16px 9px;
   color: #ffffff;
-  background: rgba(7, 10, 18, 0.72);
+  background: rgba(7, 10, 18, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 9px;
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(14px);
   pointer-events: none;
   transform: translate(-50%, -50%);
 }
@@ -1168,8 +1202,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
     max(10px, env(safe-area-inset-right))
     max(10px, env(safe-area-inset-bottom))
     max(10px, env(safe-area-inset-left));
-  background: rgba(3, 5, 10, 0.68);
-  backdrop-filter: blur(4px);
+  background: rgba(3, 5, 10, 0.84);
   touch-action: pan-y;
 }
 
@@ -1253,6 +1286,9 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
   border: 1px solid transparent;
   border-bottom-color: rgba(255, 255, 255, 0.07);
   border-radius: 8px;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 94px;
   transition: border-color 140ms var(--ease-soft), background 140ms var(--ease-soft), transform 140ms var(--ease-soft);
 }
 
@@ -1328,19 +1364,10 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
   transform: translateY(-50%) rotate(45deg);
 }
 
-.fullscreen-episode-picker-enter-active,
-.fullscreen-episode-picker-leave-active {
-  transition: opacity 170ms var(--ease-soft);
-}
-
 .fullscreen-episode-picker-enter-active > aside,
 .fullscreen-episode-picker-leave-active > aside {
   transition: transform 210ms cubic-bezier(0.2, 0.82, 0.2, 1);
-}
-
-.fullscreen-episode-picker-enter-from,
-.fullscreen-episode-picker-leave-to {
-  opacity: 0;
+  will-change: transform;
 }
 
 .fullscreen-episode-picker-enter-from > aside,
@@ -1361,11 +1388,10 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
   color: rgba(255, 255, 255, 0.9);
   font-size: 11px;
   font-weight: 600;
-  background: rgba(54, 59, 68, 0.68);
+  background: rgba(54, 59, 68, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
   box-shadow: 0 5px 14px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(8px);
 }
 
 .op-skip-button:active {
