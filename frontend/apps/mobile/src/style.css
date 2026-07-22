@@ -253,17 +253,17 @@ img {
 }
 
 .auth-screen {
-  height: var(--auth-viewport-height, 100dvh);
+  height: 100dvh;
   min-height: 0;
   padding: max(18px, env(safe-area-inset-top)) 24px max(18px, env(safe-area-inset-bottom));
   overflow-y: auto;
   overscroll-behavior: contain;
+  scroll-behavior: auto;
   scroll-padding-block: 28px;
   background:
     radial-gradient(circle at 92% 4%, rgba(255, 159, 189, 0.22), transparent 30%),
     radial-gradient(circle at -8% 94%, rgba(73, 214, 233, 0.13), transparent 34%),
     linear-gradient(160deg, #fffafd 0%, #ffffff 52%, #f8fcff 100%);
-  transition: height 120ms ease-out;
 }
 
 .auth-screen .grid-layer {
@@ -299,10 +299,11 @@ img {
 }
 
 .auth-chara-background {
-  position: absolute;
+  position: fixed;
   z-index: 1;
+  top: max(112px, calc(env(safe-area-inset-top) + 82px));
   left: 50%;
-  bottom: -10%;
+  bottom: auto;
   width: min(168vw, 650px);
   max-width: none;
   opacity: 0.25;

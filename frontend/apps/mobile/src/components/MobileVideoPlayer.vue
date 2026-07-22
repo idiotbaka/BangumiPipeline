@@ -762,19 +762,20 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
 </script>
 
 <template>
-  <section
-    ref="player"
-    class="mobile-player"
-    :class="{ fullscreen: nativeFullscreen, 'ui-hidden': !controlsVisible, loading: playerLoading }"
-    tabindex="0"
-    :aria-label="`正在播放 ${title}`"
-    @pointerdown="handlePointerDown"
-    @pointermove="handlePointerMove"
-    @pointerup="handlePointerUp"
-    @pointercancel="handlePointerCancel"
-    @lostpointercapture="handlePointerCancel"
-    @focusin="handleInteraction"
-  >
+  <Teleport to="body" :disabled="!nativeFullscreen">
+    <section
+      ref="player"
+      class="mobile-player"
+      :class="{ fullscreen: nativeFullscreen, 'ui-hidden': !controlsVisible, loading: playerLoading }"
+      tabindex="0"
+      :aria-label="`正在播放 ${title}`"
+      @pointerdown="handlePointerDown"
+      @pointermove="handlePointerMove"
+      @pointerup="handlePointerUp"
+      @pointercancel="handlePointerCancel"
+      @lostpointercapture="handlePointerCancel"
+      @focusin="handleInteraction"
+    >
     <video
       ref="video"
       :src="src"
@@ -914,8 +915,9 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
       </div>
     </Transition>
 
-    <div class="hidden-progress" :style="progressStyle" aria-hidden="true" />
-  </section>
+      <div class="hidden-progress" :style="progressStyle" aria-hidden="true" />
+    </section>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -936,7 +938,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
 .mobile-player.fullscreen {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 2000;
   width: 100vw;
   height: 100vh;
   height: 100dvh;

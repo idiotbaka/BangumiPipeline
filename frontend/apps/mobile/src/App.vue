@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 
 import {
   APIError,
@@ -39,14 +39,12 @@ const serverMessage = ref('')
 const serverExpanded = ref(false)
 const passwordVisible = ref(false)
 const confirmPasswordVisible = ref(false)
-const authViewportHeight = ref(0)
 const checkingAppUpdate = ref(false)
 const appUpdateCheckMessage = ref('')
 const appUpdateRelease = ref<AppRelease | null>(null)
 const openingAppDownload = ref(false)
 const appUpdateDialogError = ref('')
 let appUpdateRequestID = 0
-let authFocusTimers: number[] = []
 
 const formTitle = computed(() => (mode.value === 'login' ? '欢迎回来' : '创建你的账号'))
 const formSubtitle = computed(() =>
@@ -60,9 +58,6 @@ const serverDisplayName = computed(() => {
     return apiBaseUrl.value || 'https://baka.vip/'
   }
 })
-const authScreenStyle = computed(() =>
-  authViewportHeight.value > 0 ? { '--auth-viewport-height': `${Math.round(authViewportHeight.value)}px` } : undefined,
-)
 const submitLabel = computed(() => {
   if (loading.value) {
     return mode.value === 'login' ? '登录中' : '注册中'
@@ -73,10 +68,6 @@ const submitDisabled = computed(() => loading.value || (mode.value === 'register
 
 onMounted(async () => {
   document.title = appName
-  syncAuthViewport()
-  window.visualViewport?.addEventListener('resize', syncAuthViewport)
-  window.visualViewport?.addEventListener('scroll', syncAuthViewport)
-  window.addEventListener('resize', syncAuthViewport)
   const config = await loadAppConfig()
   apiBaseUrl.value = config.apiBaseUrl
   configureAPI(config.apiBaseUrl)
@@ -93,39 +84,6 @@ onMounted(async () => {
     ready.value = true
   }
 })
-
-onBeforeUnmount(() => {
-  window.visualViewport?.removeEventListener('resize', syncAuthViewport)
-  window.visualViewport?.removeEventListener('scroll', syncAuthViewport)
-  window.removeEventListener('resize', syncAuthViewport)
-  clearAuthFocusTimers()
-})
-
-function syncAuthViewport() {
-  authViewportHeight.value = window.visualViewport?.height ?? window.innerHeight
-}
-
-function clearAuthFocusTimers() {
-  for (const timer of authFocusTimers) {
-    window.clearTimeout(timer)
-  }
-  authFocusTimers = []
-}
-
-function keepAuthFieldVisible(event: FocusEvent) {
-  const input = event.currentTarget
-  if (!(input instanceof HTMLElement)) {
-    return
-  }
-  clearAuthFocusTimers()
-  for (const [index, delay] of [100, 320].entries()) {
-    authFocusTimers.push(
-      window.setTimeout(() => {
-        input.scrollIntoView({ behavior: index === 0 ? 'auto' : 'smooth', block: 'center' })
-      }, delay),
-    )
-  }
-}
 
 function focusAuthInput(inputID: string) {
   document.getElementById(inputID)?.focus()
@@ -386,7 +344,7 @@ function saveAndApplyAPIBaseURL() {
     @check-app-update="checkAppUpdate(true)"
   />
 
-  <main v-else class="auth-screen" :style="authScreenStyle">
+  <main v-else class="auth-screen">
     <div class="grid-layer" aria-hidden="true" />
     <div class="auth-glow auth-glow-primary" aria-hidden="true" />
     <div class="auth-glow auth-glow-secondary" aria-hidden="true" />
@@ -453,7 +411,6 @@ function saveAndApplyAPIBaseURL() {
                 inputmode="url"
                 required
                 type="url"
-                @focus="keepAuthFieldVisible"
                 @keydown.enter.prevent="refreshSiteSettings(true)"
               />
               <button :disabled="checkingServer || loading" type="button" @click="refreshSiteSettings(true)">
@@ -486,7 +443,6 @@ function saveAndApplyAPIBaseURL() {
                 required
                 spellcheck="false"
                 type="text"
-                @focus="keepAuthFieldVisible"
                 @keydown.enter.prevent="focusAuthInput('auth-password')"
               />
             </span>
@@ -509,7 +465,6 @@ function saveAndApplyAPIBaseURL() {
                 placeholder="请输入密码"
                 required
                 :type="passwordVisible ? 'text' : 'password'"
-                @focus="keepAuthFieldVisible"
                 @keydown.enter.prevent="mode === 'login' ? submit() : focusAuthInput('auth-confirm-password')"
               />
               <button
@@ -546,7 +501,6 @@ function saveAndApplyAPIBaseURL() {
                 placeholder="请再次输入密码"
                 required
                 :type="confirmPasswordVisible ? 'text' : 'password'"
-                @focus="keepAuthFieldVisible"
                 @keydown.enter.prevent="inviteRequired ? focusAuthInput('auth-invite-code') : submit()"
               />
               <button
@@ -583,7 +537,6 @@ function saveAndApplyAPIBaseURL() {
                 required
                 spellcheck="false"
                 type="text"
-                @focus="keepAuthFieldVisible"
                 @keydown.enter.prevent="submit"
               />
             </span>

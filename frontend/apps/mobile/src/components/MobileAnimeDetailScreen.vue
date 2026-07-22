@@ -1479,10 +1479,6 @@ function formatInfoValue(value: unknown): string {
   isolation: isolate;
 }
 
-:global(body.mobile-player-fullscreen) .playback-sticky {
-  z-index: 1100;
-}
-
 .player-wrap {
   position: relative;
   background: #070a12;
