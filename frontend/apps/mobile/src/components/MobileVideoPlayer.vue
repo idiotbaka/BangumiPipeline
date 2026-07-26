@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import type { ViewerOPSkipSegment } from '../api'
 import episodePickerIcon from '../assets/episode-picker.svg?raw'
 import fullscreenIcon from '../assets/fullscreen.svg?raw'
 import { enterNativeFullscreen, exitNativeFullscreen, setNativeKeepScreenOn } from '../native/player'
+import { isTVApp } from '../platform'
+import { moveTVFocus } from '../tvFocus'
 
 interface SelectableEpisode {
   key: string
@@ -60,6 +62,7 @@ let progressTimer: ReturnType<typeof setInterval> | null = null
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
 let bufferTimer: ReturnType<typeof setInterval> | null = null
 let tapTimer: ReturnType<typeof setTimeout> | null = null
+let tvSeekFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 let fullscreenHistoryPushed = false
 let episodePickerHistoryPushed = false
 let ignoreNextPopState = false
@@ -149,13 +152,21 @@ watch(withinOPSkipPrompt, (inside) => {
 
 window.addEventListener('popstate', handlePopState)
 
+onMounted(() => {
+  if (isTVApp) {
+    window.addEventListener('bp-tv-key', handleTVRemoteEvent as EventListener)
+  }
+})
+
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', handlePopState)
+  window.removeEventListener('bp-tv-key', handleTVRemoteEvent as EventListener)
   reportProgress()
   stopProgressTimer()
   stopBufferTimer()
   stopControlsTimer()
   stopTapTimer()
+  stopTVSeekFeedbackTimer()
   void setNativeKeepScreenOn(false)
   if (nativeFullscreen.value) {
     void exitFullscreen({ fromUnmount: true })
@@ -170,6 +181,9 @@ async function togglePlay() {
     return
   }
   if (element.paused) {
+    if (isTVApp && !nativeFullscreen.value) {
+      await enterFullscreen()
+    }
     await requestPlayback(false)
   } else {
     element.pause()
@@ -191,6 +205,7 @@ async function requestPlayback(silent: boolean) {
 
 function resetMediaState() {
   cancelSeekGesture()
+  stopTVSeekFeedbackTimer()
   episodePickerOpen.value = false
   playing.value = false
   buffering.value = false
@@ -308,7 +323,7 @@ function handleCanPlay() {
 }
 
 function attemptAutoplay() {
-  if (autoplayAttempted.value || !canControlPlayback.value || !video.value?.paused) {
+  if (isTVApp || autoplayAttempted.value || !canControlPlayback.value || !video.value?.paused) {
     return
   }
   autoplayAttempted.value = true
@@ -510,13 +525,26 @@ function showControls() {
 
 function scheduleControlsHide() {
   stopControlsTimer()
-  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value) return
+  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value || tvControlHasFocus()) return
   controlsTimer = setTimeout(() => {
-    if (playing.value && !buffering.value && !errorMessage.value && !episodePickerOpen.value) {
+    if (
+      playing.value
+      && !buffering.value
+      && !errorMessage.value
+      && !episodePickerOpen.value
+      && !tvControlHasFocus()
+    ) {
       controlsVisible.value = false
     }
     controlsTimer = null
   }, 3_000)
+}
+
+function tvControlHasFocus() {
+  if (!isTVApp || !(document.activeElement instanceof Element)) return false
+  return Boolean(
+    document.activeElement.closest('.player-controls, .op-skip-button, .fullscreen-episode-picker'),
+  )
 }
 
 function stopControlsTimer() {
@@ -530,6 +558,13 @@ function stopTapTimer() {
   if (tapTimer !== null) {
     clearTimeout(tapTimer)
     tapTimer = null
+  }
+}
+
+function stopTVSeekFeedbackTimer() {
+  if (tvSeekFeedbackTimer !== null) {
+    clearTimeout(tvSeekFeedbackTimer)
+    tvSeekFeedbackTimer = null
   }
 }
 
@@ -573,6 +608,114 @@ function seek(event: Event) {
   video.value.currentTime = value
   currentTime.value = value
   updateBuffered()
+}
+
+function seekBy(seconds: number) {
+  const element = video.value
+  if (!element || !canControlPlayback.value || duration.value <= 0) return
+  const before = element.currentTime
+  const target = clampTime(before + seconds)
+  element.currentTime = target
+  currentTime.value = target
+  updateBuffered()
+  reportProgress()
+  seekGestureDelta.value = Math.round(target - before)
+  seekGestureTarget.value = target
+  seekGestureActive.value = true
+  showControls()
+  stopTVSeekFeedbackTimer()
+  tvSeekFeedbackTimer = setTimeout(() => {
+    seekGestureActive.value = false
+    tvSeekFeedbackTimer = null
+    scheduleControlsHide()
+  }, 900)
+}
+
+function handlePlayerKeydown(event: KeyboardEvent) {
+  if (!isTVApp || event.altKey || event.ctrlKey || event.metaKey) return
+
+  if (event.key === 'Escape' || event.key === 'Backspace') {
+    if (episodePickerOpen.value) {
+      closeFullscreenEpisodePicker()
+    } else if (nativeFullscreen.value) {
+      void exitFullscreen()
+    } else {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    if (episodePickerOpen.value) {
+      const picker = player.value?.querySelector<HTMLElement>('.fullscreen-episode-picker')
+      if (picker) {
+        moveTVFocus(event.key === 'ArrowLeft' ? 'left' : 'right', picker)
+      }
+    } else {
+      seekBy(event.key === 'ArrowLeft' ? -10 : 10)
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+
+  if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+    showControls()
+    const scope = episodePickerOpen.value
+      ? player.value?.querySelector<HTMLElement>('.fullscreen-episode-picker')
+      : player.value
+    if (scope) {
+      void nextTick(() => moveTVFocus(event.key === 'ArrowUp' ? 'up' : 'down', scope))
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+
+  if (event.key === 'MediaPlayPause' || event.key === 'MediaPlay' || event.key === 'MediaPause') {
+    handleMediaPlaybackKey(event.key)
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+
+  if (
+    (event.key === 'Enter' || event.key === ' ' || event.key === 'NumpadEnter') &&
+    event.target === player.value
+  ) {
+    void togglePlay()
+    event.preventDefault()
+    event.stopPropagation()
+  }
+}
+
+function handleTVRemoteEvent(event: CustomEvent<{ key?: string }>) {
+  const key = event.detail?.key
+  if (key === 'select' && document.activeElement === player.value) {
+    void togglePlay()
+    return
+  }
+  if (key === 'seekBackward') {
+    seekBy(-10)
+    return
+  }
+  if (key === 'seekForward') {
+    seekBy(10)
+    return
+  }
+  if (key === 'playPause' || key === 'play' || key === 'pause') {
+    handleMediaPlaybackKey(key)
+  }
+}
+
+function handleMediaPlaybackKey(key: string) {
+  const element = video.value
+  if (!element || !canControlPlayback.value) return
+  if (key === 'play' && !element.paused) return
+  if (key === 'pause' && element.paused) return
+  void togglePlay()
 }
 
 function skipOP() {
@@ -766,9 +909,12 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
     <section
       ref="player"
       class="mobile-player"
-      :class="{ fullscreen: nativeFullscreen, 'ui-hidden': !controlsVisible, loading: playerLoading }"
+      :class="{ fullscreen: nativeFullscreen, 'ui-hidden': !controlsVisible, loading: playerLoading, 'tv-player': isTVApp }"
       tabindex="0"
+      :data-tv-key-scope="isTVApp ? 'player' : undefined"
+      :data-tv-autofocus="isTVApp ? 'true' : undefined"
       :aria-label="`正在播放 ${title}`"
+      @keydown="handlePlayerKeydown"
       @pointerdown="handlePointerDown"
       @pointermove="handlePointerMove"
       @pointerup="handlePointerUp"
@@ -815,6 +961,12 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
     <div class="player-title">
       <span>{{ nativeFullscreen ? '正在播放' : 'BakaVip2' }}</span>
       <p>{{ title }}</p>
+    </div>
+
+    <div v-if="isTVApp && nativeFullscreen && controlsVisible" class="tv-remote-hint" aria-hidden="true">
+      <span>◀ / ▶ 快退快进 10 秒</span>
+      <span>OK 播放 / 暂停</span>
+      <span>▲ / ▼ 控制栏</span>
     </div>
 
     <Transition name="op-skip">
@@ -890,6 +1042,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
               :class="{ selected: selectedEpisodeKey === episode.key }"
               type="button"
               :aria-current="selectedEpisodeKey === episode.key ? 'true' : undefined"
+              :data-tv-autofocus="isTVApp && selectedEpisodeKey === episode.key ? 'true' : undefined"
               @click="selectFullscreenEpisode(episode)"
             >
               <div class="fullscreen-episode-thumb">
@@ -1462,6 +1615,131 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
 
 .mobile-player.ui-hidden .hidden-progress {
   opacity: 1;
+}
+
+.tv-remote-hint {
+  position: absolute;
+  top: max(22px, env(safe-area-inset-top));
+  left: max(76px, calc(28px + env(safe-area-inset-left)));
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+  transition: opacity 180ms var(--ease-soft), transform 180ms var(--ease-soft);
+}
+
+.tv-remote-hint span {
+  padding: 6px 10px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  background: rgba(7, 10, 18, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+}
+
+.tv-player .player-title {
+  top: max(24px, env(safe-area-inset-top));
+  right: max(32px, env(safe-area-inset-right));
+  width: min(48%, 680px);
+}
+
+.tv-player .player-title span {
+  font-size: 13px;
+}
+
+.tv-player .player-title p {
+  margin-top: 4px;
+  font-size: 19px;
+}
+
+.tv-player .player-controls {
+  right: max(36px, env(safe-area-inset-right));
+  bottom: max(28px, env(safe-area-inset-bottom));
+  left: max(36px, env(safe-area-inset-left));
+}
+
+.tv-player .timeline {
+  height: 8px;
+}
+
+.tv-player .timeline::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  border-width: 4px;
+}
+
+.tv-player .control-row {
+  min-height: 58px;
+  gap: 18px;
+  padding-top: 10px;
+}
+
+.tv-player .play-button,
+.tv-player .episode-picker-button,
+.tv-player .fullscreen-button {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+}
+
+.tv-player .control-row > span {
+  font-size: 16px;
+}
+
+.tv-player .episode-picker-button i,
+.tv-player .fullscreen-button i {
+  width: 26px;
+  height: 26px;
+}
+
+.tv-player .fullscreen-episode-picker {
+  padding: 26px;
+}
+
+.tv-player .fullscreen-episode-picker > aside {
+  width: min(560px, 44vw);
+  border-radius: 16px;
+}
+
+.tv-player .fullscreen-episode-picker > aside > header {
+  padding: 16px 18px;
+}
+
+.tv-player .fullscreen-episode-picker > aside > header span {
+  font-size: 11px;
+}
+
+.tv-player .fullscreen-episode-picker > aside > header h2 {
+  font-size: 22px;
+}
+
+.tv-player .fullscreen-episode-picker > aside > header small {
+  font-size: 13px;
+}
+
+.tv-player .fullscreen-episode-item {
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 15px;
+  padding: 12px;
+}
+
+.tv-player .fullscreen-episode-copy > span {
+  font-size: 12px;
+}
+
+.tv-player .fullscreen-episode-copy > strong {
+  font-size: 15px;
+}
+
+.tv-player .fullscreen-episode-copy > p {
+  font-size: 12px;
+}
+
+.tv-player.ui-hidden .tv-remote-hint {
+  opacity: 0;
+  transform: translateY(-8px);
 }
 
 @keyframes player-spin {

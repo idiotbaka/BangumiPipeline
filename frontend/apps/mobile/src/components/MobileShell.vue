@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import {
   api,
@@ -16,6 +16,8 @@ import {
   type ViewerWatchHistoryItem,
 } from '../api'
 import { normalizeAPIBaseURL, parseAPIBaseURL } from '../config'
+import { isTVApp } from '../platform'
+import { focusTVInitial } from '../tvFocus'
 import appIcon from '../../../../../src-tauri/icons/icon.png'
 import tauriConfig from '../../../../../src-tauri/tauri.conf.json'
 import homeNavIcon from '../assets/nav-home.svg?raw'
@@ -61,7 +63,7 @@ interface MobileShellHistoryState {
   detailPosition: number
 }
 
-const appName = 'BakaVip2'
+const appName = isTVApp ? 'BakaVip2 TV' : 'BakaVip2'
 const appVersion = tauriConfig.version
 const now = new Date()
 const tabs: Array<{ key: MainTab; label: string; icon: string }> = [
@@ -198,9 +200,9 @@ const selectedDay = computed(() => weekdays.find((day) => day.value === selected
 const scheduleItems = computed(() =>
   (schedule.value?.items ?? []).filter((item) => normalizedWeekday(item.airWeekday) === selectedWeekday.value),
 )
-const homeFollows = computed(() => home.value.myFollows.filter((item) => !item.caughtUp).slice(0, 10))
-const recentItems = computed(() => home.value.recentUpdates.slice(0, 9))
-const hotItems = computed(() => home.value.hotRecommendations.slice(0, 9))
+const homeFollows = computed(() => home.value.myFollows.filter((item) => !item.caughtUp).slice(0, isTVApp ? 12 : 10))
+const recentItems = computed(() => home.value.recentUpdates.slice(0, isTVApp ? 12 : 9))
+const hotItems = computed(() => home.value.hotRecommendations.slice(0, isTVApp ? 12 : 9))
 const selectedLibraryTagCount = computed(() =>
   Object.values(selectedLibraryFilters.value).reduce((total, tags) => total + tags.length, 0),
 )
@@ -293,6 +295,16 @@ onBeforeUnmount(() => {
   window.removeEventListener('popstate', handleShellPopState)
   window.removeEventListener('blur', resetTransientGestureState)
 })
+
+watch(
+  () => [activeTab.value, routePage.value, detailAnimeId.value] as const,
+  () => {
+    if (!isTVApp) return
+    void nextTick(() => {
+      window.requestAnimationFrame(() => focusTVInitial())
+    })
+  },
+)
 
 function initializeShellHistory() {
   previousScrollRestoration = window.history.scrollRestoration
@@ -1368,7 +1380,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 <template>
   <main
     class="mobile-shell"
-    :class="{ 'route-mode': routePage !== null, 'detail-mode': routePage === 'detail' }"
+    :class="{ 'route-mode': routePage !== null, 'detail-mode': routePage === 'detail', 'tv-shell': isTVApp }"
     @pointerdown.capture="resetTransientGestureState"
   >
     <Transition :name="topbarTransitionName">
@@ -1377,6 +1389,20 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <img :src="appIcon" alt="" />
           <span class="brand-name">{{ appName }}</span>
         </div>
+        <nav v-if="isTVApp" class="tv-top-tabs" aria-label="主导航">
+          <button
+            v-for="tab in tabs"
+            :key="tab.key"
+            :class="{ active: activeTab === tab.key }"
+            :aria-current="activeTab === tab.key ? 'page' : undefined"
+            :data-tv-autofocus="activeTab === tab.key ? 'true' : undefined"
+            type="button"
+            @click="showTab(tab.key)"
+          >
+            <i aria-hidden="true" v-html="tab.icon" />
+            <span>{{ tab.label }}</span>
+          </button>
+        </nav>
         <form v-if="activeTab === 'home'" class="top-search" role="search" @submit.prevent="submitSearch">
           <input v-model="searchQuery" type="search" placeholder="搜索番剧" />
           <button class="search-icon-button" type="submit" :disabled="searchLoading" aria-label="搜索番剧">
@@ -1536,9 +1562,9 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <div class="about-logo-shell">
             <img :src="appIcon" :alt="`${appName} Logo`" />
           </div>
-          <span class="about-kicker">MOBILE VIEWER</span>
+          <span class="about-kicker">{{ isTVApp ? 'TV VIEWER' : 'MOBILE VIEWER' }}</span>
           <h1>{{ appName }}</h1>
-          <p>随时随地，继续你的番剧时光。</p>
+          <p>{{ isTVApp ? '在大屏幕上，继续你的番剧时光。' : '随时随地，继续你的番剧时光。' }}</p>
           <span class="about-version">Version {{ appVersion }}</span>
         </section>
 
@@ -1553,7 +1579,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           </div>
         </section>
 
-        <section class="about-update-card">
+        <section v-if="!isTVApp" class="about-update-card">
           <button
             type="button"
             :disabled="props.checkingAppUpdate"
@@ -2003,7 +2029,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
       </Transition>
     </section>
 
-    <nav v-if="routePage === null" class="bottom-nav" aria-label="底部导航">
+    <nav v-if="!isTVApp && routePage === null" class="bottom-nav" aria-label="底部导航">
       <button
         v-for="tab in tabs"
         :key="tab.key"
@@ -3941,6 +3967,362 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 .bottom-nav span {
   font-size: 12px;
+}
+
+.tv-shell {
+  --shell-topbar-height: 82px;
+  --mobile-topbar-height: var(--shell-topbar-height);
+  min-width: 960px;
+  padding-top: var(--mobile-topbar-height);
+}
+
+.tv-shell .app-topbar,
+.tv-shell .sub-topbar {
+  gap: clamp(18px, 2.2vw, 36px);
+  min-height: var(--shell-topbar-height);
+  padding: 12px clamp(36px, 4.5vw, 76px);
+  border-bottom-color: rgba(32, 40, 62, 0.09);
+  box-shadow: 0 10px 30px rgba(32, 40, 62, 0.08);
+}
+
+.tv-shell .brand-mini {
+  flex: none;
+}
+
+.tv-shell .brand-mini img {
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+}
+
+.tv-shell .brand-name {
+  max-width: none;
+  font-size: 21px;
+  font-weight: 700;
+}
+
+.tv-top-tabs {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 8px;
+}
+
+.tv-top-tabs button {
+  min-width: 104px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 18px;
+  color: var(--ink-600);
+  font-size: 16px;
+  font-weight: 650;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  transition:
+    color 140ms var(--ease-soft),
+    background 140ms var(--ease-soft),
+    border-color 140ms var(--ease-soft),
+    transform 140ms var(--ease-soft);
+}
+
+.tv-top-tabs button.active {
+  color: var(--pink-600);
+  background: var(--pink-50);
+  border-color: rgba(238, 63, 134, 0.2);
+}
+
+.tv-top-tabs i {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+}
+
+.tv-top-tabs i :deep(svg) {
+  width: 100%;
+  height: 100%;
+}
+
+.tv-top-tabs i :deep(path) {
+  fill: currentColor;
+}
+
+.tv-shell .top-search {
+  width: min(25vw, 370px);
+  min-width: 240px;
+  flex: none;
+  height: 46px;
+  margin-left: auto;
+  grid-template-columns: minmax(0, 1fr) 46px;
+}
+
+.tv-shell .top-search input {
+  padding: 0 14px;
+  font-size: 15px;
+}
+
+.tv-shell .top-search .search-icon-button {
+  width: 40px;
+  height: 38px;
+}
+
+.tv-shell .search-page {
+  padding-top: 74px;
+}
+
+.tv-shell .search-page .search-page-form {
+  top: calc(var(--mobile-topbar-height) + 18px);
+  width: min(calc(100% - clamp(84px, 10vw, 176px)), 1200px);
+  height: 50px;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  padding: 5px;
+  border-radius: 12px;
+}
+
+.tv-shell .search-page-form input {
+  padding-inline: 16px;
+  font-size: 16px;
+}
+
+.tv-shell .search-page-form button {
+  height: 38px;
+  font-size: 14px;
+}
+
+.tv-shell .sub-topbar button {
+  width: 50px;
+  height: 50px;
+  font-size: 38px;
+  border-radius: 10px;
+}
+
+.tv-shell .sub-topbar span {
+  font-size: 12px;
+}
+
+.tv-shell .page-title {
+  font-size: 24px;
+}
+
+.tv-shell .pull-refresh-indicator {
+  display: none;
+}
+
+.tv-shell .app-page {
+  width: 100%;
+  max-width: none;
+  min-height: calc(100dvh - var(--mobile-topbar-height));
+  overflow-x: visible;
+  padding: 28px clamp(42px, 5vw, 88px) 52px;
+}
+
+.tv-shell .page-view,
+.tv-shell .page-stack {
+  width: 100%;
+  max-width: 1680px;
+  margin-inline: auto;
+}
+
+.tv-shell .page-stack {
+  gap: 28px;
+}
+
+.tv-shell .home-page {
+  gap: 30px;
+}
+
+.tv-shell .content-section,
+.tv-shell .library-filter-card,
+.tv-shell .profile-head,
+.tv-shell .menu-list,
+.tv-shell .settings-editor-card,
+.tv-shell .about-hero-card,
+.tv-shell .about-info-card,
+.tv-shell .about-update-card {
+  border-radius: 14px;
+  box-shadow: 0 14px 34px rgba(32, 40, 62, 0.07);
+}
+
+.tv-shell .content-section,
+.tv-shell .library-filter-card {
+  padding: 22px;
+}
+
+.tv-shell .follow-section {
+  padding-right: 0;
+}
+
+.tv-shell .section-head {
+  margin-bottom: 18px;
+  padding-right: 22px;
+}
+
+.tv-shell .section-title {
+  font-size: 25px;
+}
+
+.tv-shell .follow-rail {
+  grid-auto-columns: min(28vw, 370px);
+  gap: 20px;
+  padding: 3px 22px 9px 0;
+  scroll-padding: 24px;
+}
+
+.tv-shell .continue-card .item-title {
+  margin-top: 11px;
+  font-size: 18px;
+}
+
+.tv-shell .continue-card p,
+.tv-shell .continue-card small {
+  font-size: 14px;
+}
+
+.tv-shell .poster-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 24px 18px;
+}
+
+.tv-shell .poster-cover,
+.tv-shell .poster-card img,
+.tv-shell .poster-fallback,
+.tv-shell .library-cover {
+  border-radius: 11px;
+}
+
+.tv-shell .poster-card .item-title,
+.tv-shell .library-card .item-title {
+  margin-top: 10px;
+  font-size: 16px;
+}
+
+.tv-shell .poster-card p,
+.tv-shell .library-card p {
+  font-size: 13px;
+}
+
+.tv-shell .schedule-page {
+  padding-top: 164px;
+}
+
+.tv-shell .schedule-sticky {
+  top: calc(var(--mobile-topbar-height) + 18px);
+  width: calc(100% - clamp(84px, 10vw, 176px));
+  max-width: 1680px;
+}
+
+.tv-shell .schedule-toolbar {
+  padding: 15px 20px;
+  border-radius: 12px;
+}
+
+.tv-shell .weekday-scroll {
+  justify-content: center;
+  gap: 12px;
+  padding: 11px 18px;
+  border-radius: 12px;
+}
+
+.tv-shell .weekday-scroll button {
+  min-width: 86px;
+  height: 42px;
+  font-size: 15px;
+}
+
+.tv-shell .schedule-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.tv-shell .schedule-list .list-row {
+  min-width: 0;
+  height: 100%;
+}
+
+.tv-shell .library-filter-list {
+  gap: 16px;
+}
+
+.tv-shell .library-filter-row {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.tv-shell .filter-title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.tv-shell .tag-rail {
+  gap: 10px;
+  padding: 5px;
+}
+
+.tv-shell .tag-rail button {
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+.tv-shell .result-list:not(.schedule-list) {
+  gap: 16px;
+}
+
+.tv-shell .list-row {
+  padding: 16px;
+  border-radius: 12px;
+}
+
+.tv-shell .profile-page,
+.tv-shell .settings-page,
+.tv-shell .about-page {
+  width: min(100%, 900px);
+  justify-self: center;
+}
+
+.tv-shell .menu-list button {
+  min-height: 66px;
+  padding: 0 22px;
+}
+
+.tv-shell .menu-list span {
+  font-size: 17px;
+}
+
+.tv-shell.route-mode .app-page {
+  padding-bottom: 48px;
+}
+
+.tv-shell.detail-mode {
+  min-width: 0;
+}
+
+.tv-shell.detail-mode .app-page,
+.tv-shell.detail-mode .page-view {
+  max-width: none;
+  padding: 0;
+}
+
+@media (max-width: 1180px) {
+  .tv-top-tabs button {
+    min-width: 88px;
+    padding-inline: 12px;
+  }
+
+  .tv-shell .poster-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .tv-shell .schedule-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 360px) {

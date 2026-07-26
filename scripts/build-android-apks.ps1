@@ -1,5 +1,7 @@
 [CmdletBinding()]
 param(
+  [ValidateSet("mobile", "tv")]
+  [string]$Target = "mobile",
   [string]$OutputDir = "apk",
   [string]$KeystorePath = "src-tauri/android-signing/bakavip2-release.jks",
   [string]$KeyAlias = "bakavip2",
@@ -10,9 +12,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$tauriConfigPath = Join-Path $repoRoot "src-tauri/tauri.conf.json"
+$tauriConfigPath = if ($Target -eq "tv") {
+  Join-Path $repoRoot "src-tauri/tauri.tv.conf.json"
+} else {
+  Join-Path $repoRoot "src-tauri/tauri.conf.json"
+}
 $signingEnvPath = Join-Path $repoRoot "src-tauri/android-signing/signing.env"
 $resolvedOutputDir = Join-Path $repoRoot $OutputDir
+$apkRoot = Join-Path $repoRoot "src-tauri/gen/android/app/build/outputs/apk"
 
 function ConvertFrom-SecureText {
   param([securestring]$Value)
@@ -204,12 +211,28 @@ if (-not (Test-Path -LiteralPath $resolvedKeystorePath)) {
 }
 
 if (-not $SkipBuild) {
+  $resolvedApkRoot = [System.IO.Path]::GetFullPath($apkRoot)
+  $resolvedRepoRoot = [System.IO.Path]::GetFullPath($repoRoot + [System.IO.Path]::DirectorySeparatorChar)
+  if (-not $resolvedApkRoot.StartsWith($resolvedRepoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to clean APK output outside the repository: $resolvedApkRoot"
+  }
+  if (Test-Path -LiteralPath $resolvedApkRoot) {
+    Remove-Item -LiteralPath $resolvedApkRoot -Recurse -Force
+  }
+
   Push-Location $repoRoot
   try {
+    Invoke-Checked "node" @(
+      "scripts/prepare-mobile-android.mjs",
+      "--target",
+      $Target
+    )
     Invoke-Checked "cargo" @(
       "tauri",
       "android",
       "build",
+      "--config",
+      $tauriConfigPath,
       "--apk",
       "--split-per-abi",
       "--target",
@@ -224,7 +247,6 @@ if (-not $SkipBuild) {
   }
 }
 
-$apkRoot = Join-Path $repoRoot "src-tauri/gen/android/app/build/outputs/apk"
 if (-not (Test-Path -LiteralPath $apkRoot)) {
   throw "APK output directory was not found: $apkRoot"
 }

@@ -1,10 +1,14 @@
 import { tauriGlobal } from './tauri'
+import { isTVApp } from '../platform'
 
 function tauriCore() {
   return tauriGlobal()?.core
 }
 
 export async function enterNativeFullscreen() {
+  if (isTVApp) {
+    return true
+  }
   const core = tauriCore()
   if (!core) {
     return false
@@ -18,6 +22,9 @@ export async function enterNativeFullscreen() {
 }
 
 export async function exitNativeFullscreen() {
+  if (isTVApp) {
+    return true
+  }
   const core = tauriCore()
   if (!core) {
     return false

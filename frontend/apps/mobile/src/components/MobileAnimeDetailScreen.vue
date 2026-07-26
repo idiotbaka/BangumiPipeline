@@ -13,6 +13,7 @@ import {
   type ViewerEpisodeComments,
 } from '../api'
 import type { ImageViewerSource } from '../native/imageSaver'
+import { isTVApp } from '../platform'
 import MobileEpisodeCommentItem from './MobileEpisodeCommentItem.vue'
 import MobileImageViewer from './MobileImageViewer.vue'
 import MobileVideoPlayer from './MobileVideoPlayer.vue'
@@ -781,7 +782,7 @@ function formatInfoValue(value: unknown): string {
 </script>
 
 <template>
-  <section class="detail-screen" aria-label="番剧详情播放页">
+  <section class="detail-screen" :class="{ 'tv-detail': isTVApp }" aria-label="番剧详情播放页">
     <div v-if="loading" class="detail-skeleton" aria-label="正在读取番剧详情" aria-busy="true">
       <div class="detail-skeleton-player detail-skeleton-shimmer">
         <button class="floating-back skeleton-back" type="button" aria-label="返回" @click="emit('back')">‹</button>
@@ -1208,6 +1209,7 @@ function formatInfoValue(value: unknown): string {
                 type="button"
                 :disabled="!episode.hasMedia"
                 :aria-current="selectedEpisodeKey === episode.key ? 'true' : undefined"
+                :data-tv-autofocus="isTVApp && selectedEpisodeKey === episode.key ? 'true' : undefined"
                 @click="selectEpisodeFromSheet(episode)"
               >
                 <div class="episode-sheet-thumb">
@@ -2639,6 +2641,173 @@ function formatInfoValue(value: unknown): string {
   background: #ffffff;
   border: 1px solid var(--line);
   border-radius: 999px;
+}
+
+.tv-detail .playback-sticky {
+  position: relative;
+  box-shadow: 0 18px 42px rgba(7, 10, 18, 0.22);
+}
+
+.tv-detail .player-wrap :deep(.mobile-player),
+.tv-detail .player-empty,
+.tv-detail .detail-skeleton-player {
+  width: 100%;
+  height: 100dvh;
+  min-height: 540px;
+  aspect-ratio: auto;
+}
+
+.tv-detail .floating-back,
+.tv-detail .player-back {
+  top: max(26px, env(safe-area-inset-top));
+  left: max(30px, env(safe-area-inset-left));
+  width: 52px;
+  height: 52px;
+  padding-bottom: 10px;
+  font-size: 38px;
+  border-width: 2px;
+}
+
+.tv-detail .detail-tabs {
+  position: sticky;
+  top: 0;
+  min-height: 66px;
+  padding-inline: clamp(220px, 25vw, 480px);
+  box-shadow: 0 10px 26px rgba(32, 40, 62, 0.08);
+}
+
+.tv-detail .detail-tab {
+  min-height: 66px;
+  font-size: 18px;
+}
+
+.tv-detail .detail-tab-panels {
+  width: 100%;
+  max-width: 1600px;
+  margin-inline: auto;
+}
+
+.tv-detail .detail-info-panel,
+.tv-detail .episode-comments-panel {
+  padding: 12px clamp(42px, 5vw, 84px) 56px;
+}
+
+.tv-detail .title-section {
+  padding: 26px 18px 0;
+}
+
+.tv-detail .detail-title {
+  font-size: clamp(28px, 3vw, 42px);
+}
+
+.tv-detail .title-copy > span {
+  font-size: 16px;
+}
+
+.tv-detail .follow-button {
+  min-width: 118px;
+  min-height: 48px;
+  font-size: 16px;
+}
+
+.tv-detail .fact-row {
+  gap: 12px;
+  padding: 16px 18px 4px;
+}
+
+.tv-detail .fact-row span {
+  min-height: 38px;
+  padding-inline: 16px;
+  font-size: 14px;
+}
+
+.tv-detail .detail-block {
+  margin: 20px 18px 0;
+  padding: 22px;
+  border-radius: 13px;
+}
+
+.tv-detail .block-title {
+  font-size: 22px;
+}
+
+.tv-detail .summary-box p {
+  font-size: 16px;
+  line-height: 1.9;
+}
+
+.tv-detail .episode-rail {
+  gap: 18px;
+  margin-top: 15px;
+  padding: 7px;
+}
+
+.tv-detail .episode-card {
+  flex-basis: 240px;
+  contain-intrinsic-size: 240px 180px;
+}
+
+.tv-detail .episode-cover {
+  border-radius: 11px;
+}
+
+.tv-detail .episode-card p,
+.tv-detail .episode-card small {
+  font-size: 15px;
+}
+
+.tv-detail .character-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.tv-detail .character-card {
+  grid-template-columns: 92px minmax(0, 1fr);
+  padding: 13px;
+  border-radius: 11px;
+}
+
+.tv-detail .character-image {
+  height: 122px;
+}
+
+.tv-detail .character-main > p {
+  font-size: 17px;
+}
+
+.tv-detail .character-main > small,
+.tv-detail .actor-chip p {
+  font-size: 14px;
+}
+
+.tv-detail .episode-sheet-layer {
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 26px;
+  background: rgba(7, 10, 18, 0.8);
+}
+
+.tv-detail .episode-sheet-panel {
+  width: min(560px, 45vw);
+  max-height: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  box-shadow: 0 22px 58px rgba(7, 10, 18, 0.42);
+}
+
+.tv-detail .episode-sheet-handle {
+  display: none;
+}
+
+.tv-detail .episode-sheet-panel > header {
+  min-height: 72px;
+  padding: 16px 20px;
+}
+
+.tv-detail .episode-sheet-item {
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 16px;
+  padding: 12px;
 }
 
 @keyframes detail-skeleton-sweep {

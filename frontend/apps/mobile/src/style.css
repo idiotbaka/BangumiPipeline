@@ -80,6 +80,33 @@ body.mobile-player-fullscreen {
   background: #000000;
 }
 
+body.bp-tv-app {
+  min-width: 960px;
+  overscroll-behavior: none;
+}
+
+body.bp-tv-app :focus {
+  outline: none;
+}
+
+body.bp-tv-app :focus-visible {
+  z-index: 6;
+  outline: 4px solid rgba(255, 95, 158, 0.96);
+  outline-offset: 4px;
+  box-shadow:
+    0 0 0 8px rgba(255, 255, 255, 0.92),
+    0 12px 30px rgba(238, 63, 134, 0.24);
+}
+
+body.bp-tv-app button:focus-visible,
+body.bp-tv-app [role='button']:focus-visible {
+  transform: scale(1.035);
+}
+
+body.bp-tv-app input:focus-visible {
+  transform: none;
+}
+
 button,
 input {
   color: inherit;
@@ -816,6 +843,80 @@ img {
   }
 }
 
+@media (min-width: 960px) and (orientation: landscape) {
+  body.bp-tv-app .boot-screen {
+    padding: 30px 7vw 0;
+  }
+
+  body.bp-tv-app .boot-chara {
+    right: 5vw;
+    bottom: -10vh;
+    left: auto;
+    width: min(56vw, 760px);
+    height: 104vh;
+    max-height: none;
+    object-position: right bottom;
+    animation-name: tv-boot-chara;
+  }
+
+  body.bp-tv-app .auth-screen {
+    padding: 28px 7vw;
+    overflow-y: auto;
+  }
+
+  body.bp-tv-app .auth-layout {
+    width: min(40vw, 520px);
+    margin: auto auto auto 0;
+  }
+
+  body.bp-tv-app .auth-chara-background {
+    top: 3vh;
+    right: 2vw;
+    bottom: -10vh;
+    left: auto;
+    width: min(58vw, 820px);
+    height: 104vh;
+    max-width: none;
+    opacity: 0.72;
+    object-fit: contain;
+    object-position: right bottom;
+    transform: none;
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 22%, #000 100%);
+    mask-image: linear-gradient(to right, transparent 0%, #000 22%, #000 100%);
+    animation-name: tv-auth-chara-in;
+  }
+
+  body.bp-tv-app .auth-screen:focus-within .auth-chara-background {
+    opacity: 0.58;
+  }
+
+  body.bp-tv-app .auth-header {
+    gap: 24px;
+  }
+
+  body.bp-tv-app .auth-heading h1 {
+    font-size: 40px;
+  }
+
+  body.bp-tv-app .auth-form {
+    margin-top: 22px;
+  }
+
+  body.bp-tv-app .auth-fields {
+    gap: 13px;
+    margin-top: 18px;
+  }
+
+  body.bp-tv-app .auth-input-shell {
+    min-height: 52px;
+  }
+
+  body.bp-tv-app .submit-button {
+    min-height: 54px;
+    margin-top: 20px;
+  }
+}
+
 @media (max-width: 360px) {
   .boot-chara {
     width: min(132vw, 520px);
@@ -926,6 +1027,26 @@ img {
   }
   to {
     transform: translateX(-50%) translateY(-10px);
+  }
+}
+
+@keyframes tv-boot-chara {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes tv-auth-chara-in {
+  from {
+    opacity: 0;
+    transform: translate3d(18px, 0, 0) scale(0.985);
+  }
+  to {
+    opacity: 0.72;
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 

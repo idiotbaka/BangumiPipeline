@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BakaVip2 TV",
+  "version": "1.2.2",
+  "identifier": "vip.baka.bangumipipeline.mobile",
+  "build": {
+    "beforeDevCommand": "npm run prepare:tv-android && npm run dev:tv --workspace @bangumi-pipeline/mobile",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run prepare:tv-android && npm run build:tv",
+    "frontendDist": "../frontend/apps/mobile/dist-tv"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "BakaVip2 TV",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 960,
+        "minHeight": 540,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "android": {
+      "minSdkVersion": 24
+    }
+  }
+}

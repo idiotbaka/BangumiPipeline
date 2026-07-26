@@ -16,10 +16,11 @@ import { loadAppConfig, normalizeAPIBaseURL, saveAPIBaseURL } from './config'
 import AppUpdateDialog from './components/AppUpdateDialog.vue'
 import MobileShell from './components/MobileShell.vue'
 import { openExternalURL } from './native/opener'
+import { isTVApp } from './platform'
 import charaImage from '../../viewer/src/assets/chara.png'
 import tauriConfig from '../../../../src-tauri/tauri.conf.json'
 
-const appName = 'BakaVip2'
+const appName = isTVApp ? 'BakaVip2 TV' : 'BakaVip2'
 const appVersion = tauriConfig.version
 
 const ready = ref(false)
@@ -71,7 +72,9 @@ onMounted(async () => {
   const config = await loadAppConfig()
   apiBaseUrl.value = config.apiBaseUrl
   configureAPI(config.apiBaseUrl)
-  void checkAppUpdate(false)
+  if (!isTVApp) {
+    void checkAppUpdate(false)
+  }
   await refreshSiteSettings(false)
   try {
     const result = await api.me()
@@ -143,7 +146,9 @@ async function submit() {
   loading.value = true
   try {
     saveAndApplyAPIBaseURL()
-    void checkAppUpdate(false)
+    if (!isTVApp) {
+      void checkAppUpdate(false)
+    }
     const result =
       mode.value === 'login'
         ? await api.login(username.value, password.value)
@@ -166,7 +171,7 @@ async function refreshSiteSettings(showResult = true) {
   }
   try {
     saveAndApplyAPIBaseURL()
-    if (showResult) {
+    if (showResult && !isTVApp) {
       void checkAppUpdate(false)
     }
     const result = await api.siteSettings()
@@ -228,10 +233,15 @@ async function changeServerAddress(nextBaseURL: string) {
   message.value = '服务器地址已更新，请登录新服务器'
   document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.remove()
   await refreshSiteSettings(false)
-  void checkAppUpdate(false)
+  if (!isTVApp) {
+    void checkAppUpdate(false)
+  }
 }
 
 async function checkAppUpdate(manual: boolean) {
+  if (isTVApp) {
+    return
+  }
   const requestID = ++appUpdateRequestID
   checkingAppUpdate.value = true
   appUpdateDialogError.value = ''
@@ -443,6 +453,7 @@ function saveAndApplyAPIBaseURL() {
                 required
                 spellcheck="false"
                 type="text"
+                :data-tv-autofocus="isTVApp ? 'true' : undefined"
                 @keydown.enter.prevent="focusAuthInput('auth-password')"
               />
             </span>
@@ -570,7 +581,7 @@ function saveAndApplyAPIBaseURL() {
   </main>
 
   <AppUpdateDialog
-    v-if="ready && appUpdateRelease"
+    v-if="!isTVApp && ready && appUpdateRelease"
     :release="appUpdateRelease"
     :current-version="appVersion"
     :opening-download="openingAppDownload"
