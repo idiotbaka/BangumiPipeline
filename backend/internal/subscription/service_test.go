@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -222,6 +224,133 @@ WHERE item_key = 'ep01' AND binding_status = 'bound'`,
 		t.Fatalf("unexpected bound item: anime=%q episode=%q", animeName, episodeNumber)
 	}
 	assertItemMissing(t, ctx, db, "credit")
+}
+
+func TestSyncHistoryLocalMediaQueuesRecognizedFiles(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	insertAnime(t, ctx, db, 1001, now)
+	localDir := filepath.Join(t.TempDir(), "一週間的朋友")
+	nestedDir := filepath.Join(localDir, "nested")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	episode1 := filepath.Join(localDir, "一週間的朋友 S01E01.mp4")
+	episode2 := filepath.Join(nestedDir, "一週間的朋友 S01E02.mkv")
+	for path, content := range map[string]string{
+		episode1: "episode-1",
+		episode2: "episode-2",
+		filepath.Join(localDir, "一週間的朋友 S01E03 sample.mp4"):      "sample",
+		filepath.Join(localDir, "一週間的朋友 NCOP.mp4"):               "opening",
+		filepath.Join(nestedDir, "一週間的朋友 S01E01 duplicate.webm"): "duplicate",
+		filepath.Join(localDir, "一週間的朋友 S01E04.txt"):             "not-video",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	service := NewService(db, testSettingsProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.now = func() time.Time { return now }
+	options := HistorySyncOptions{
+		Mode:         HistorySyncModeLocal,
+		LocalDir:     localDir,
+		ExcludeTitle: "sample",
+		IncludeTitle: "一週間",
+	}
+	result, err := service.SyncHistory(ctx, 1001, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Mode != HistorySyncModeLocal || result.Fetched != 5 || result.Inserted != 2 ||
+		result.Bound != 2 || result.Queued != 2 || result.SkippedDuplicate != 1 ||
+		result.SkippedUnmatched != 2 || result.SkippedExisting != 0 {
+		t.Fatalf("unexpected local sync result: %+v", result)
+	}
+
+	rows, err := db.QueryContext(ctx, `
+SELECT si.bound_episode_number, dj.save_path, dj.source_type, dj.status, mj.status
+FROM subscription_items si
+JOIN download_jobs dj ON dj.subscription_item_id = si.id
+JOIN media_jobs mj ON mj.download_job_id = dj.id
+WHERE si.bound_bangumi_id = ?
+ORDER BY si.bound_episode_number`, 1001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	wantPaths := []string{episode1, episode2}
+	index := 0
+	for rows.Next() {
+		var episodeNumber, savePath, sourceType, downloadStatus, mediaStatus string
+		if err := rows.Scan(&episodeNumber, &savePath, &sourceType, &downloadStatus, &mediaStatus); err != nil {
+			t.Fatal(err)
+		}
+		if index >= len(wantPaths) {
+			t.Fatalf("unexpected extra queued episode %q", episodeNumber)
+		}
+		wantEpisode := fmt.Sprintf("%02d", index+1)
+		if episodeNumber != wantEpisode || savePath != wantPaths[index] || sourceType != "local" ||
+			downloadStatus != "completed" || mediaStatus != "pending" {
+			t.Fatalf("unexpected queued episode: episode=%q path=%q source=%q download=%q media=%q",
+				episodeNumber, savePath, sourceType, downloadStatus, mediaStatus)
+		}
+		index++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if index != len(wantPaths) {
+		t.Fatalf("expected %d queued episodes, got %d", len(wantPaths), index)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repeated, err := service.SyncHistory(ctx, 1001, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.Queued != 0 || repeated.SkippedExisting != 2 ||
+		repeated.SkippedDuplicate != 1 || repeated.SkippedUnmatched != 2 {
+		t.Fatalf("unexpected repeated local sync result: %+v", repeated)
+	}
+
+	if _, err := service.DeleteEpisodeBinding(ctx, 1001, EpisodeBindingIdentity{
+		SeasonNumber: 1, EpisodeType: "episode", EpisodeNumber: "01",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rebound, err := service.SyncHistory(ctx, 1001, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebound.Inserted != 0 || rebound.Bound != 1 || rebound.Queued != 1 ||
+		rebound.SkippedExisting != 1 {
+		t.Fatalf("unexpected rebound local sync result: %+v", rebound)
+	}
+	for _, path := range wantPaths {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected local source file to remain at %q: %v", path, err)
+		}
+	}
+}
+
+func TestSyncHistoryLocalMediaRequiresAbsoluteDirectory(t *testing.T) {
+	service := NewService(nil, testSettingsProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := service.SyncHistory(context.Background(), 1001, HistorySyncOptions{
+		Mode:     HistorySyncModeLocal,
+		LocalDir: "relative/uploads",
+	})
+	if !errors.Is(err, ErrInvalidHistoryLocalDir) {
+		t.Fatalf("expected ErrInvalidHistoryLocalDir, got %v", err)
+	}
 }
 
 func TestSyncManualEpisodeReplacesExistingBindingAndQueuesDownload(t *testing.T) {

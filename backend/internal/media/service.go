@@ -24,6 +24,7 @@ import (
 
 	"bangumipipeline.local/server/internal/database"
 	"bangumipipeline.local/server/internal/imageutil"
+	"bangumipipeline.local/server/internal/mediafile"
 	"bangumipipeline.local/server/internal/subscription"
 )
 
@@ -36,6 +37,7 @@ const (
 	StatusFailed      = "failed"
 
 	downloadStatusCompleted = "completed"
+	downloadSourceTypeLocal = "local"
 
 	CoverStatusPending   = "pending"
 	CoverStatusCompleted = "completed"
@@ -160,6 +162,7 @@ type pendingJob struct {
 	EpisodeType          string
 	EpisodeNumber        string
 	SavePath             string
+	SourceType           string
 	StorageRoot          string
 	SourcePath           string
 	SubtitlePath         string
@@ -1522,12 +1525,17 @@ func (s *Service) processPlannedJob(ctx context.Context, job plannedJob) (proces
 			s.logger.Warn("创建观看端新集通知失败", "source", "media", "media_job_id", job.ID, "error", err)
 		}
 	}
-	if err := s.cleanupDownload(ctx, job.pendingJob); err != nil {
-		message := completionCleanupWarningPrefix + " " + err.Error()
-		_ = s.recordCompletionWarning(ctx, job.ID, message)
-		s.logger.Warn("媒体处理完成后清理 qBittorrent 下载失败", "source", "media", "media_job_id", job.ID, "download_job_id", job.DownloadJobID, "error", err)
+	if job.SourceType == downloadSourceTypeLocal {
+		s.logger.Info("本地导入媒体处理完成，源文件已保留", "source", "media",
+			"media_job_id", job.ID, "source_file", filepath.Base(plan.sourcePath))
 	} else {
-		s.logger.Info("媒体处理完成后 qBittorrent 下载已清理", "source", "media", "media_job_id", job.ID, "download_job_id", job.DownloadJobID)
+		if err := s.cleanupDownload(ctx, job.pendingJob); err != nil {
+			message := completionCleanupWarningPrefix + " " + err.Error()
+			_ = s.recordCompletionWarning(ctx, job.ID, message)
+			s.logger.Warn("媒体处理完成后清理 qBittorrent 下载失败", "source", "media", "media_job_id", job.ID, "download_job_id", job.DownloadJobID, "error", err)
+		} else {
+			s.logger.Info("媒体处理完成后 qBittorrent 下载已清理", "source", "media", "media_job_id", job.ID, "download_job_id", job.DownloadJobID)
+		}
 	}
 	s.refreshAnimeMetadataOncePerDay(ctx, job.BangumiID)
 	s.logger.Info("媒体处理成功", "source", "media", "media_job_id", job.ID, "action", plan.action, "output_file", filepath.Base(plan.outputPath))
@@ -1548,7 +1556,7 @@ func (s *Service) enqueueEpisodeComments(ctx context.Context, mediaJobID, bangum
 }
 
 func (s *Service) cleanupDownload(ctx context.Context, job pendingJob) error {
-	if s.cleaner == nil {
+	if s.cleaner == nil || job.SourceType == downloadSourceTypeLocal {
 		return nil
 	}
 	return s.cleaner.CleanupCompletedQBitTask(ctx, job.DownloadJobID)
@@ -1620,6 +1628,7 @@ JOIN download_jobs dj ON dj.id = mj.download_job_id
 WHERE mj.status = ?
   AND mj.output_path != ''
   AND dj.status = ?
+  AND COALESCE(NULLIF(dj.source_type, ''), 'download') = 'download'
   AND mj.error_message LIKE ?
 ORDER BY COALESCE(mj.completed_at, mj.updated_at), mj.id
 LIMIT ?`, StatusCompleted, downloadStatusCompleted, completionCleanupWarningPrefix+"%", limit)
@@ -2822,12 +2831,7 @@ func normalizeEpisodeType(value string) string {
 }
 
 func isVideoFile(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".mp4", ".m4v", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".ts", ".m2ts", ".webm":
-		return true
-	default:
-		return false
-	}
+	return mediafile.IsVideoPath(path)
 }
 
 func isSubtitleFile(path string) bool {
@@ -3051,6 +3055,7 @@ SELECT mj.id, mj.download_job_id, mj.subscription_item_id, si.title, mj.bangumi_
 const pendingJobSelect = `
 SELECT mj.id, mj.download_job_id, mj.subscription_item_id, mj.bangumi_id,
        mj.anime_name, mj.season_number, mj.episode_type, mj.episode_number, dj.save_path,
+       COALESCE(NULLIF(dj.source_type, ''), 'download'),
        COALESCE(NULLIF(am.media_storage_root, ''), ?),
        mj.source_path, mj.subtitle_path, mj.output_path, mj.video_codec, mj.audio_codec,
        mj.has_internal_subtitles, mj.has_external_subtitles, mj.needs_transcode,
@@ -3088,7 +3093,7 @@ func scanPendingJob(row interface{ Scan(dest ...any) error }) (pendingJob, error
 	if err := row.Scan(
 		&job.ID, &job.DownloadJobID, &job.SubscriptionItemID, &job.BangumiID,
 		&job.AnimeName, &job.SeasonNumber, &job.EpisodeType, &job.EpisodeNumber,
-		&job.SavePath, &job.StorageRoot, &job.SourcePath, &job.SubtitlePath,
+		&job.SavePath, &job.SourceType, &job.StorageRoot, &job.SourcePath, &job.SubtitlePath,
 		&job.OutputPath, &job.VideoCodec, &job.AudioCodec, &job.HasInternalSubtitles,
 		&job.HasExternalSubtitles, &job.NeedsTranscode, &job.Action, &job.TotalDurationMS,
 	); err != nil {

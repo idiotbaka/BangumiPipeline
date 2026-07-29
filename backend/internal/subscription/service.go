@@ -14,7 +14,10 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +25,7 @@ import (
 	"unicode"
 
 	"bangumipipeline.local/server/internal/database"
+	"bangumipipeline.local/server/internal/mediafile"
 	"bangumipipeline.local/server/internal/system"
 )
 
@@ -35,6 +39,9 @@ const (
 	BindingStatusBound   = "bound"
 	BindingStatusIgnored = "ignored"
 
+	HistorySyncModeRSS   = "rss"
+	HistorySyncModeLocal = "local"
+
 	defaultRequestTimeout = 20 * time.Second
 	rssResponseLimit      = 10 << 20
 	minMatchScore         = 0.72
@@ -42,17 +49,20 @@ const (
 )
 
 var (
-	ErrItemNotFound           = errors.New("subscription item not found")
-	ErrInvalidBinding         = errors.New("invalid subscription binding")
-	ErrHistorySourceNotFound  = errors.New("history source not found")
-	ErrHistoryRSSURLRequired  = errors.New("history rss url required")
-	ErrInvalidHistorySearch   = errors.New("invalid history search")
-	ErrInvalidHistoryRSSURL   = errors.New("invalid history rss url")
-	ErrInvalidManualEpisode   = errors.New("invalid manual episode")
-	ErrInvalidManualMagnet    = errors.New("invalid manual episode magnet")
-	ErrEpisodeBindingNotFound = errors.New("episode binding not found")
-	ErrEpisodeBindingBusy     = errors.New("episode binding is downloading or transcoding")
-	ErrEpisodeBindingExists   = errors.New("episode binding target already exists")
+	ErrItemNotFound            = errors.New("subscription item not found")
+	ErrInvalidBinding          = errors.New("invalid subscription binding")
+	ErrHistorySourceNotFound   = errors.New("history source not found")
+	ErrHistoryRSSURLRequired   = errors.New("history rss url required")
+	ErrInvalidHistorySearch    = errors.New("invalid history search")
+	ErrInvalidHistoryRSSURL    = errors.New("invalid history rss url")
+	ErrInvalidHistoryMode      = errors.New("invalid history sync mode")
+	ErrHistoryLocalDirRequired = errors.New("history local media directory required")
+	ErrInvalidHistoryLocalDir  = errors.New("invalid history local media directory")
+	ErrInvalidManualEpisode    = errors.New("invalid manual episode")
+	ErrInvalidManualMagnet     = errors.New("invalid manual episode magnet")
+	ErrEpisodeBindingNotFound  = errors.New("episode binding not found")
+	ErrEpisodeBindingBusy      = errors.New("episode binding is downloading or transcoding")
+	ErrEpisodeBindingExists    = errors.New("episode binding target already exists")
 )
 
 type SettingsProvider interface {
@@ -84,18 +94,23 @@ type ItemPage struct {
 
 type HistorySyncResult struct {
 	BangumiID        int64  `json:"bangumiId"`
+	Mode             string `json:"mode"`
 	SourceTitle      string `json:"sourceTitle"`
 	SearchTitle      string `json:"searchTitle"`
 	Fetched          int    `json:"fetched"`
 	Inserted         int    `json:"inserted"`
 	Bound            int    `json:"bound"`
+	Queued           int    `json:"queued"`
 	SkippedExisting  int    `json:"skippedExisting"`
 	SkippedIgnored   int    `json:"skippedIgnored"`
+	SkippedDuplicate int    `json:"skippedDuplicate"`
 	SkippedUnmatched int    `json:"skippedUnmatched"`
 }
 
 type HistorySyncOptions struct {
+	Mode         string
 	RSSURL       string
+	LocalDir     string
 	ExcludeTitle string
 	IncludeTitle string
 }
@@ -191,6 +206,13 @@ type historySource struct {
 	SeasonNumber  int
 	EpisodeType   string
 	EpisodeNumber string
+}
+
+type localHistoryMedia struct {
+	Path     string
+	FileName string
+	Size     int64
+	Identity episodeIdentity
 }
 
 type episodeIdentity struct {
@@ -297,6 +319,17 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 	if bangumiID < 1 {
 		return HistorySyncResult{}, ErrInvalidBinding
 	}
+	options.Mode = strings.ToLower(strings.TrimSpace(options.Mode))
+	if options.Mode == "" {
+		options.Mode = HistorySyncModeRSS
+	}
+	switch options.Mode {
+	case HistorySyncModeLocal:
+		return s.syncLocalMediaHistory(ctx, bangumiID, options)
+	case HistorySyncModeRSS:
+	default:
+		return HistorySyncResult{}, ErrInvalidHistoryMode
+	}
 	source, err := s.historySourceForSync(ctx, bangumiID, options)
 	if err != nil {
 		return HistorySyncResult{}, err
@@ -324,7 +357,8 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 		return HistorySyncResult{}, err
 	}
 	result := HistorySyncResult{
-		BangumiID: bangumiID, SourceTitle: source.Title, SearchTitle: searchTitle, Fetched: len(items),
+		BangumiID: bangumiID, Mode: HistorySyncModeRSS,
+		SourceTitle: source.Title, SearchTitle: searchTitle, Fetched: len(items),
 	}
 	existing, err := s.boundEpisodeSet(ctx, bangumiID)
 	if err != nil {
@@ -352,7 +386,8 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 		if err != nil {
 			return result, err
 		}
-		if _, ok := existing[identity]; ok {
+		identityKey := episodeIdentityKey(identity)
+		if _, ok := existing[identityKey]; ok {
 			result.SkippedExisting++
 			continue
 		}
@@ -364,10 +399,10 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 		case "inserted":
 			result.Inserted++
 			result.Bound++
-			existing[identity] = struct{}{}
+			existing[identityKey] = struct{}{}
 		case "bound":
 			result.Bound++
-			existing[identity] = struct{}{}
+			existing[identityKey] = struct{}{}
 		case "ignored":
 			result.SkippedIgnored++
 		default:
@@ -379,6 +414,322 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 		"skipped_existing", result.SkippedExisting, "skipped_ignored", result.SkippedIgnored,
 		"skipped_unmatched", result.SkippedUnmatched)
 	return result, nil
+}
+
+func (s *Service) syncLocalMediaHistory(ctx context.Context, bangumiID int64, options HistorySyncOptions) (HistorySyncResult, error) {
+	localDir, err := normalizeHistoryLocalDir(options.LocalDir)
+	if err != nil {
+		return HistorySyncResult{}, err
+	}
+	animeName, err := animeNameByDB(ctx, s.db, bangumiID)
+	if err != nil {
+		return HistorySyncResult{}, err
+	}
+	offset, err := s.subscriptionEpisodeOffset(ctx, bangumiID)
+	if err != nil {
+		return HistorySyncResult{}, err
+	}
+
+	result := HistorySyncResult{
+		BangumiID:   bangumiID,
+		Mode:        HistorySyncModeLocal,
+		SourceTitle: filepath.Base(localDir),
+	}
+	candidates, fetched, skippedUnmatched, skippedDuplicate, err := scanLocalHistoryMedia(
+		localDir, newHistoryTitleFilter(options), offset,
+	)
+	if err != nil {
+		return HistorySyncResult{}, err
+	}
+	result.Fetched = fetched
+	result.SkippedUnmatched = skippedUnmatched
+	result.SkippedDuplicate = skippedDuplicate
+	if len(candidates) == 0 {
+		return result, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	existing, err := boundEpisodeSetFrom(ctx, tx, bangumiID)
+	if err != nil {
+		return result, err
+	}
+	now := s.now().UTC().Unix()
+	for _, candidate := range candidates {
+		identityKey := episodeIdentityKey(candidate.Identity)
+		if _, ok := existing[identityKey]; ok {
+			result.SkippedExisting++
+			continue
+		}
+
+		itemID, status, err := insertLocalHistoryItem(ctx, tx, bangumiID, animeName, candidate, now)
+		if err != nil {
+			return result, err
+		}
+		switch status {
+		case "ignored":
+			result.SkippedIgnored++
+			continue
+		case "existing":
+			result.SkippedExisting++
+			continue
+		}
+
+		downloadJobID, err := insertLocalHistoryDownloadJob(ctx, tx, itemID, candidate, now)
+		if err != nil {
+			return result, err
+		}
+		if err := insertLocalHistoryMediaJob(
+			ctx, tx, downloadJobID, itemID, bangumiID, animeName, candidate.Identity, now,
+		); err != nil {
+			return result, err
+		}
+		if status == "inserted" {
+			result.Inserted++
+		}
+		result.Bound++
+		result.Queued++
+		existing[identityKey] = struct{}{}
+	}
+	if err := tx.Commit(); err != nil {
+		return result, err
+	}
+
+	s.logger.Info("本地媒体历史话数同步完成", "source", "subscription", "bangumi_id", bangumiID,
+		"local_dir", localDir, "fetched", result.Fetched, "queued", result.Queued,
+		"skipped_existing", result.SkippedExisting, "skipped_ignored", result.SkippedIgnored,
+		"skipped_duplicate", result.SkippedDuplicate, "skipped_unmatched", result.SkippedUnmatched)
+	return result, nil
+}
+
+func normalizeHistoryLocalDir(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ErrHistoryLocalDirRequired
+	}
+	if !filepath.IsAbs(value) {
+		return "", fmt.Errorf("%w: 本地媒体文件夹必须是服务器绝对路径", ErrInvalidHistoryLocalDir)
+	}
+	value = filepath.Clean(value)
+	info, err := os.Stat(value)
+	if err != nil {
+		return "", fmt.Errorf("%w: 无法访问文件夹: %v", ErrInvalidHistoryLocalDir, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%w: 路径不是文件夹", ErrInvalidHistoryLocalDir)
+	}
+	return value, nil
+}
+
+func scanLocalHistoryMedia(localDir string, filter historyTitleFilter, episodeOffset int) ([]localHistoryMedia, int, int, int, error) {
+	files := make([]localHistoryMedia, 0)
+	err := filepath.WalkDir(localDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !mediafile.IsVideoPath(path) {
+			return nil
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		files = append(files, localHistoryMedia{
+			Path:     path,
+			FileName: filepath.Base(path),
+			Size:     info.Size(),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, 0, 0, 0, fmt.Errorf("%w: 扫描文件夹失败: %v", ErrInvalidHistoryLocalDir, err)
+	}
+	sort.Slice(files, func(i, j int) bool {
+		leftRelative, _ := filepath.Rel(localDir, files[i].Path)
+		rightRelative, _ := filepath.Rel(localDir, files[j].Path)
+		leftDepth := strings.Count(filepath.Clean(leftRelative), string(os.PathSeparator))
+		rightDepth := strings.Count(filepath.Clean(rightRelative), string(os.PathSeparator))
+		if leftDepth != rightDepth {
+			return leftDepth < rightDepth
+		}
+		return strings.ToLower(files[i].Path) < strings.ToLower(files[j].Path)
+	})
+
+	fetched := len(files)
+	skippedUnmatched := 0
+	skippedDuplicate := 0
+	candidates := make([]localHistoryMedia, 0, len(files))
+	seen := make(map[episodeIdentity]struct{}, len(files))
+	for _, file := range files {
+		if !filter.Match(file.FileName) {
+			skippedUnmatched++
+			continue
+		}
+		title := strings.TrimSuffix(file.FileName, filepath.Ext(file.FileName))
+		identity, ok := historyEpisodeIdentity(title)
+		if !ok {
+			skippedUnmatched++
+			continue
+		}
+		if normalizeEpisodeType(identity.EpisodeType) == "episode" && episodeOffset != 0 {
+			if adjusted, ok := offsetEpisodeNumber(identity.EpisodeNumber, episodeOffset); ok {
+				identity.EpisodeNumber = adjusted
+			}
+		}
+		identityKey := episodeIdentityKey(identity)
+		if _, ok := seen[identityKey]; ok {
+			skippedDuplicate++
+			continue
+		}
+		file.Identity = identity
+		seen[identityKey] = struct{}{}
+		candidates = append(candidates, file)
+	}
+	return candidates, fetched, skippedUnmatched, skippedDuplicate, nil
+}
+
+func insertLocalHistoryItem(
+	ctx context.Context,
+	tx *sql.Tx,
+	bangumiID int64,
+	animeName string,
+	candidate localHistoryMedia,
+	now int64,
+) (int64, string, error) {
+	itemKey := localHistoryItemKey(bangumiID, candidate.Path)
+	rawJSON, _ := json.Marshal(map[string]any{
+		"source":   "local_media",
+		"fileName": candidate.FileName,
+	})
+	result, err := tx.ExecContext(ctx, `
+INSERT OR IGNORE INTO subscription_items(
+    item_key, guid, title, description, content_length, pub_date, published_at,
+    match_status, bangumi_id, matched_name, parsed_name,
+    season_number, episode_type, episode_number, match_score, match_reason,
+    binding_status, bound_bangumi_id, bound_anime_name, bound_season_number,
+    bound_episode_type, bound_episode_number, binding_note, bound_at,
+    raw_json, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		itemKey, itemKey, candidate.FileName, "本地媒体文件夹导入", candidate.Size, time.Unix(now, 0).UTC().Format(time.RFC1123Z), now,
+		matchStatusMatched, bangumiID, animeName, animeName,
+		candidate.Identity.SeasonNumber, candidate.Identity.EpisodeType, candidate.Identity.EpisodeNumber,
+		1.0, "本地媒体文件名识别",
+		BindingStatusBound, bangumiID, animeName, candidate.Identity.SeasonNumber,
+		candidate.Identity.EpisodeType, candidate.Identity.EpisodeNumber, "本地媒体文件夹同步自动绑定", now,
+		string(rawJSON), now, now,
+	)
+	if err != nil {
+		return 0, "", err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, "", err
+	}
+	var itemID int64
+	var bindingStatus string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT id, binding_status FROM subscription_items WHERE item_key = ?",
+		itemKey,
+	).Scan(&itemID, &bindingStatus); err != nil {
+		return 0, "", err
+	}
+	if affected > 0 {
+		return itemID, "inserted", nil
+	}
+	if bindingStatus == BindingStatusIgnored {
+		return itemID, "ignored", nil
+	}
+	if bindingStatus == BindingStatusPending {
+		updated, err := tx.ExecContext(ctx, `
+UPDATE subscription_items
+SET guid = ?, title = ?, description = ?, link = '', enclosure_url = '', torrent_url = '',
+    content_length = ?, pub_date = ?, published_at = ?,
+    match_status = ?, bangumi_id = ?, matched_name = ?, parsed_name = ?,
+    season_number = ?, episode_type = ?, episode_number = ?, match_score = ?, match_reason = ?,
+    binding_status = ?, bound_bangumi_id = ?, bound_anime_name = ?, bound_season_number = ?,
+    bound_episode_type = ?, bound_episode_number = ?, binding_note = ?, bound_at = ?,
+    ignored_at = NULL, raw_json = ?, updated_at = ?
+WHERE id = ? AND binding_status = ?`,
+			itemKey, candidate.FileName, "本地媒体文件夹导入",
+			candidate.Size, time.Unix(now, 0).UTC().Format(time.RFC1123Z), now,
+			matchStatusMatched, bangumiID, animeName, animeName,
+			candidate.Identity.SeasonNumber, candidate.Identity.EpisodeType, candidate.Identity.EpisodeNumber,
+			1.0, "本地媒体文件名识别",
+			BindingStatusBound, bangumiID, animeName, candidate.Identity.SeasonNumber,
+			candidate.Identity.EpisodeType, candidate.Identity.EpisodeNumber, "本地媒体文件夹同步自动绑定", now,
+			string(rawJSON), now, itemID, BindingStatusPending,
+		)
+		if err != nil {
+			return 0, "", err
+		}
+		updatedRows, err := updated.RowsAffected()
+		if err != nil {
+			return 0, "", err
+		}
+		if updatedRows > 0 {
+			return itemID, "bound", nil
+		}
+	}
+	return itemID, "existing", nil
+}
+
+func insertLocalHistoryDownloadJob(
+	ctx context.Context,
+	tx *sql.Tx,
+	itemID int64,
+	candidate localHistoryMedia,
+	now int64,
+) (int64, error) {
+	result, err := tx.ExecContext(ctx, `
+INSERT INTO download_jobs(
+    subscription_item_id, status, source_type, source_url, folder_name, save_path,
+    qbit_hash, qbit_name, progress, total_size, downloaded_size, download_speed,
+    error_message, completed_at, created_at, updated_at
+) VALUES (?, 'completed', 'local', '', ?, ?, '', '', 1, ?, ?, 0, '', ?, ?, ?)`,
+		itemID, filepath.Base(filepath.Dir(candidate.Path)), candidate.Path,
+		candidate.Size, candidate.Size, now, now, now,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func insertLocalHistoryMediaJob(
+	ctx context.Context,
+	tx *sql.Tx,
+	downloadJobID int64,
+	itemID int64,
+	bangumiID int64,
+	animeName string,
+	identity episodeIdentity,
+	now int64,
+) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO media_jobs(
+    download_job_id, subscription_item_id, bangumi_id, anime_name, season_number,
+    episode_type, episode_number, status, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+		downloadJobID, itemID, bangumiID, animeName, identity.SeasonNumber,
+		identity.EpisodeType, identity.EpisodeNumber, now, now,
+	)
+	return err
+}
+
+func localHistoryItemKey(bangumiID int64, path string) string {
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	sum := sha256.Sum256([]byte(path))
+	return fmt.Sprintf("local:%d:%s", bangumiID, hex.EncodeToString(sum[:12]))
 }
 
 func NormalizeManualEpisodeInput(input ManualEpisodeInput) (ManualEpisodeInput, error) {
@@ -549,6 +900,7 @@ INSERT INTO download_jobs(
 ) VALUES (?, 'pending', ?, '', '', '', '', 0, 0, 0, 0, '', ?, ?)
 ON CONFLICT(subscription_item_id) DO UPDATE SET
     status = 'pending',
+    source_type = 'download',
     source_url = excluded.source_url,
     folder_name = '',
     save_path = '',
@@ -833,7 +1185,17 @@ WHERE bangumi_id = ?
 }
 
 func (s *Service) boundEpisodeSet(ctx context.Context, bangumiID int64) (map[episodeIdentity]struct{}, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return boundEpisodeSetFrom(ctx, s.db, bangumiID)
+}
+
+func boundEpisodeSetFrom(
+	ctx context.Context,
+	db interface {
+		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	},
+	bangumiID int64,
+) (map[episodeIdentity]struct{}, error) {
+	rows, err := db.QueryContext(ctx, `
 SELECT bound_season_number, COALESCE(NULLIF(bound_episode_type, ''), 'episode'), bound_episode_number
 FROM subscription_items
 WHERE binding_status = ?
@@ -853,10 +1215,25 @@ WHERE binding_status = ?
 		identity.EpisodeType = normalizeEpisodeType(identity.EpisodeType)
 		identity.EpisodeNumber = strings.TrimSpace(identity.EpisodeNumber)
 		if identity.SeasonNumber > 0 && identity.EpisodeNumber != "" {
-			result[identity] = struct{}{}
+			result[episodeIdentityKey(identity)] = struct{}{}
 		}
 	}
 	return result, rows.Err()
+}
+
+func episodeIdentityKey(identity episodeIdentity) episodeIdentity {
+	identity.EpisodeType = normalizeEpisodeType(identity.EpisodeType)
+	identity.EpisodeNumber = strings.TrimSpace(identity.EpisodeNumber)
+	number, err := strconv.ParseFloat(identity.EpisodeNumber, 64)
+	if err != nil {
+		return identity
+	}
+	if math.Mod(number, 1) == 0 {
+		identity.EpisodeNumber = strconv.FormatInt(int64(number), 10)
+	} else {
+		identity.EpisodeNumber = strconv.FormatFloat(number, 'f', -1, 64)
+	}
+	return identity
 }
 
 func historyEpisodeIdentity(title string) (episodeIdentity, bool) {

@@ -433,6 +433,52 @@ SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 34)`).Scan(&applie
 	}
 }
 
+func TestVersion35MigrationAddsDownloadSourceType(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info(download_jobs)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		if name == "source_type" {
+			found = true
+			if columnType != "TEXT" || notNull != 1 {
+				t.Fatalf("unexpected source_type definition: type=%q not_null=%d", columnType, notNull)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("expected download_jobs.source_type to exist")
+	}
+
+	var applied bool
+	if err := db.QueryRowContext(ctx, `
+SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 35)`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("expected version 35 migration to be recorded")
+	}
+}
+
 func assertTableExists(t *testing.T, db *sql.DB, table string) {
 	t.Helper()
 	var exists bool

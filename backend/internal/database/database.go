@@ -1343,6 +1343,20 @@ VALUES (34, unixepoch());`); err != nil {
 	if err := ensureColumn(ctx, db, "viewer_comment_username_filters", "sort_order", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	applied, err = migrationApplied(ctx, db, 35)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		if err := ensureColumn(ctx, db, "download_jobs", "source_type", "TEXT NOT NULL DEFAULT 'download' CHECK (source_type IN ('download', 'local'))"); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (35, unixepoch());`); err != nil {
+			return fmt.Errorf("finish version 35 migration: %w", err)
+		}
+	}
 	return nil
 }
 

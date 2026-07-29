@@ -791,7 +791,9 @@ func (a *AdminAPI) syncAnimeHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
+		Mode         string `json:"mode"`
 		RSSURL       string `json:"rssUrl"`
+		LocalDir     string `json:"localDir"`
 		ExcludeTitle string `json:"excludeTitle"`
 		IncludeTitle string `json:"includeTitle"`
 	}
@@ -800,7 +802,8 @@ func (a *AdminAPI) syncAnimeHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := a.subscription.SyncHistory(r.Context(), id, subscription.HistorySyncOptions{
-		RSSURL: input.RSSURL, ExcludeTitle: input.ExcludeTitle, IncludeTitle: input.IncludeTitle,
+		Mode: input.Mode, RSSURL: input.RSSURL, LocalDir: input.LocalDir,
+		ExcludeTitle: input.ExcludeTitle, IncludeTitle: input.IncludeTitle,
 	})
 	if err != nil {
 		a.subscriptionHistorySyncError(w, err)
@@ -1106,6 +1109,16 @@ func (a *AdminAPI) subscriptionHistorySyncError(w http.ResponseWriter, err error
 		writeError(w, http.StatusBadRequest, "invalid_history_search", "无法从最新绑定标题中生成历史话数搜索条件")
 	case errors.Is(err, subscription.ErrInvalidHistoryRSSURL):
 		writeError(w, http.StatusBadRequest, "invalid_history_rss_url", "番剧 RSS 链接必须是 HTTP/HTTPS 完整地址")
+	case errors.Is(err, subscription.ErrInvalidHistoryMode):
+		writeError(w, http.StatusBadRequest, "invalid_history_sync_mode", "同步方式必须是 RSS 链接或本地媒体文件夹")
+	case errors.Is(err, subscription.ErrHistoryLocalDirRequired):
+		writeError(w, http.StatusBadRequest, "history_local_directory_required", "本地媒体文件夹路径必填")
+	case errors.Is(err, subscription.ErrInvalidHistoryLocalDir):
+		message := strings.TrimSpace(strings.TrimPrefix(err.Error(), subscription.ErrInvalidHistoryLocalDir.Error()+":"))
+		if message == "" {
+			message = "本地媒体文件夹路径无效或不可访问"
+		}
+		writeError(w, http.StatusBadRequest, "invalid_history_local_directory", message)
 	case errors.Is(err, subscription.ErrInvalidBinding):
 		writeError(w, http.StatusBadRequest, "invalid_subscription_binding", "绑定信息不完整或番剧不存在")
 	default:

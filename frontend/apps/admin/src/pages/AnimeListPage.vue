@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Delete, EditPen, FolderOpened, Link, Plus, Refresh, Search, Setting, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api, type AnimeListItem, type AnimeListSort, type EpisodeBindingIdentity, type MediaStorageSettings } from '../api'
+import { api, type AnimeListItem, type AnimeListSort, type EpisodeBindingIdentity, type HistorySyncMode, type MediaStorageSettings } from '../api'
 import AnimeDetailPanel from '../components/AnimeDetailPanel.vue'
 
 const items = ref<AnimeListItem[]>([])
@@ -27,9 +27,29 @@ const storageMoveTarget = ref<AnimeListItem | null>(null)
 const storageMoveRoot = ref('')
 const historySyncVisible = ref(false)
 const historySyncTarget = ref<AnimeListItem | null>(null)
-const historySyncForm = reactive({ rssUrl: '', excludeTitle: '', includeTitle: '' })
-const historySyncRSSRequired = computed(() => historySyncTarget.value !== null && historySyncTarget.value.matchedEpisodes.length === 0)
-const historySyncConfirmDisabled = computed(() => historySyncTarget.value === null || (historySyncRSSRequired.value && historySyncForm.rssUrl.trim() === ''))
+const historySyncForm = reactive<{
+  mode: HistorySyncMode
+  rssUrl: string
+  localDir: string
+  excludeTitle: string
+  includeTitle: string
+}>({
+  mode: 'rss',
+  rssUrl: '',
+  localDir: '',
+  excludeTitle: '',
+  includeTitle: '',
+})
+const historySyncRSSRequired = computed(() =>
+  historySyncForm.mode === 'rss' &&
+  historySyncTarget.value !== null &&
+  historySyncTarget.value.matchedEpisodes.length === 0,
+)
+const historySyncConfirmDisabled = computed(() =>
+  historySyncTarget.value === null ||
+  (historySyncForm.mode === 'rss' && historySyncRSSRequired.value && historySyncForm.rssUrl.trim() === '') ||
+  (historySyncForm.mode === 'local' && historySyncForm.localDir.trim() === ''),
+)
 const manualEpisodeVisible = ref(false)
 const manualEpisodeTarget = ref<AnimeListItem | null>(null)
 const manualEpisodeForm = reactive<{
@@ -410,7 +430,9 @@ async function refreshAnime(anime: AnimeListItem) {
 
 function clearHistorySyncDialog() {
   historySyncTarget.value = null
+  historySyncForm.mode = 'rss'
   historySyncForm.rssUrl = ''
+  historySyncForm.localDir = ''
   historySyncForm.excludeTitle = ''
   historySyncForm.includeTitle = ''
 }
@@ -438,15 +460,25 @@ async function syncHistory() {
     ElMessage.warning('没有已绑定话数时，请填写番剧 RSS 链接')
     return
   }
+  if (historySyncForm.mode === 'local' && historySyncForm.localDir.trim() === '') {
+    ElMessage.warning('请填写服务器上的本地媒体文件夹路径')
+    return
+  }
   const anime = historySyncTarget.value
   syncingHistoryId.value = anime.bangumiId
   try {
     const { result } = await api.syncAnimeHistory(anime.bangumiId, {
+      mode: historySyncForm.mode,
       rssUrl: historySyncForm.rssUrl,
+      localDir: historySyncForm.localDir,
       excludeTitle: historySyncForm.excludeTitle,
       includeTitle: historySyncForm.includeTitle,
     })
-    if (result.bound > 0) {
+    if (result.mode === 'local' && result.queued > 0) {
+      ElMessage.success(`已识别并加入转码队列 ${result.queued} 话`)
+    } else if (result.mode === 'local') {
+      ElMessage.info('没有发现可导入的本地媒体文件')
+    } else if (result.bound > 0) {
       ElMessage.success(`历史话数已同步，新增绑定 ${result.bound} 话`)
     } else {
       ElMessage.info('没有发现缺失的历史话数')
@@ -789,14 +821,24 @@ onBeforeUnmount(stopFilterLoading)
       @closed="resetHistorySyncDialog"
     >
       <el-form class="history-sync-dialog" label-position="top" @submit.prevent>
-        <el-form-item label="番剧RSS链接" :required="historySyncRSSRequired">
+        <el-form-item label="同步方式" required>
+          <el-radio-group v-model="historySyncForm.mode">
+            <el-radio-button label="rss">RSS 链接</el-radio-button>
+            <el-radio-button label="local">本地媒体文件夹</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="historySyncForm.mode === 'rss'" label="番剧RSS链接" :required="historySyncRSSRequired">
           <el-input v-model.trim="historySyncForm.rssUrl" :placeholder="historySyncRSSRequired ? '请输入番剧 RSS 链接' : '留空自动搜索'" clearable @keyup.enter="syncHistory" />
         </el-form-item>
+        <el-form-item v-else label="番剧本地文件夹路径" required>
+          <el-input v-model.trim="historySyncForm.localDir" placeholder="/opt/downloads/BangumiPipeline/data/uploads/番剧名称" clearable @keyup.enter="syncHistory" />
+          <div class="form-help">递归扫描文件夹内的视频文件，识别后直接加入转码队列；处理完成后不会删除原文件。</div>
+        </el-form-item>
         <el-form-item label="过滤字段">
-          <el-input v-model.trim="historySyncForm.excludeTitle" placeholder="标题包含该字段时跳过" clearable @keyup.enter="syncHistory" />
+          <el-input v-model.trim="historySyncForm.excludeTitle" :placeholder="historySyncForm.mode === 'local' ? '文件名包含该字段时跳过' : '标题包含该字段时跳过'" clearable @keyup.enter="syncHistory" />
         </el-form-item>
         <el-form-item label="包含字段">
-          <el-input v-model.trim="historySyncForm.includeTitle" placeholder="标题必须包含该字段" clearable @keyup.enter="syncHistory" />
+          <el-input v-model.trim="historySyncForm.includeTitle" :placeholder="historySyncForm.mode === 'local' ? '文件名必须包含该字段' : '标题必须包含该字段'" clearable @keyup.enter="syncHistory" />
         </el-form-item>
       </el-form>
       <template #footer>

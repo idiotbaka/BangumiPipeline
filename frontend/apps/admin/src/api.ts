@@ -362,18 +362,25 @@ export interface AnimePage {
 
 export interface HistorySyncResult {
   bangumiId: number
+  mode: HistorySyncMode
   sourceTitle: string
   searchTitle: string
   fetched: number
   inserted: number
   bound: number
+  queued: number
   skippedExisting: number
   skippedIgnored: number
+  skippedDuplicate: number
   skippedUnmatched: number
 }
 
+export type HistorySyncMode = 'rss' | 'local'
+
 export interface HistorySyncInput {
+  mode?: HistorySyncMode
   rssUrl?: string
+  localDir?: string
   excludeTitle?: string
   includeTitle?: string
 }

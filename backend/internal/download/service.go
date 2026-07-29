@@ -386,7 +386,8 @@ func (s *Service) downloadJobsForCleanup(ctx context.Context, jobIDs []int64) ([
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, subscription_item_id, qbit_hash, save_path, status
 FROM download_jobs
-WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+WHERE id IN (`+strings.Join(placeholders, ",")+`)
+  AND COALESCE(NULLIF(source_type, ''), 'download') = 'download'`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -856,7 +857,8 @@ LEFT JOIN download_jobs dj ON dj.subscription_item_id = si.id
 WHERE si.binding_status = 'bound'
   AND si.bound_bangumi_id IS NOT NULL
   AND si.bound_season_number IS NOT NULL
-  AND si.bound_episode_number != ''`
+  AND si.bound_episode_number != ''
+  AND COALESCE(NULLIF(dj.source_type, ''), 'download') = 'download'`
 	args := make([]any, 0, 1)
 	switch status {
 	case StatusPending:

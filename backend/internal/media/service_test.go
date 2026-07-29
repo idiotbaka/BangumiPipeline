@@ -466,6 +466,20 @@ type batchDownloadCleanerRecorder struct {
 	batchIDs []int64
 }
 
+func TestCleanupDownloadSkipsLocalMediaSource(t *testing.T) {
+	cleaner := &batchDownloadCleanerRecorder{}
+	service := &Service{cleaner: cleaner}
+	if err := service.cleanupDownload(context.Background(), pendingJob{
+		DownloadJobID: 42,
+		SourceType:    downloadSourceTypeLocal,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(cleaner.batchIDs) != 0 {
+		t.Fatalf("local media source must not be passed to qBittorrent cleanup: %+v", cleaner.batchIDs)
+	}
+}
+
 func (r *batchDownloadCleanerRecorder) CleanupCompletedQBitTask(_ context.Context, jobID int64) error {
 	r.batchIDs = append(r.batchIDs, jobID)
 	return nil

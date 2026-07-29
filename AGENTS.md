@@ -282,11 +282,16 @@ RSS 流程：
 
 同步历史话数：
 
+- 支持 `rss` 和 `local` 两种同步方式；未传同步方式时兼容为 `rss`。
 - 使用该番剧最新已绑定标题作为模板。
 - 删除模板标题中的话数数字后调用 Mikan `RSS/Search`。
 - 只绑定标题记忆 key 一致、同季、同话类型且尚未绑定的条目。
 - 已绑定跳过，已忽略不覆盖。
 - 网络请求使用系统代理配置，超时 20 秒。
+- 本地媒体方式要求服务器绝对文件夹路径，递归扫描支持的视频扩展名，并按文件名应用包含/过滤字段。
+- 本地媒体文件名复用订阅标题的季数、集类型和集数识别以及番剧集数偏移；同批次重复集数和已有绑定必须跳过，不静默覆盖。
+- 本地媒体使用 `download_jobs.source_type='local'` 记录已完成采集，并直接创建 `media_jobs(status='pending')`，不进入 qBittorrent 下载或下载管理列表。
+- 本地媒体处理完成后必须保留原始文件，不得调用 qBittorrent 文件清理。
 
 同步/替换单话：
 
@@ -362,6 +367,7 @@ qBittorrent `torrents/info` 响应可能很大；读取、JSON 解析和错误�
 媒体任务行为：
 
 - 将 `download_jobs.status='completed'` 且尚无媒体任务的记录写入 `media_jobs(status='pending')`。
+- `download_jobs.source_type='local'` 的任务直接使用 `save_path` 指向的本地视频，并在完成后跳过下载清理。
 - 恢复服务重启中断的 `transcoding` 为 `pending`。
 - 补齐已完成但封面图缺失、失败或文件被删除的历史产物封面。
 - 每轮先规划 pending 任务的处理方式，再拆成 copy 线路和 ffmpeg 线路。
