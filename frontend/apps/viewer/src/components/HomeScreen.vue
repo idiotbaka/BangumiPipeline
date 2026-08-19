@@ -344,6 +344,19 @@ function syncDetailFromLocation() {
         <input v-model="searchQuery" type="search" placeholder="搜索番剧" />
       </form>
 
+      <a
+        class="app-download-link"
+        href="/app/download"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="在新标签页打开 APP 下载页面"
+      >
+        <svg class="app-download-icon" viewBox="0 0 1024 1024" aria-hidden="true">
+          <path d="M753.265 105.112c12.57 12.546 12.696 32.81 0.377 45.512l-0.377 0.383-73.131 72.992L816 224c70.692 0 128 57.308 128 128v448c0 70.692-57.308 128-128 128H208c-70.692 0-128-57.308-128-128V352c0-70.692 57.308-128 128-128l136.078-0.001-73.13-72.992c-12.698-12.674-12.698-33.222 0-45.895 12.697-12.674 33.284-12.674 45.982 0l119.113 118.887h152.126l119.114-118.887c12.697-12.674 33.284-12.674 45.982 0zM457 440c-28.079 0-51 22.938-51 51v170c0 9.107 2.556 18.277 7 26 15.025 24.487 46.501 32.241 71 18l138-84c7.244-4.512 13.094-10.313 17-17 15.213-24.307 7.75-55.875-16-71l-139-85c-7.994-5.355-17.305-8-27-8z" fill="currentColor" />
+        </svg>
+        <span>APP下载</span>
+      </a>
+
       <div class="user-area">
         <button class="user-chip" type="button" aria-haspopup="menu">
           <span class="user-avatar" aria-hidden="true">{{ user.username.slice(0, 1).toUpperCase() }}</span>
@@ -670,7 +683,7 @@ function syncDetailFromLocation() {
   z-index: 20;
   height: 86px;
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto 230px auto;
+  grid-template-columns: minmax(220px, 1fr) auto 230px auto auto;
   align-items: center;
   gap: 16px;
   padding: 0 32px;
@@ -793,6 +806,41 @@ function syncDetailFromLocation() {
 
 .search-box input::placeholder {
   color: var(--ink-300);
+}
+
+.app-download-link {
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  color: #ee3f86;
+  font-size: 13px;
+  white-space: nowrap;
+  background: #ffffff;
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 10px 24px rgba(255, 95, 158, 0.08);
+  clip-path: polygon(var(--bevel-chip));
+  transition: color 180ms var(--ease-soft), background 180ms var(--ease-soft), box-shadow 180ms var(--ease-soft), transform 180ms var(--ease-soft);
+}
+
+.app-download-link:hover {
+  color: var(--pink-600);
+  background: var(--pink-50);
+  box-shadow: 0 13px 28px rgba(255, 95, 158, 0.16);
+  transform: translateY(-1px);
+}
+
+.app-download-link:focus-visible {
+  outline: 2px solid rgba(238, 63, 134, 0.38);
+  outline-offset: 3px;
+}
+
+.app-download-icon {
+  width: 23px;
+  height: 23px;
+  flex: 0 0 auto;
 }
 
 /* 用户区 */
