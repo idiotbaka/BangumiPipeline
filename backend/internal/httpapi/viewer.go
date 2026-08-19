@@ -43,6 +43,7 @@ func NewViewerHandler(authService *viewer.Service, pushService *viewer.PushServi
 	mux.HandleFunc("POST /api/auth/register", api.register)
 	mux.HandleFunc("POST /api/auth/login", api.login)
 	mux.HandleFunc("GET /api/auth/me", api.me)
+	mux.HandleFunc("PUT /api/auth/password", api.changePassword)
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
 	mux.HandleFunc("GET /api/app/releases/latest", api.latestAppRelease)
 	mux.HandleFunc("GET /api/app/releases/{releaseID}/download", api.downloadAppRelease)
@@ -148,6 +149,40 @@ func (a *ViewerAPI) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
+func (a *ViewerAPI) changePassword(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+		ConfirmPassword string `json:"confirmPassword"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if err := a.auth.ChangePassword(r.Context(), user.ID, input.CurrentPassword, input.NewPassword, input.ConfirmPassword); err != nil {
+		switch {
+		case errors.Is(err, viewer.ErrInvalidCurrentPassword):
+			writeError(w, http.StatusBadRequest, "invalid_current_password", "现在的密码不正确")
+		case errors.Is(err, viewer.ErrPasswordMismatch):
+			writeError(w, http.StatusBadRequest, "password_mismatch", "两次输入的新密码不一致")
+		case errors.Is(err, viewer.ErrInvalidPassword):
+			writeError(w, http.StatusBadRequest, "invalid_password", "新密码需要 10 到 128 个字符")
+		case errors.Is(err, viewer.ErrUnauthorized):
+			writeError(w, http.StatusUnauthorized, "unauthorized", "请先登录")
+		case errors.Is(err, viewer.ErrUserDisabled):
+			writeError(w, http.StatusForbidden, "user_disabled", "账号已被禁用")
+		default:
+			a.internalError(w, err)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *ViewerAPI) home(w http.ResponseWriter, r *http.Request) {

@@ -21,19 +21,21 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid username or password")
-	ErrUnauthorized       = errors.New("unauthorized")
-	ErrInvalidUsername    = errors.New("username must contain 3 to 32 printable characters")
-	ErrInvalidPassword    = errors.New("password must contain 10 to 128 characters")
-	ErrUsernameTaken      = errors.New("username already exists")
-	ErrUserDisabled       = errors.New("viewer user disabled")
-	ErrUserNotFound       = errors.New("viewer user not found")
-	ErrInvalidSiteName    = errors.New("site name must contain 1 to 80 printable characters")
-	ErrInvalidFavicon     = errors.New("favicon must be a png image up to 1 MiB")
-	ErrRegistrationClosed = errors.New("viewer registration is closed")
-	ErrInviteRequired     = errors.New("invite code is required")
-	ErrInvalidInviteCode  = errors.New("invalid invite code")
-	ErrInviteUsed         = errors.New("invite code already used")
+	ErrInvalidCredentials     = errors.New("invalid username or password")
+	ErrInvalidCurrentPassword = errors.New("current password is incorrect")
+	ErrUnauthorized           = errors.New("unauthorized")
+	ErrInvalidUsername        = errors.New("username must contain 3 to 32 printable characters")
+	ErrInvalidPassword        = errors.New("password must contain 10 to 128 characters")
+	ErrPasswordMismatch       = errors.New("password confirmation does not match")
+	ErrUsernameTaken          = errors.New("username already exists")
+	ErrUserDisabled           = errors.New("viewer user disabled")
+	ErrUserNotFound           = errors.New("viewer user not found")
+	ErrInvalidSiteName        = errors.New("site name must contain 1 to 80 printable characters")
+	ErrInvalidFavicon         = errors.New("favicon must be a png image up to 1 MiB")
+	ErrRegistrationClosed     = errors.New("viewer registration is closed")
+	ErrInviteRequired         = errors.New("invite code is required")
+	ErrInvalidInviteCode      = errors.New("invalid invite code")
+	ErrInviteUsed             = errors.New("invite code already used")
 )
 
 const DefaultSiteName = "BangumiPipeline Viewer"
@@ -247,6 +249,56 @@ func (s *Service) Login(ctx context.Context, username, password string) (User, S
 		return User{}, Session{}, fmt.Errorf("create viewer session: %w", err)
 	}
 	return user, session, nil
+}
+
+func (s *Service) ChangePassword(ctx context.Context, userID int64, currentPassword, newPassword, confirmPassword string) error {
+	if newPassword != confirmPassword {
+		return ErrPasswordMismatch
+	}
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+
+	var passwordHash string
+	var disabledAt sql.NullInt64
+	err := s.db.QueryRowContext(ctx,
+		"SELECT password_hash, disabled_at FROM viewer_users WHERE id = ?",
+		userID,
+	).Scan(&passwordHash, &disabledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUnauthorized
+	}
+	if err != nil {
+		return err
+	}
+	if disabledAt.Valid {
+		return ErrUserDisabled
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(currentPassword)); err != nil {
+		return ErrInvalidCurrentPassword
+	}
+
+	newPasswordHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE viewer_users
+SET password_hash = ?, updated_at = ?
+WHERE id = ? AND password_hash = ? AND disabled_at IS NULL`,
+		string(newPasswordHash), s.now().UTC().Unix(), userID, passwordHash,
+	)
+	if err != nil {
+		return fmt.Errorf("update viewer password: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrUnauthorized
+	}
+	return nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, token string) (User, error) {

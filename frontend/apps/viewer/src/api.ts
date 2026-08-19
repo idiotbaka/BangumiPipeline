@@ -304,6 +304,11 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   me: () => request<{ user: ViewerUser }>('/api/auth/me'),
+  changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) =>
+    request<void>('/api/auth/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
+    }),
   logout: () => request<void>('/api/auth/logout', { method: 'POST', body: '{}' }),
   home: () => request<{ home: ViewerHome }>('/api/home'),
   animeSchedule: (season: string) =>

@@ -2,12 +2,67 @@ package viewer
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"bangumipipeline.local/server/internal/database"
+
+	"golang.org/x/crypto/bcrypt"
 )
+
+func TestChangePassword(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "viewer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("old-password"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO viewer_users(id, username, password_hash, created_at, updated_at)
+VALUES (1, 'alice', ?, 1, 1)`, string(passwordHash)); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewService(db, time.Hour)
+	service.now = func() time.Time { return time.Unix(100, 0) }
+	if err := service.ChangePassword(ctx, 1, "old-password", "new-password", "different-password"); !errors.Is(err, ErrPasswordMismatch) {
+		t.Fatalf("expected password mismatch, got %v", err)
+	}
+	if err := service.ChangePassword(ctx, 1, "old-password", "short", "short"); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("expected invalid password, got %v", err)
+	}
+	if err := service.ChangePassword(ctx, 1, "wrong-password", "new-password", "new-password"); !errors.Is(err, ErrInvalidCurrentPassword) {
+		t.Fatalf("expected invalid current password, got %v", err)
+	}
+	if err := service.ChangePassword(ctx, 1, "old-password", "new-password", "new-password"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := service.Login(ctx, "alice", "old-password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected old password login to fail, got %v", err)
+	}
+	user, _, err := service.Login(ctx, "alice", "new-password")
+	if err != nil {
+		t.Fatalf("expected new password login to succeed: %v", err)
+	}
+	if user.ID != 1 || user.Username != "alice" {
+		t.Fatalf("unexpected user after password change: %+v", user)
+	}
+	var updatedAt int64
+	if err := db.QueryRowContext(ctx, "SELECT updated_at FROM viewer_users WHERE id = 1").Scan(&updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if updatedAt != 100 {
+		t.Fatalf("expected updated_at 100, got %d", updatedAt)
+	}
+}
 
 func TestManagedUsersIncludeLastActivity(t *testing.T) {
 	ctx := context.Background()

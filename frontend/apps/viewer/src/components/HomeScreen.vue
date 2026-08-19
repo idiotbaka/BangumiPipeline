@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { api, type ViewerAnimeCard, type ViewerFollowedAnime, type ViewerHome, type ViewerUser, type ViewerWatchHistoryItem } from '../api'
+import defaultAvatar from '../assets/avatar.png'
 import AnimeDetailScreen from './AnimeDetailScreen.vue'
 import FollowCard from './FollowCard.vue'
 import FollowScreen from './FollowScreen.vue'
@@ -9,6 +10,7 @@ import HistoryScreen from './HistoryScreen.vue'
 import LibraryScreen from './LibraryScreen.vue'
 import ParticleField from './ParticleField.vue'
 import ScheduleScreen from './ScheduleScreen.vue'
+import SettingsScreen from './SettingsScreen.vue'
 
 interface Props {
   user: ViewerUser
@@ -18,6 +20,8 @@ interface Props {
 
 defineProps<Props>()
 const emit = defineEmits<{ (e: 'logout'): void }>()
+
+type MainView = 'home' | 'schedule' | 'library' | 'history' | 'follows' | 'settings'
 
 const hotPageSize = 8
 const maxHotPages = 4
@@ -30,7 +34,7 @@ const heroIntervalMs = 5500
 const searchQuery = ref('')
 const libraryQuery = ref('')
 const librarySearchKey = ref(0)
-const activeView = ref<'home' | 'schedule' | 'library' | 'history' | 'follows'>('home')
+const activeView = ref<MainView>('home')
 const detailAnimeId = ref<number | null>(null)
 const detailMediaId = ref(0)
 const detailPosition = ref(0)
@@ -246,14 +250,24 @@ function submitGlobalSearch() {
   showView('library')
 }
 
-function showView(view: 'home' | 'schedule' | 'library' | 'history' | 'follows') {
+function showView(view: MainView) {
+  const hadDetail = detailAnimeId.value !== null
   activeView.value = view
-  if (detailAnimeId.value !== null) {
+  if (hadDetail) {
     detailAnimeId.value = null
     detailMediaId.value = 0
     detailPosition.value = 0
+  }
+  if (view === 'settings') {
+    if (window.location.pathname !== '/settings') {
+      window.history.pushState({ bpView: 'settings' }, '', '/settings')
+    }
+  } else if (window.location.pathname === '/settings') {
+    window.history.pushState({ bpView: view }, '', '/')
+  } else if (hadDetail) {
     window.history.replaceState({}, '', '/')
   }
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 function openAnime(bangumiId: number, mediaId = 0, positionSeconds = 0) {
@@ -291,7 +305,22 @@ function closeAnimeDetail() {
 }
 
 function syncDetailFromLocation() {
-  const match = window.location.pathname.match(/^\/anime\/(\d+)\/?$/)
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/'
+  if (pathname === '/settings') {
+    activeView.value = 'settings'
+    detailAnimeId.value = null
+    detailMediaId.value = 0
+    detailPosition.value = 0
+    window.scrollTo({ top: 0 })
+    return
+  }
+  const historyView = window.history.state?.bpView
+  if (pathname === '/' && isMainView(historyView) && historyView !== 'settings') {
+    activeView.value = historyView
+  } else if (activeView.value === 'settings') {
+    activeView.value = 'home'
+  }
+  const match = pathname.match(/^\/anime\/(\d+)$/)
   detailAnimeId.value = match ? Number(match[1]) : null
   const params = new URLSearchParams(window.location.search)
   const mediaID = Number(params.get('media'))
@@ -299,6 +328,15 @@ function syncDetailFromLocation() {
   detailMediaId.value = Number.isInteger(mediaID) && mediaID > 0 ? mediaID : 0
   detailPosition.value = Number.isFinite(position) && position > 0 ? position : 0
   window.scrollTo({ top: 0 })
+}
+
+function isMainView(value: unknown): value is MainView {
+  return value === 'home'
+    || value === 'schedule'
+    || value === 'library'
+    || value === 'history'
+    || value === 'follows'
+    || value === 'settings'
 }
 </script>
 
@@ -359,22 +397,38 @@ function syncDetailFromLocation() {
 
       <div class="user-area">
         <button class="user-chip" type="button" aria-haspopup="menu">
-          <span class="user-avatar" aria-hidden="true">{{ user.username.slice(0, 1).toUpperCase() }}</span>
+          <img class="user-avatar" :src="defaultAvatar" alt="" />
           <span class="user-name">{{ user.username }}</span>
           <i class="user-arrow" aria-hidden="true" />
         </button>
         <div class="user-menu" role="menu">
           <button type="button" role="menuitem" @click="showView('follows')">
-            <i class="follow-menu-icon" aria-hidden="true" />我的追番
+            <svg class="user-menu-icon" viewBox="0 0 1024 1024" aria-hidden="true">
+              <path d="M476.689655 617.931034m-370.758621 0a370.758621 370.758621 0 1 0 741.517242 0 370.758621 370.758621 0 1 0-741.517242 0Z" fill="#D8D8D8" />
+              <path d="M20.391724 727.816828l0.459035-1.253518a259.831172 259.831172 0 0 1 7.062069-17.867034 310.060138 310.060138 0 0 1 11.564138-23.869793 372.930207 372.930207 0 0 1 10.257655-18.061242 438.23669 438.23669 0 0 1 7.379862-11.828965A476.407172 476.407172 0 0 1 35.310345 512C35.310345 248.726069 248.726069 35.310345 512 35.310345c149.963034 0 283.771586 69.261241 371.147034 177.522758 56.231724 5.826207 97.968552 25.900138 118.324966 61.157518 23.746207 41.136552 15.059862 97.068138-19.261793 159.161379 4.254897 25.63531 6.479448 51.976828 6.479448 78.848 0 263.273931-213.415724 476.689655-476.689655 476.689655-104.165517 0-200.509793-33.403586-278.951724-90.094345a505.114483 505.114483 0 0 1-47.951448 3.248552l-5.826207 0.070621c-75.422897 0.282483-131.61931-20.126897-156.336552-62.958345A95.514483 95.514483 0 0 1 12.358621 811.99669a109.726897 109.726897 0 0 1-2.189242-13.27669 132.890483 132.890483 0 0 1 0.723862-32.432552 177.858207 177.858207 0 0 1 4.043035-20.48 209.796414 209.796414 0 0 1 5.12-17.019586l-0.441379 1.271172 0.759172-2.242206z m878.697931-183.401931l-0.335448 0.353103a836.502069 836.502069 0 0 1-34.868966 35.398621 967.326897 967.326897 0 0 1-18.008275 16.843034l4.043034-3.707586a1012.18869 1012.18869 0 0 1-40.183172 35.239724 1128.041931 1128.041931 0 0 1-15.942621 13.064828 1214.322759 1214.322759 0 0 1-51.606069 39.265103 1302.121931 1302.121931 0 0 1-66.330483 44.808828 1386.107586 1386.107586 0 0 1-48.904827 29.572414c-90.394483 52.206345-180.859586 91.136-263.556414 115.712A387.10731 387.10731 0 0 0 512 900.413793c203.599448 0 370.599724-156.654345 387.072-355.998896zM103.45931 757.777655l-0.494344 1.412414a140.711724 140.711724 0 0 0-1.483035 4.766897c-5.031724 17.37269-4.502069 26.747586-2.118621 30.861241 2.365793 4.13131 10.222345 9.268966 27.789242 13.594483 4.237241 1.05931 8.792276 1.942069 13.594482 2.683586a482.198069 482.198069 0 0 1-37.287724-53.318621zM512 123.586207C297.489655 123.586207 123.586207 297.489655 123.586207 512c0 117.318621 52.012138 222.508138 134.249931 293.729103l5.420138-0.988689c95.19669-17.92 208.507586-61.810759 319.558621-125.934345 11.211034-6.479448 22.245517-13.064828 33.103448-19.773793l10.416552-6.497104a1288.651034 1288.651034 0 0 0 53.053793-35.310344 1204.612414 1204.612414 0 0 0 38.417655-28.177656l8.262621-6.391172a1103.960276 1103.960276 0 0 0 24.858482-20.00331l-6.17931 5.084689c3.03669-2.471724 6.038069-4.943448 9.004138-7.432827l-2.824828 2.348138c2.507034-2.065655 4.996414-4.148966 7.468138-6.232276l-4.625655 3.884138 8.721655-7.379862-4.096 3.495724c2.930759-2.471724 5.826207-4.961103 8.704-7.450483l-4.608 3.954759c2.807172-2.383448 5.579034-4.784552 8.315586-7.185656l-3.707586 3.230897 7.220966-6.302897-3.51338 3.072a946.970483 946.970483 0 0 0 20.268138-18.220137l-3.601655 3.319172c2.736552-2.52469 5.455448-5.031724 8.121379-7.538759l-4.519724 4.219587a869.075862 869.075862 0 0 0 19.950345-19.085242l-3.213241 3.177931a819.2 819.2 0 0 0 7.591724-7.503448l-4.360828 4.325517c2.436414-2.418759 4.855172-4.819862 7.238621-7.238621l-2.895448 2.913104c1.959724-1.977379 3.919448-3.937103 5.826207-5.914483l-2.948414 3.001379a757.195034 757.195034 0 0 0 17.213793-18.008275l-2.436414 2.612965c2.08331-2.224552 4.13131-4.431448 6.144-6.656l-3.707586 4.06069c3.177931-3.442759 6.267586-6.885517 9.321931-10.292966l-5.614345 6.232276c2.259862-2.471724 4.484414-4.961103 6.673655-7.432827l-1.05931 1.200551c1.57131-1.765517 3.124966-3.54869 4.660966-5.331862l-3.601656 4.131311c2.295172-2.612966 4.555034-5.208276 6.779587-7.803587l-3.177931 3.672276c2.59531-3.001379 5.15531-5.985103 7.644689-8.968827l-4.466758 5.296551c1.995034-2.348138 3.972414-4.678621 5.896827-7.009103l-1.430069 1.712552 4.590345-5.543725-3.160276 3.831173c2.189241-2.648276 4.325517-5.261241 6.426483-7.891862l-3.266207 4.060689c2.718897-3.354483 5.367172-6.673655 7.944828-9.992827 27.771586-35.663448 45.762207-68.148966 53.265655-94.066759 5.031724-17.390345 4.502069-26.747586 2.11862-30.878896-2.383448-4.113655-10.222345-9.25131-27.789241-13.594483-15.766069-3.884138-35.469241-5.649655-58.420965-5.12-20.709517-27.61269-40.448-50.582069-59.233104-68.961103A387.142621 387.142621 0 0 0 512 123.586207z" fill="#464646" />
+              <path d="M635.586207 494.344828m-70.62069 0a70.62069 70.62069 0 1 0 141.24138 0 70.62069 70.62069 0 1 0-141.24138 0Z" fill="#6A6A6A" />
+              <path d="M388.413793 494.344828m-70.62069 0a70.62069 70.62069 0 1 0 141.24138 0 70.62069 70.62069 0 1 0-141.24138 0Z" fill="#6A6A6A" />
+            </svg>
+            我的追番
           </button>
           <button type="button" role="menuitem" @click="showView('history')">
-            <i class="history-icon" aria-hidden="true" />观看历史
+            <svg class="user-menu-icon" viewBox="0 0 1024 1024" aria-hidden="true">
+              <path d="M582.82496 600.275862m-388.413793 0a388.413793 388.413793 0 1 0 776.827586 0 388.413793 388.413793 0 1 0-776.827586 0Z" fill="#D8D8D8" />
+              <path d="M512.20427 0c282.765241 0 512 229.234759 512 512S794.969512 1024 512.20427 1024C315.59627 1024 144.870753 913.178483 59.08427 750.592a44.137931 44.137931 0 0 1 77.523862-42.231172C207.423029 843.511172 349.052822 935.724138 512.20427 935.724138c234.01931 0 423.724138-189.704828 423.724138-423.724138S746.223581 88.275862 512.20427 88.275862C310.193788 88.275862 141.180822 229.658483 98.755443 418.868966L174.990477 374.854621a44.137931 44.137931 0 0 1 44.137931 76.446896l-152.893793 88.275862a44.137931 44.137931 0 0 1-65.747862-44.738207l-0.123586 4.360828C7.142753 222.349241 233.711581 0 512.20427 0z" fill="#464646" />
+              <path d="M603.658063 309.548138a44.137931 44.137931 0 0 1 16.154483 60.292414L503.253098 571.674483l65.677241 65.659586a44.137931 44.137931 0 1 1-62.428689 62.411034l-87.393104-87.393103a43.926069 43.926069 0 0 1-11.793655-21.186207 44.014345 44.014345 0 0 1 3.636966-36.104827l132.413793-229.34069a44.137931 44.137931 0 0 1 60.292413-16.172138z" fill="#6A6A6A" />
+            </svg>
+            观看历史
+          </button>
+          <button type="button" role="menuitem" @click="showView('settings')">
+            <svg class="user-menu-icon" viewBox="0 0 1024 1024" aria-hidden="true">
+              <path d="M459.034483 600.275862m-388.413793 0a388.413793 388.413793 0 1 0 776.827586 0 388.413793 388.413793 0 1 0-776.827586 0Z" fill="#D8D8D8" />
+              <path d="M1001.524966 501.142069c8.651034 8.651034 12.976552 20.020966 12.923586 31.373241a492.173241 492.173241 0 0 1-144.34869 330.68138c-193.05931 193.076966-506.067862 193.076966-699.109517 0C-22.068966 670.17269-22.068966 357.164138 170.990345 164.122483a492.296828 492.296828 0 0 1 299.55531-142.26538 44.137931 44.137931 0 0 1 36.440276 75.052138 43.979034 43.979034 0 0 1-29.342897 12.888276A404.815448 404.815448 0 0 0 233.401379 226.515862c-158.578759 158.596414-158.578759 415.691034 0 574.269793s415.691034 158.578759 574.269793 0a404.603586 404.603586 0 0 0 118.678069-272.436965 44.137931 44.137931 0 0 1 75.175725-27.188966z" fill="#464646" />
+              <path d="M343.889168 626.005957m31.210231-31.21023l436.943224-436.943225q31.21023-31.21023 62.420461 0l0 0q31.21023 31.21023 0 62.420461l-436.943225 436.943225q-31.21023 31.21023-62.42046 0l0 0q-31.21023-31.21023 0-62.420461Z" fill="#6A6A6A" />
+            </svg>
+            设置
           </button>
           <button :disabled="loading" type="button" role="menuitem" @click="emit('logout')">
-            <svg class="exit-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M8 1.75v5" />
-              <path d="M4.1 3.9a5.5 5.5 0 1 0 7.8 0" />
-            </svg>
+            <span class="user-menu-icon-spacer" aria-hidden="true" />
             退出登录
           </button>
         </div>
@@ -398,6 +452,7 @@ function syncDetailFromLocation() {
     />
     <HistoryScreen v-else-if="activeView === 'history'" @open-history="openHistoryItem" />
     <FollowScreen v-else-if="activeView === 'follows'" @open-follow="openFollowedAnime" />
+    <SettingsScreen v-else-if="activeView === 'settings'" :user="user" />
 
     <section v-else class="home-stage" aria-label="首页">
       <ParticleField :count="16" palette="pink" :max-size="30" />
@@ -941,70 +996,19 @@ function syncDetailFromLocation() {
   opacity: 0.5;
 }
 
-.history-icon {
-  position: relative;
-  width: 15px;
-  height: 15px;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-}
-
-.follow-menu-icon {
-  position: relative;
-  width: 15px;
-  height: 15px;
-  border: 1px solid currentColor;
-  transform: rotate(45deg) scale(.78);
-}
-
-.follow-menu-icon::after {
-  content: '';
-  position: absolute;
-  inset: 4px;
-  background: currentColor;
-}
-
-.history-icon::before,
-.history-icon::after {
-  content: '';
-  position: absolute;
-  background: currentColor;
-  transform-origin: left center;
-}
-
-.history-icon::before {
-  width: 5px;
-  height: 1px;
-  transform: translate(7px, 7px) rotate(-90deg);
-}
-
-.history-icon::after {
-  width: 4px;
-  height: 1px;
-  transform: translate(7px, 7px) rotate(25deg);
-}
-
-.exit-icon {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-}
-
-.exit-icon path {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.user-menu-icon,
+.user-menu-icon-spacer {
+  width: 18px;
+  height: 18px;
+  display: block;
+  flex: 0 0 18px;
 }
 
 .user-avatar {
-  display: grid;
-  place-items: center;
   width: 34px;
   height: 34px;
-  color: #ffffff;
-  font-size: 14px;
+  flex: 0 0 34px;
+  object-fit: cover;
   background: linear-gradient(135deg, var(--cyan-400), var(--blue-500));
   clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
