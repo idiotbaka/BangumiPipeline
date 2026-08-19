@@ -373,6 +373,40 @@ func TestFFmpegArgsCombineScaleAndSubtitleFilters(t *testing.T) {
 	}
 }
 
+func TestFFmpegFilterPathEscapesOptionAndFiltergraphSpecialCharacters(t *testing.T) {
+	path := `C:/Anime/[Dynamis],Set; Let's.mkv`
+	want := `C\\:/Anime/\[Dynamis\]\,Set\; Let\\\'s.mkv`
+	if got := ffmpegFilterPath(path); got != want {
+		t.Fatalf("ffmpegFilterPath() = %q, want %q", got, want)
+	}
+
+	filters := videoFilters(mediaPlan{
+		sourcePath:            path,
+		hasInternalSubtitles:  true,
+		internalSubtitleIndex: 9,
+	})
+	if len(filters) != 1 || filters[0] != "subtitles=filename="+want+":si=9" {
+		t.Fatalf("unexpected subtitles filter: %v", filters)
+	}
+}
+
+func TestTruncateDiagnosticPreservesBeginningAndFatalTail(t *testing.T) {
+	message := "ffmpeg 失败: " + strings.Repeat("attachment warning; ", 100) + "Error opening output files: Invalid argument"
+	truncated := truncateDiagnostic(message, 120)
+	if !strings.HasPrefix(truncated, "ffmpeg 失败: ") {
+		t.Fatalf("diagnostic prefix was lost: %q", truncated)
+	}
+	if !strings.Contains(truncated, "中间日志已省略") {
+		t.Fatalf("diagnostic omission marker was not added: %q", truncated)
+	}
+	if !strings.HasSuffix(truncated, "Error opening output files: Invalid argument") {
+		t.Fatalf("fatal diagnostic tail was lost: %q", truncated)
+	}
+	if len([]rune(truncated)) != 120 {
+		t.Fatalf("truncated diagnostic length = %d, want 120", len([]rune(truncated)))
+	}
+}
+
 func TestSelectSubtitlePrefersChineseExternalSubtitle(t *testing.T) {
 	dir := t.TempDir()
 	videoPath := filepath.Join(dir, "bangumi.mkv")

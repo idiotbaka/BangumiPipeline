@@ -2092,9 +2092,7 @@ func (s *Service) runFFmpeg(ctx context.Context, jobID int64, plan mediaPlan) er
 		if message == "" {
 			message = waitErr.Error()
 		}
-		if len(message) > 2000 {
-			message = message[len(message)-2000:]
-		}
+		message = truncateDiagnostic(message, 2000)
 		return fmt.Errorf("ffmpeg 失败: %s", message)
 	}
 	if scanErr != nil {
@@ -2268,9 +2266,7 @@ WHERE id = ? AND status = ?`, message, now, jobID, StatusCompleted)
 }
 
 func (s *Service) markFailed(ctx context.Context, jobID int64, message string) error {
-	if len(message) > 1000 {
-		message = message[:1000]
-	}
+	message = truncateDiagnostic(message, 1000)
 	now := s.now().UTC().Unix()
 	_, err := s.db.ExecContext(ctx, `
 UPDATE media_jobs
@@ -2845,10 +2841,37 @@ func isSubtitleFile(path string) bool {
 
 func ffmpegFilterPath(path string) string {
 	value := filepath.ToSlash(path)
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `'`, `\'`)
-	value = strings.ReplaceAll(value, `:`, `\:`)
-	return "'" + value + "'"
+	value = escapeFFmpegValue(value, `\':`)
+	return escapeFFmpegValue(value, `\'[],;`)
+}
+
+func escapeFFmpegValue(value, special string) string {
+	var escaped strings.Builder
+	escaped.Grow(len(value))
+	for _, character := range value {
+		if strings.ContainsRune(special, character) {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteRune(character)
+	}
+	return escaped.String()
+}
+
+func truncateDiagnostic(message string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	characters := []rune(message)
+	if len(characters) <= limit {
+		return message
+	}
+	marker := []rune("\n... 中间日志已省略 ...\n")
+	if len(marker) >= limit {
+		return string(characters[:limit])
+	}
+	headLength := (limit - len(marker)) / 3
+	tailLength := limit - len(marker) - headLength
+	return string(characters[:headLength]) + string(marker) + string(characters[len(characters)-tailLength:])
 }
 
 func copyToFinal(source, destination string) error {
