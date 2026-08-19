@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 
-import { api, type ViewerUser } from '../api'
+import { api, type ViewerInvitation, type ViewerInvitationOverview, type ViewerUser } from '../api'
 import defaultAvatar from '../assets/avatar.png'
 import ParticleField from './ParticleField.vue'
 
@@ -11,12 +11,18 @@ interface Props {
 
 defineProps<Props>()
 
-type SettingsTab = 'profile' | 'password'
+type SettingsTab = 'profile' | 'invitations' | 'password'
 
 const activeTab = ref<SettingsTab>('profile')
 const submitting = ref(false)
 const feedback = ref('')
 const feedbackType = ref<'success' | 'error'>('success')
+const invitations = ref<ViewerInvitationOverview | null>(null)
+const invitationsLoading = ref(false)
+const invitationsError = ref('')
+const invitationFeedback = ref('')
+const invitationFeedbackType = ref<'success' | 'error'>('success')
+const invitationCreating = ref(false)
 const passwordForm = reactive({
   currentPassword: '',
   newPassword: '',
@@ -38,6 +44,10 @@ const passwordFormComplete = computed(() => (
 function selectTab(tab: SettingsTab) {
   activeTab.value = tab
   feedback.value = ''
+  invitationFeedback.value = ''
+  if (tab === 'invitations') {
+    void loadInvitations()
+  }
 }
 
 function formatRegisteredAt(value: number) {
@@ -54,6 +64,74 @@ function formatRegisteredAt(value: number) {
 
 function registeredAtISO(value: number) {
   return value ? new Date(value * 1000).toISOString() : undefined
+}
+
+function registrationMethod(user: ViewerUser) {
+  if (user.registrationSource === 'system_invite') return '邀请码注册（系统管理员邀请）'
+  if (user.registrationSource === 'user_invite') {
+    return `邀请码注册（用户 ${user.invitedByUsername || '未知用户'} 邀请）`
+  }
+  return '开放注册'
+}
+
+function formatInvitationDate(value: number | null) {
+  return value ? formatRegisteredAt(value) : '-'
+}
+
+async function loadInvitations() {
+  if (invitationsLoading.value) return
+  invitationsLoading.value = true
+  invitationsError.value = ''
+  try {
+    const result = await api.invitations()
+    invitations.value = result.invitations
+  } catch (error) {
+    invitationsError.value = error instanceof Error ? error.message : '邀请码加载失败'
+    if (invitations.value) {
+      invitationFeedbackType.value = 'error'
+      invitationFeedback.value = invitationsError.value
+    }
+  } finally {
+    invitationsLoading.value = false
+  }
+}
+
+async function createInvitation() {
+  if (invitationCreating.value || !invitations.value?.allowance.canCreate) return
+  invitationCreating.value = true
+  invitationFeedback.value = ''
+  try {
+    const result = await api.generateInvitation()
+    invitationFeedbackType.value = 'success'
+    invitationFeedback.value = `邀请码已创建：${result.invite.code}`
+    await loadInvitations()
+  } catch (error) {
+    invitationFeedbackType.value = 'error'
+    invitationFeedback.value = error instanceof Error ? error.message : '邀请码创建失败'
+  } finally {
+    invitationCreating.value = false
+  }
+}
+
+async function copyInvitation(invite: ViewerInvitation) {
+  try {
+    await navigator.clipboard.writeText(invite.code)
+    invitationFeedbackType.value = 'success'
+    invitationFeedback.value = '邀请码已复制'
+  } catch {
+    invitationFeedbackType.value = 'error'
+    invitationFeedback.value = '当前浏览器不允许自动复制'
+  }
+}
+
+function invitationAvailabilityText(overview: ViewerInvitationOverview) {
+  const allowance = overview.allowance
+  if (allowance.canCreate) return `当前可以创建 ${allowance.remainingCount} 个邀请码。`
+  if (allowance.eligibleTotal >= allowance.maximumTotal) return `邀请码额度已达到最多 ${allowance.maximumTotal} 个。`
+  if (allowance.nextEligibleAt) {
+    return `下一份邀请码额度将在 ${formatInvitationDate(allowance.nextEligibleAt)} 获得。`
+  }
+  return '当前没有可创建的邀请码额度。'
 }
 
 function clearFeedback() {
@@ -132,6 +210,20 @@ async function changePassword() {
               <strong>个人信息</strong>
               <i class="nav-arrow" aria-hidden="true" />
             </button>
+            <button
+              type="button"
+              :class="{ active: activeTab === 'invitations' }"
+              :aria-current="activeTab === 'invitations' ? 'page' : undefined"
+              @click="selectTab('invitations')"
+            >
+              <svg class="settings-tab-icon" viewBox="0 0 1082 1024" aria-hidden="true">
+                <path d="M411.983448 635.586207m-388.413793 0a388.413793 388.413793 0 1 0 776.827586 0 388.413793 388.413793 0 1 0-776.827586 0Z" fill="#D8D8D8" />
+                <path d="M918.863448 16.172138a114.758621 114.758621 0 0 1 148.621242 147.950345L773.808552 933.570207a114.758621 114.758621 0 0 1-215.781518-3.813517c-43.078621-125.969655-85.680552-211.614897-125.704827-255.664552-41.277793-45.391448-133.420138-95.744-274.855724-147.950345a114.758621 114.758621 0 0 1-1.606621-214.686896l41.154207-15.907311L918.863448 16.172138z m66.100966 97.456552a26.482759 26.482759 0 0 0-34.251035-15.130483L187.727448 393.833931l-0.723862 0.264828-1.889103 0.882758a26.482759 26.482759 0 0 0-11.581793 11.74069l-1.129931 2.59531a26.482759 26.482759 0 0 0 15.660138 34.039173l-0.229518-0.105931 0.194207 0.088275c150.245517 55.437241 251.692138 110.291862 305.893517 167.38869l3.707587 3.990069c49.981793 54.995862 97.28 150.068966 143.924965 286.490483a26.482759 26.482759 0 0 0 49.787586 0.882758L985.017379 132.64331a26.482759 26.482759 0 0 0-0.052965-18.996965z" fill="#464646" />
+                <path d="M808.862267 240.906858m41.206308 15.81762l0 0q41.206308 15.81762 25.388689 57.023928l-120.213911 313.167945q-15.81762 41.206308-57.023928 25.388688l0 0q-41.206308-15.81762-25.388689-57.023928l120.213911-313.167944q15.81762-41.206308 57.023928-25.388689Z" fill="#6A6A6A" />
+              </svg>
+              <strong>邀请码</strong>
+              <i class="nav-arrow" aria-hidden="true" />
+            </button>
           </div>
           <div class="settings-nav-group">
             <p>安全</p>
@@ -179,12 +271,16 @@ async function changePassword() {
                 <dt>注册时间</dt>
                 <dd><time :datetime="registeredAtISO(user.createdAt)">{{ formatRegisteredAt(user.createdAt) }}</time></dd>
               </div>
+              <div>
+                <dt>注册方式</dt>
+                <dd>{{ registrationMethod(user) }}</dd>
+              </div>
             </dl>
 
             <p class="readonly-note"><i aria-hidden="true" />当前页面仅用于查看账户资料，个人信息暂不支持修改。</p>
           </section>
 
-          <section v-else class="settings-content" aria-labelledby="password-title">
+          <section v-else-if="activeTab === 'password'" class="settings-content" aria-labelledby="password-title">
             <header class="panel-heading">
               <div>
                 <p>SECURITY CREDENTIALS</p>
@@ -250,6 +346,84 @@ async function changePassword() {
               </button>
             </form>
           </section>
+
+          <section v-else class="settings-content" aria-labelledby="invitations-title">
+            <header class="panel-heading">
+              <div>
+                <p>INVITATION ACCESS</p>
+                <h2 id="invitations-title">邀请码</h2>
+              </div>
+              <span>COMMUNITY</span>
+            </header>
+
+            <div v-if="invitationsLoading && !invitations" class="invitation-state" aria-live="polite">
+              <span class="invitation-loader" aria-hidden="true" />
+              <p>正在计算邀请码额度</p>
+            </div>
+            <div v-else-if="invitationsError && !invitations" class="invitation-state error" role="alert">
+              <strong>!</strong>
+              <p>{{ invitationsError }}</p>
+              <button type="button" @click="loadInvitations">重新加载</button>
+            </div>
+            <template v-else-if="invitations">
+              <div class="invitation-actions">
+                <div>
+                  <strong>创建邀请码</strong>
+                  <p>{{ invitationAvailabilityText(invitations) }}</p>
+                </div>
+                <button
+                  type="button"
+                  :disabled="invitationCreating || invitationsLoading || !invitations.allowance.canCreate"
+                  @click="createInvitation"
+                >
+                  <span v-if="invitationCreating" class="button-spinner" aria-hidden="true" />
+                  {{ invitationCreating ? '正在创建' : '创建邀请码' }}
+                </button>
+              </div>
+              <p class="invitation-rule">
+                注册满一周后即可创建邀请码。邀请码数量由账号使用时长决定。
+              </p>
+
+              <p
+                v-if="invitationFeedback"
+                class="form-feedback invitation-feedback"
+                :class="invitationFeedbackType"
+                :role="invitationFeedbackType === 'error' ? 'alert' : 'status'"
+              >
+                <i aria-hidden="true" />{{ invitationFeedback }}
+              </p>
+
+              <div class="invitation-table-wrap">
+                <table class="invitation-table">
+                  <thead>
+                    <tr>
+                      <th>邀请码</th>
+                      <th>创建时间</th>
+                      <th>使用时间</th>
+                      <th>使用用户</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-if="invitations.items.length === 0">
+                      <td colspan="4" class="invitation-empty">尚未创建邀请码</td>
+                    </tr>
+                    <tr v-for="invite in invitations.items" :key="invite.id">
+                      <td>
+                        <button class="invitation-code" type="button" title="点击复制" @click="copyInvitation(invite)">
+                          {{ invite.code }}
+                        </button>
+                      </td>
+                      <td>{{ formatInvitationDate(invite.createdAt) }}</td>
+                      <td>{{ formatInvitationDate(invite.usedAt) }}</td>
+                      <td>
+                        <span :class="{ unused: !invite.used }">{{ invite.usedByUsername || '未使用' }}</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+          </section>
         </main>
       </div>
     </div>
@@ -275,6 +449,7 @@ async function changePassword() {
 .settings-nav-group > button { position: relative; width: 100%; height: 46px; display: grid; grid-template-columns: 24px minmax(0, 1fr) 8px; align-items: center; gap: 10px; padding: 0 13px; color: var(--ink-600); text-align: left; clip-path: polygon(var(--bevel-sm)); transition: color 160ms ease, background 160ms ease, transform 160ms ease; }
 .settings-nav-group > button:hover { color: var(--pink-600); background: var(--pink-50); }
 .settings-nav-group > button.active { color: #fff; background: linear-gradient(135deg, var(--pink-500), var(--pink-600)); box-shadow: 0 9px 20px rgba(255,95,158,.24); }
+.settings-nav-group > button + button { margin-top: 4px; }
 .settings-nav-group strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .settings-tab-icon { width: 22px; height: 22px; display: block; }
 .nav-arrow { width: 6px; height: 6px; border-top: 1px solid currentColor; border-right: 1px solid currentColor; transform: rotate(45deg); }
@@ -294,6 +469,29 @@ async function changePassword() {
 .profile-fields dd { color: var(--ink-700); font-size: 14px; }
 .readonly-note { display: flex; align-items: center; gap: 9px; margin-top: 24px; color: var(--ink-400); font-size: 12px; }
 .readonly-note i { width: 7px; height: 7px; flex: 0 0 auto; background: var(--cyan-400); transform: rotate(45deg); }
+.invitation-state { min-height: 310px; display: grid; place-items: center; align-content: center; gap: 12px; color: var(--ink-400); }
+.invitation-state.error strong { color: rgba(255,95,158,.3); font-family: var(--font-mono); font-size: 44px; }
+.invitation-state p { font-size: 13px; }
+.invitation-state button { padding: 8px 15px; color: var(--pink-600); font-size: 12px; border: 1px solid var(--line); background: var(--pink-50); clip-path: polygon(var(--bevel-sm)); }
+.invitation-loader { width: 28px; height: 28px; border: 3px solid rgba(255,95,158,.16); border-top-color: var(--pink-500); border-radius: 50%; animation: settings-spin .8s linear infinite; }
+.invitation-actions { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 22px; padding: 18px 20px; border-left: 3px solid var(--cyan-400); background: rgba(247,252,255,.82); }
+.invitation-actions > div > strong { color: var(--ink-700); font-size: 14px; }
+.invitation-actions > div > p { margin-top: 3px; color: var(--ink-400); font-size: 12px; }
+.invitation-actions > button { min-width: 132px; height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; color: #fff; font-size: 13px; background: linear-gradient(135deg, var(--pink-500), var(--pink-600)); box-shadow: 0 10px 22px rgba(255,95,158,.22); clip-path: polygon(var(--bevel-sm)); }
+.invitation-actions > button:disabled { cursor: not-allowed; opacity: .48; box-shadow: none; }
+.invitation-rule { margin-top: 10px; color: var(--ink-400); font-size: 11px; line-height: 1.7; }
+.invitation-feedback { margin-top: 18px; }
+.invitation-table-wrap { margin-top: 22px; overflow: hidden; border: 1px solid rgba(85,119,217,.14); clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px)); }
+.invitation-table { width: 100%; border-collapse: collapse; table-layout: fixed; background: rgba(255,255,255,.78); }
+.invitation-table th { height: 42px; padding: 0 13px; color: var(--ink-400); font-size: 11px; text-align: left; background: rgba(244,248,253,.92); border-bottom: 1px solid rgba(85,119,217,.13); }
+.invitation-table th:first-child { width: 25%; }
+.invitation-table th:nth-child(2), .invitation-table th:nth-child(3) { width: 26%; }
+.invitation-table td { height: 54px; padding: 8px 13px; overflow: hidden; color: var(--ink-600); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; border-bottom: 1px solid rgba(85,119,217,.09); }
+.invitation-table tr:last-child td { border-bottom: 0; }
+.invitation-code { max-width: 100%; overflow: hidden; color: var(--pink-600); font-family: var(--font-mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.invitation-code:hover { color: var(--blue-500); }
+.invitation-table .unused { color: var(--ink-300); }
+.invitation-empty { height: 110px !important; color: var(--ink-400) !important; text-align: center; }
 .password-intro { margin-top: 28px; color: var(--ink-600); font-size: 14px; }
 .password-form { width: min(560px, 100%); display: grid; gap: 20px; margin-top: 27px; }
 .password-form label { display: grid; gap: 8px; }

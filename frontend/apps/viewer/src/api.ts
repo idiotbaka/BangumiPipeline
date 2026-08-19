@@ -2,6 +2,32 @@ export interface ViewerUser {
   id: number
   username: string
   createdAt: number
+  registrationSource: 'open' | 'system_invite' | 'user_invite' | string
+  invitedByUsername: string
+}
+
+export interface ViewerInvitation {
+  id: number
+  code: string
+  used: boolean
+  usedByUserId: number | null
+  usedByUsername: string
+  usedAt: number | null
+  createdAt: number
+}
+
+export interface ViewerInvitationAllowance {
+  eligibleTotal: number
+  createdCount: number
+  remainingCount: number
+  maximumTotal: number
+  canCreate: boolean
+  nextEligibleAt: number | null
+}
+
+export interface ViewerInvitationOverview {
+  items: ViewerInvitation[]
+  allowance: ViewerInvitationAllowance
 }
 
 export interface SiteSettings {
@@ -308,6 +334,12 @@ export const api = {
     request<void>('/api/auth/password', {
       method: 'PUT',
       body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
+    }),
+  invitations: () => request<{ invitations: ViewerInvitationOverview }>('/api/invitations'),
+  generateInvitation: () =>
+    request<{ invite: ViewerInvitation }>('/api/invitations', {
+      method: 'POST',
+      body: '{}',
     }),
   logout: () => request<void>('/api/auth/logout', { method: 'POST', body: '{}' }),
   home: () => request<{ home: ViewerHome }>('/api/home'),

@@ -1357,6 +1357,56 @@ VALUES (35, unixepoch());`); err != nil {
 			return fmt.Errorf("finish version 35 migration: %w", err)
 		}
 	}
+	applied, err = migrationApplied(ctx, db, 36)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		if err := ensureColumn(ctx, db, "viewer_invitation_codes", "created_by_user_id", "INTEGER REFERENCES viewer_users(id) ON DELETE SET NULL"); err != nil {
+			return err
+		}
+		if err := ensureColumn(ctx, db, "viewer_users", "registration_source", "TEXT NOT NULL DEFAULT 'open' CHECK (registration_source IN ('open', 'system_invite', 'user_invite'))"); err != nil {
+			return err
+		}
+		if err := ensureColumn(ctx, db, "viewer_users", "invited_by_user_id", "INTEGER REFERENCES viewer_users(id) ON DELETE SET NULL"); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `
+UPDATE viewer_users
+SET registration_source = CASE
+        WHEN (
+            SELECT invites.created_by_user_id
+            FROM viewer_invitation_codes AS invites
+            WHERE invites.used_by_user_id = viewer_users.id
+            ORDER BY invites.id
+            LIMIT 1
+        ) IS NULL THEN 'system_invite'
+        ELSE 'user_invite'
+    END,
+    invited_by_user_id = (
+        SELECT invites.created_by_user_id
+        FROM viewer_invitation_codes AS invites
+        WHERE invites.used_by_user_id = viewer_users.id
+        ORDER BY invites.id
+        LIMIT 1
+    )
+WHERE EXISTS (
+    SELECT 1
+    FROM viewer_invitation_codes AS invites
+    WHERE invites.used_by_user_id = viewer_users.id
+);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_invitation_codes_creator
+ON viewer_invitation_codes(created_by_user_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_viewer_users_inviter
+ON viewer_users(invited_by_user_id);
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+VALUES (36, unixepoch());`); err != nil {
+			return fmt.Errorf("finish version 36 migration: %w", err)
+		}
+	}
 	return nil
 }
 

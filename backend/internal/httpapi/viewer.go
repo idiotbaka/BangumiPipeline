@@ -45,6 +45,8 @@ func NewViewerHandler(authService *viewer.Service, pushService *viewer.PushServi
 	mux.HandleFunc("GET /api/auth/me", api.me)
 	mux.HandleFunc("PUT /api/auth/password", api.changePassword)
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
+	mux.HandleFunc("GET /api/invitations", api.userInvitationCodes)
+	mux.HandleFunc("POST /api/invitations", api.generateUserInvitationCode)
 	mux.HandleFunc("GET /api/app/releases/latest", api.latestAppRelease)
 	mux.HandleFunc("GET /api/app/releases/{releaseID}/download", api.downloadAppRelease)
 	mux.HandleFunc("GET /api/push/config", api.pushConfig)
@@ -183,6 +185,45 @@ func (a *ViewerAPI) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *ViewerAPI) userInvitationCodes(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
+		return
+	}
+	overview, err := a.auth.UserInvitationCodes(r.Context(), user.ID)
+	if err != nil {
+		a.viewerInvitationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invitations": overview})
+}
+
+func (a *ViewerAPI) generateUserInvitationCode(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticatedViewer(w, r)
+	if !ok {
+		return
+	}
+	invite, err := a.auth.GenerateUserInvitationCode(r.Context(), user.ID)
+	if err != nil {
+		a.viewerInvitationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"invite": invite})
+}
+
+func (a *ViewerAPI) viewerInvitationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, viewer.ErrInvitationQuotaReached):
+		writeError(w, http.StatusForbidden, "invitation_quota_reached", "当前没有可创建的邀请码额度")
+	case errors.Is(err, viewer.ErrUnauthorized):
+		writeError(w, http.StatusUnauthorized, "unauthorized", "请先登录")
+	case errors.Is(err, viewer.ErrUserDisabled):
+		writeError(w, http.StatusForbidden, "user_disabled", "账号已被禁用")
+	default:
+		a.internalError(w, err)
+	}
 }
 
 func (a *ViewerAPI) home(w http.ResponseWriter, r *http.Request) {

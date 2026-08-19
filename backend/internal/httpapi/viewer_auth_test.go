@@ -99,3 +99,100 @@ func TestViewerChangePasswordAPI(t *testing.T) {
 		t.Fatalf("expected new password login to succeed: %v", err)
 	}
 }
+
+func TestViewerInvitationAPIEnforcesRealtimeAllowance(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "viewer-invitation-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	auth := viewer.NewService(db, time.Hour)
+	if _, err := auth.UpdateSiteSettings(ctx, viewer.SiteSettingsUpdate{
+		SiteName: "Test Viewer", RegistrationEnabled: true, InviteRequired: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	user, session, err := auth.Register(ctx, "invite-user", "viewer-password", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registeredAt := time.Now().UTC().Add(-8 * 24 * time.Hour).Unix()
+	if _, err := db.ExecContext(ctx, "UPDATE viewer_users SET created_at = ? WHERE id = ?", registeredAt, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	server := httptest.NewServer(httpapi.NewViewerHandler(auth, nil, nil, logger, false, t.TempDir()))
+	defer server.Close()
+
+	requestInvitations := func(method, token string) *http.Response {
+		t.Helper()
+		request, err := http.NewRequest(method, server.URL+"/api/invitations", bytes.NewReader([]byte("{}")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	unauthorized := requestInvitations(http.MethodGet, "")
+	unauthorized.Body.Close()
+	if unauthorized.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized invitations status = %d", unauthorized.StatusCode)
+	}
+
+	list := requestInvitations(http.MethodGet, session.Token)
+	defer list.Body.Close()
+	if list.StatusCode != http.StatusOK {
+		t.Fatalf("invitation list status = %d", list.StatusCode)
+	}
+	var listPayload struct {
+		Invitations viewer.UserInvitationOverview `json:"invitations"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&listPayload); err != nil {
+		t.Fatal(err)
+	}
+	if listPayload.Invitations.Allowance.EligibleTotal != 1 || !listPayload.Invitations.Allowance.CanCreate {
+		t.Fatalf("unexpected realtime allowance: %+v", listPayload.Invitations.Allowance)
+	}
+
+	created := requestInvitations(http.MethodPost, session.Token)
+	defer created.Body.Close()
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("invitation create status = %d", created.StatusCode)
+	}
+	var createPayload struct {
+		Invite viewer.InvitationCode `json:"invite"`
+	}
+	if err := json.NewDecoder(created.Body).Decode(&createPayload); err != nil {
+		t.Fatal(err)
+	}
+	if createPayload.Invite.Code == "" || createPayload.Invite.CreatedByUserID == nil || *createPayload.Invite.CreatedByUserID != user.ID {
+		t.Fatalf("unexpected created invitation: %+v", createPayload.Invite)
+	}
+
+	exhausted := requestInvitations(http.MethodPost, session.Token)
+	defer exhausted.Body.Close()
+	if exhausted.StatusCode != http.StatusForbidden {
+		t.Fatalf("exhausted invitation status = %d", exhausted.StatusCode)
+	}
+	var errorPayload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(exhausted.Body).Decode(&errorPayload); err != nil {
+		t.Fatal(err)
+	}
+	if errorPayload.Error.Code != "invitation_quota_reached" {
+		t.Fatalf("unexpected quota error code %q", errorPayload.Error.Code)
+	}
+}

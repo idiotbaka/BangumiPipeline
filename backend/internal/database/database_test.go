@@ -269,6 +269,63 @@ SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 26)`).Scan(&applie
 	}
 }
 
+func TestVersion36MigrationBackfillsViewerInvitationOrigins(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "version35.db")
+	db, err := database.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO viewer_users(id, username, password_hash, registration_source, created_at, updated_at)
+VALUES
+    (1, 'creator', 'hash', 'open', 1, 1),
+    (2, 'system-invited', 'hash', 'open', 2, 2),
+    (3, 'user-invited', 'hash', 'open', 3, 3);
+
+INSERT INTO viewer_invitation_codes(code, used_by_user_id, used_at, created_at, created_by_user_id)
+VALUES
+    ('SYSTEM-CODE', 2, 10, 5, NULL),
+    ('USER-CODE', 3, 11, 6, 1);
+
+DELETE FROM schema_migrations WHERE version = 36;`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = database.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var systemSource string
+	var systemInviter sql.NullInt64
+	if err := db.QueryRowContext(ctx, `
+SELECT registration_source, invited_by_user_id
+FROM viewer_users WHERE id = 2`).Scan(&systemSource, &systemInviter); err != nil {
+		t.Fatal(err)
+	}
+	if systemSource != "system_invite" || systemInviter.Valid {
+		t.Fatalf("unexpected system invitation origin: source=%q inviter=%v", systemSource, systemInviter)
+	}
+
+	var userSource string
+	var userInviter sql.NullInt64
+	if err := db.QueryRowContext(ctx, `
+SELECT registration_source, invited_by_user_id
+FROM viewer_users WHERE id = 3`).Scan(&userSource, &userInviter); err != nil {
+		t.Fatal(err)
+	}
+	if userSource != "user_invite" || !userInviter.Valid || userInviter.Int64 != 1 {
+		t.Fatalf("unexpected user invitation origin: source=%q inviter=%v", userSource, userInviter)
+	}
+}
+
 func TestVersion28MigrationAddsOpeningSkipTablesAndTask(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

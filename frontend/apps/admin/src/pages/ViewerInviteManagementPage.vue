@@ -89,6 +89,11 @@ function formatDate(value: number | null) {
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column min-width="170" label="生成用户">
+          <template #default="{ row }">
+            <span>{{ row.createdByUsername || '系统管理员' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column min-width="180" label="使用用户">
           <template #default="{ row }">
             <span>{{ row.usedByUsername || '-' }}</span>

@@ -160,6 +160,8 @@ export interface ViewerInvite {
   usedByUsername: string
   usedAt: number | null
   createdAt: number
+  createdByUserId: number | null
+  createdByUsername: string
 }
 
 export interface ViewerInvitePage {

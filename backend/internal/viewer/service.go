@@ -36,15 +36,25 @@ var (
 	ErrInviteRequired         = errors.New("invite code is required")
 	ErrInvalidInviteCode      = errors.New("invalid invite code")
 	ErrInviteUsed             = errors.New("invite code already used")
+	ErrInvitationQuotaReached = errors.New("viewer invitation quota reached")
 )
 
 const DefaultSiteName = "BangumiPipeline Viewer"
 const inviteAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+const (
+	RegistrationSourceOpen         = "open"
+	RegistrationSourceSystemInvite = "system_invite"
+	RegistrationSourceUserInvite   = "user_invite"
+	MaxUserInvitationCodes         = 10
+)
+
 type User struct {
-	ID        int64  `json:"id"`
-	Username  string `json:"username"`
-	CreatedAt int64  `json:"createdAt"`
+	ID                 int64  `json:"id"`
+	Username           string `json:"username"`
+	CreatedAt          int64  `json:"createdAt"`
+	RegistrationSource string `json:"registrationSource"`
+	InvitedByUsername  string `json:"invitedByUsername"`
 }
 
 type ManagedUser struct {
@@ -85,13 +95,15 @@ type SiteSettingsUpdate struct {
 }
 
 type InvitationCode struct {
-	ID             int64  `json:"id"`
-	Code           string `json:"code"`
-	Used           bool   `json:"used"`
-	UsedByUserID   *int64 `json:"usedByUserId"`
-	UsedByUsername string `json:"usedByUsername"`
-	UsedAt         *int64 `json:"usedAt"`
-	CreatedAt      int64  `json:"createdAt"`
+	ID                int64  `json:"id"`
+	Code              string `json:"code"`
+	Used              bool   `json:"used"`
+	UsedByUserID      *int64 `json:"usedByUserId"`
+	UsedByUsername    string `json:"usedByUsername"`
+	UsedAt            *int64 `json:"usedAt"`
+	CreatedAt         int64  `json:"createdAt"`
+	CreatedByUserID   *int64 `json:"createdByUserId"`
+	CreatedByUsername string `json:"createdByUsername"`
 }
 
 type InvitationCodePage struct {
@@ -99,6 +111,20 @@ type InvitationCodePage struct {
 	Total    int              `json:"total"`
 	Page     int              `json:"page"`
 	PageSize int              `json:"pageSize"`
+}
+
+type UserInvitationAllowance struct {
+	EligibleTotal  int    `json:"eligibleTotal"`
+	CreatedCount   int    `json:"createdCount"`
+	RemainingCount int    `json:"remainingCount"`
+	MaximumTotal   int    `json:"maximumTotal"`
+	CanCreate      bool   `json:"canCreate"`
+	NextEligibleAt *int64 `json:"nextEligibleAt"`
+}
+
+type UserInvitationOverview struct {
+	Items     []InvitationCode        `json:"items"`
+	Allowance UserInvitationAllowance `json:"allowance"`
 }
 
 type Service struct {
@@ -160,12 +186,16 @@ WHERE id = 1`).Scan(&registrationEnabled, &inviteRequired); err != nil {
 
 	now := s.now().UTC().Unix()
 	var inviteID int64
+	registrationSource := RegistrationSourceOpen
+	var invitedByUserID sql.NullInt64
+	var invitedByUsername sql.NullString
 	if inviteRequired {
 		var usedByUserID sql.NullInt64
 		err := tx.QueryRowContext(ctx, `
-SELECT id, used_by_user_id
-FROM viewer_invitation_codes
-WHERE code = ?`, inviteCode).Scan(&inviteID, &usedByUserID)
+SELECT invites.id, invites.used_by_user_id, invites.created_by_user_id, creators.username
+FROM viewer_invitation_codes AS invites
+LEFT JOIN viewer_users AS creators ON creators.id = invites.created_by_user_id
+WHERE invites.code = ?`, inviteCode).Scan(&inviteID, &usedByUserID, &invitedByUserID, &invitedByUsername)
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, Session{}, ErrInvalidInviteCode
 		}
@@ -175,10 +205,15 @@ WHERE code = ?`, inviteCode).Scan(&inviteID, &usedByUserID)
 		if usedByUserID.Valid {
 			return User{}, Session{}, ErrInviteUsed
 		}
+		if invitedByUserID.Valid {
+			registrationSource = RegistrationSourceUserInvite
+		} else {
+			registrationSource = RegistrationSourceSystemInvite
+		}
 	}
 	result, err := tx.ExecContext(ctx,
-		"INSERT INTO viewer_users(username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)",
-		username, string(passwordHash), now, now,
+		"INSERT INTO viewer_users(username, password_hash, registration_source, invited_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+		username, string(passwordHash), registrationSource, invitedByUserID, now, now,
 	)
 	if err != nil {
 		return User{}, Session{}, fmt.Errorf("create viewer user: %w", err)
@@ -212,7 +247,10 @@ WHERE id = ? AND used_by_user_id IS NULL`, userID, now, inviteID)
 	if err := tx.Commit(); err != nil {
 		return User{}, Session{}, err
 	}
-	return User{ID: userID, Username: username, CreatedAt: now}, session, nil
+	return User{
+		ID: userID, Username: username, CreatedAt: now,
+		RegistrationSource: registrationSource, InvitedByUsername: invitedByUsername.String,
+	}, session, nil
 }
 
 func (s *Service) Login(ctx context.Context, username, password string) (User, Session, error) {
@@ -220,10 +258,14 @@ func (s *Service) Login(ctx context.Context, username, password string) (User, S
 	var user User
 	var passwordHash string
 	var disabledAt sql.NullInt64
-	err := s.db.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, disabled_at, created_at FROM viewer_users WHERE username = ?",
-		username,
-	).Scan(&user.ID, &user.Username, &passwordHash, &disabledAt, &user.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `
+SELECT users.id, users.username, users.password_hash, users.disabled_at, users.created_at,
+       users.registration_source, COALESCE(inviters.username, '')
+FROM viewer_users AS users
+LEFT JOIN viewer_users AS inviters ON inviters.id = users.invited_by_user_id
+WHERE users.username = ?`, username).
+		Scan(&user.ID, &user.Username, &passwordHash, &disabledAt, &user.CreatedAt,
+			&user.RegistrationSource, &user.InvitedByUsername)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, Session{}, ErrInvalidCredentials
 	}
@@ -308,13 +350,15 @@ func (s *Service) Authenticate(ctx context.Context, token string) (User, error) 
 	tokenHash := sha256.Sum256([]byte(token))
 	var user User
 	err := s.db.QueryRowContext(ctx, `
-SELECT viewer_users.id, viewer_users.username, viewer_users.created_at
+SELECT viewer_users.id, viewer_users.username, viewer_users.created_at,
+       viewer_users.registration_source, COALESCE(inviters.username, '')
 FROM viewer_sessions
 JOIN viewer_users ON viewer_users.id = viewer_sessions.user_id
+LEFT JOIN viewer_users AS inviters ON inviters.id = viewer_users.invited_by_user_id
 WHERE viewer_sessions.token_hash = ?
   AND viewer_sessions.expires_at > ?
   AND viewer_users.disabled_at IS NULL`, tokenHash[:], s.now().UTC().Unix()).
-		Scan(&user.ID, &user.Username, &user.CreatedAt)
+		Scan(&user.ID, &user.Username, &user.CreatedAt, &user.RegistrationSource, &user.InvitedByUsername)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrUnauthorized
 	}
@@ -682,9 +726,11 @@ func (s *Service) ListInvitationCodes(ctx context.Context, page, pageSize int) (
 		return InvitationCodePage{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT invites.id, invites.code, invites.used_by_user_id, users.username, invites.used_at, invites.created_at
+SELECT invites.id, invites.code, invites.used_by_user_id, used_users.username, invites.used_at, invites.created_at,
+       invites.created_by_user_id, creator_users.username
 FROM viewer_invitation_codes AS invites
-LEFT JOIN viewer_users AS users ON users.id = invites.used_by_user_id
+LEFT JOIN viewer_users AS used_users ON used_users.id = invites.used_by_user_id
+LEFT JOIN viewer_users AS creator_users ON creator_users.id = invites.created_by_user_id
 ORDER BY invites.created_at DESC, invites.id DESC
 LIMIT ? OFFSET ?`, pageSize, (page-1)*pageSize)
 	if err != nil {
@@ -735,9 +781,11 @@ VALUES (?, ?)`, code, now)
 
 func (s *Service) InvitationCode(ctx context.Context, id int64) (InvitationCode, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT invites.id, invites.code, invites.used_by_user_id, users.username, invites.used_at, invites.created_at
+SELECT invites.id, invites.code, invites.used_by_user_id, used_users.username, invites.used_at, invites.created_at,
+       invites.created_by_user_id, creator_users.username
 FROM viewer_invitation_codes AS invites
-LEFT JOIN viewer_users AS users ON users.id = invites.used_by_user_id
+LEFT JOIN viewer_users AS used_users ON used_users.id = invites.used_by_user_id
+LEFT JOIN viewer_users AS creator_users ON creator_users.id = invites.created_by_user_id
 WHERE invites.id = ?`, id)
 	if err != nil {
 		return InvitationCode{}, err
@@ -832,7 +880,12 @@ func scanInvitationCodeRows(scanner invitationCodeScanner) (InvitationCode, erro
 	var usedByUserID sql.NullInt64
 	var usedByUsername sql.NullString
 	var usedAt sql.NullInt64
-	if err := scanner.Scan(&code.ID, &code.Code, &usedByUserID, &usedByUsername, &usedAt, &code.CreatedAt); err != nil {
+	var createdByUserID sql.NullInt64
+	var createdByUsername sql.NullString
+	if err := scanner.Scan(
+		&code.ID, &code.Code, &usedByUserID, &usedByUsername, &usedAt, &code.CreatedAt,
+		&createdByUserID, &createdByUsername,
+	); err != nil {
 		return InvitationCode{}, err
 	}
 	if usedByUserID.Valid {
@@ -845,6 +898,12 @@ func scanInvitationCodeRows(scanner invitationCodeScanner) (InvitationCode, erro
 	if usedAt.Valid {
 		code.Used = true
 		code.UsedAt = ptrInt64(usedAt.Int64)
+	}
+	if createdByUserID.Valid {
+		code.CreatedByUserID = ptrInt64(createdByUserID.Int64)
+	}
+	if createdByUsername.Valid {
+		code.CreatedByUsername = createdByUsername.String
 	}
 	return code, nil
 }
