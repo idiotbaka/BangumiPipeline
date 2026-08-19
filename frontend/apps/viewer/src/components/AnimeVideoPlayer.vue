@@ -4,6 +4,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import fullscreenIcon from '../assets/player-icons/fullscreen.svg?raw'
 import fullscreenExitIcon from '../assets/player-icons/fullscreen-exit.svg?raw'
 import episodePickerIcon from '../assets/player-icons/episode-picker.svg?raw'
+import pictureInPictureIcon from '../assets/player-icons/picture-in-picture.svg?raw'
 import volumeIcon from '../assets/player-icons/volume.svg?raw'
 import volumeMutedIcon from '../assets/player-icons/volume-muted.svg?raw'
 import webFullscreenIcon from '../assets/player-icons/web-fullscreen.svg?raw'
@@ -65,6 +66,7 @@ const playbackRate = ref(1)
 const errorMessage = ref('')
 const webFullscreen = ref(false)
 const fullscreenActive = ref(false)
+const pictureInPictureActive = ref(false)
 const timelineBubbleVisible = ref(false)
 const timelineBubblePercent = ref(0)
 const timelineBubbleTime = ref(0)
@@ -143,6 +145,15 @@ const webFullscreenIconSrc = computed(() => webFullscreen.value ? webFullscreenE
 const webFullscreenLabel = computed(() => webFullscreen.value ? '退出网页全屏' : '网页全屏')
 const fullscreenIconSrc = computed(() => fullscreenActive.value ? fullscreenExitIcon : fullscreenIcon)
 const fullscreenLabel = computed(() => fullscreenActive.value ? '退出全屏' : '全屏')
+const pictureInPictureSupported = computed(() => (
+  typeof document !== 'undefined' &&
+  document.pictureInPictureEnabled &&
+  typeof video.value?.requestPictureInPicture === 'function'
+))
+const pictureInPictureLabel = computed(() => {
+  if (!pictureInPictureSupported.value) return '当前浏览器不支持画中画'
+  return pictureInPictureActive.value ? '退出画中画' : '画中画'
+})
 const hasEpisodes = computed(() => props.episodes.length > 0)
 const contextMenuStyle = computed(() => ({
   left: `${contextMenuPosition.value.left}px`,
@@ -185,6 +196,7 @@ const debugRows = computed(() => {
 watch(
   () => props.src,
   async () => {
+    await exitPictureInPicture()
     playing.value = false
     buffering.value = false
     currentTime.value = 0
@@ -234,6 +246,7 @@ onBeforeUnmount(() => {
   stopControlsTimer()
   stopVolumeBubbleTimer()
   stopCopyFeedbackTimer()
+  void exitPictureInPicture()
   exitWebFullscreen()
 })
 
@@ -493,12 +506,39 @@ function skipOP() {
 
 function changeVolume(event: Event) {
   const value = Number((event.target as HTMLInputElement).value)
-  if (!video.value || !Number.isFinite(value)) return
-  video.value.volume = value
-  video.value.muted = value === 0
-  volume.value = value
-  muted.value = value === 0
+  if (!Number.isFinite(value)) return
+  setPlayerVolume(value)
+}
+
+function setPlayerVolume(value: number) {
+  const element = video.value
+  if (!element) return
+  const nextVolume = Math.round(Math.max(0, Math.min(1, value)) * 100) / 100
+  element.volume = nextVolume
+  element.muted = nextVolume === 0
+  volume.value = nextVolume
+  muted.value = nextVolume === 0
   showVolumeBubble()
+}
+
+function adjustVolume(delta: number) {
+  const element = video.value
+  if (!element) return
+  const currentVolume = element.muted ? 0 : element.volume
+  setPlayerVolume(currentVolume + delta)
+  showControls()
+  scheduleControlsHide()
+}
+
+function seekBy(seconds: number) {
+  const element = video.value
+  if (!element || duration.value <= 0) return
+  const target = Math.max(0, Math.min(duration.value, element.currentTime + seconds))
+  element.currentTime = target
+  currentTime.value = target
+  updateBuffered()
+  showControls()
+  scheduleControlsHide()
 }
 
 function toggleMute() {
@@ -534,6 +574,50 @@ async function toggleFullscreen() {
   } finally {
     handleFullscreenChange()
   }
+}
+
+async function togglePictureInPicture() {
+  const element = video.value
+  if (!element || !canControlPlayback.value || !pictureInPictureSupported.value) {
+    showCopyFeedback('当前浏览器不支持画中画')
+    return
+  }
+  try {
+    if (document.pictureInPictureElement === element) {
+      await document.exitPictureInPicture()
+    } else {
+      await element.requestPictureInPicture()
+    }
+  } catch {
+    showCopyFeedback('无法切换画中画，请确认视频已经开始播放')
+  } finally {
+    pictureInPictureActive.value = document.pictureInPictureElement === element
+    showControls()
+    scheduleControlsHide()
+  }
+}
+
+async function exitPictureInPicture() {
+  const element = video.value
+  if (!element || typeof document === 'undefined' || document.pictureInPictureElement !== element) {
+    pictureInPictureActive.value = false
+    return
+  }
+  try {
+    await document.exitPictureInPicture()
+  } catch {
+    // The browser also exits picture-in-picture when the media element is removed.
+  } finally {
+    pictureInPictureActive.value = false
+  }
+}
+
+function handleEnterPictureInPicture() {
+  pictureInPictureActive.value = true
+}
+
+function handleLeavePictureInPicture() {
+  pictureInPictureActive.value = false
 }
 
 async function toggleEpisodePicker() {
@@ -682,6 +766,40 @@ function handleWindowKeydown(event: KeyboardEvent) {
     return
   }
   if (event.key === 'Escape' && webFullscreen.value) exitWebFullscreen()
+  if (
+    event.defaultPrevented ||
+    !playing.value ||
+    !canControlPlayback.value ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    isTextEditingTarget(event.target)
+  ) return
+
+  switch (event.key) {
+  case 'ArrowLeft':
+    seekBy(-5)
+    break
+  case 'ArrowRight':
+    seekBy(5)
+    break
+  case 'ArrowUp':
+    adjustVolume(0.1)
+    break
+  case 'ArrowDown':
+    adjustVolume(-0.1)
+    break
+  default:
+    return
+  }
+  event.preventDefault()
+}
+
+function isTextEditingTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false
+  const field = target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')
+  if (field instanceof HTMLInputElement && field.type === 'range') return false
+  return field !== null
 }
 
 function formatTime(value: number) {
@@ -838,6 +956,8 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
       @progress="updateBuffered"
       @seeking="updateBuffered"
       @seeked="updateBuffered"
+      @enterpictureinpicture="handleEnterPictureInPicture"
+      @leavepictureinpicture="handleLeavePictureInPicture"
       @error="handleError"
     />
 
@@ -1010,6 +1130,17 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
           />
         </div>
         <button class="text-control rate" type="button" @click="cyclePlaybackRate">{{ playbackRate }}×</button>
+        <button
+          class="icon-control picture-in-picture-control"
+          :class="{ active: pictureInPictureActive }"
+          type="button"
+          :disabled="!pictureInPictureSupported || !canControlPlayback"
+          :aria-label="pictureInPictureLabel"
+          :title="pictureInPictureLabel"
+          @click="togglePictureInPicture"
+        >
+          <i aria-hidden="true" v-html="pictureInPictureIcon" />
+        </button>
         <button
           class="icon-control web-fullscreen-control"
           :class="{ active: webFullscreen }"
