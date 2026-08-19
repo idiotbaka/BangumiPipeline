@@ -655,7 +655,7 @@ function openContextMenu(event: MouseEvent) {
   const rect = element.getBoundingClientRect()
   const margin = 16
   const menuWidth = Math.min(248, Math.max(0, rect.width - margin * 2))
-  const menuHeight = 116
+  const menuHeight = 180
   contextMenuPosition.value = {
     left: Math.round(clampMenuPosition(event.clientX - rect.left, margin, rect.width - menuWidth - margin)),
     top: Math.round(clampMenuPosition(event.clientY - rect.top, margin, rect.height - menuHeight - margin)),
@@ -688,6 +688,51 @@ async function copyVideoLink() {
     showCopyFeedback('视频链接已复制')
   } catch {
     showCopyFeedback('复制失败，请检查浏览器权限')
+  }
+}
+
+async function copyCurrentFrame() {
+  closeContextMenu()
+  const element = video.value
+  if (!element || !canControlPlayback.value || element.videoWidth < 1 || element.videoHeight < 1) {
+    showCopyFeedback('当前画面尚未准备完成')
+    return
+  }
+  if (!window.isSecureContext) {
+    showCopyFeedback('截图失败：图片剪贴板需要 HTTPS')
+    return
+  }
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+    showCopyFeedback('当前浏览器不支持复制图片')
+    return
+  }
+
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = element.videoWidth
+    canvas.height = element.videoHeight
+    const context = canvas.getContext('2d', { alpha: false })
+    if (!context) throw new Error('无法创建截图画布')
+    context.drawImage(element, 0, 0, canvas.width, canvas.height)
+
+    const pngBlob = new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('当前画面无法编码为 PNG'))
+      }, 'image/png')
+    })
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
+    showCopyFeedback('保存成功')
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'SecurityError') {
+      showCopyFeedback('截图失败：当前视频不允许读取画面')
+      return
+    }
+    if (error instanceof DOMException && error.name === 'NotAllowedError') {
+      showCopyFeedback('截图失败，请允许访问剪贴板')
+      return
+    }
+    showCopyFeedback('截图失败，请稍后重试')
   }
 }
 
@@ -1049,6 +1094,10 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
         <button class="context-menu-action" type="button" role="menuitem" @click="copyVideoLink">
           <i aria-hidden="true" />
           <span><strong>复制视频链接</strong><small>复制当前页面地址</small></span>
+        </button>
+        <button class="context-menu-action" type="button" role="menuitem" @click="copyCurrentFrame">
+          <i aria-hidden="true" />
+          <span><strong>截图当前帧到剪贴板</strong><small>以原始分辨率复制 PNG 画面</small></span>
         </button>
       </aside>
     </Transition>
