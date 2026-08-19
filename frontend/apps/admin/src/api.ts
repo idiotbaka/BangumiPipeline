@@ -230,6 +230,12 @@ export interface DownloadRetryResult {
   action: DownloadRetryAction
 }
 
+export interface DownloadCancelResult {
+  jobId: number
+  subscriptionItemId: number
+  qbitTaskDeleted: boolean
+}
+
 export type MediaJobStatus = 'pending' | 'transcoding' | 'completed' | 'failed'
 
 export interface MediaJob {
@@ -837,6 +843,11 @@ export const api = {
   },
   retryDownloadJob: (jobId: number) =>
     request<{ result: DownloadRetryResult }>(`/api/download/jobs/${jobId}/retry`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  cancelDownloadJob: (jobId: number) =>
+    request<{ result: DownloadCancelResult }>(`/api/download/jobs/${jobId}/cancel`, {
       method: 'POST',
       body: '{}',
     }),

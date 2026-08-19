@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { api, type DownloadJob, type DownloadRetryAction, type DownloadStatus } from '../api'
 
@@ -11,6 +11,7 @@ const pageSize = 50
 const loading = ref(true)
 const status = ref<DownloadStatus>('downloading')
 const retryingId = ref<number | null>(null)
+const cancelingId = ref<number | null>(null)
 let pollingTimer: ReturnType<typeof setInterval> | undefined
 
 const filters: Array<{ label: string; value: DownloadStatus }> = [
@@ -116,6 +117,33 @@ async function retryJob(job: DownloadJob) {
   }
 }
 
+async function cancelJob(job: DownloadJob) {
+  try {
+    await ElMessageBox.confirm(
+      `撤销「${job.animeName} ${formatEpisode(job)}」的下载后，qBittorrent 中的任务及已下载文件会被删除，该订阅项将回退到待绑定。是否继续？`,
+      '确认撤销下载',
+      {
+        confirmButtonText: '确认撤销',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  cancelingId.value = job.id
+  try {
+    const { result } = await api.cancelDownloadJob(job.id)
+    ElMessage.success(result.qbitTaskDeleted ? '下载任务已删除，订阅项已回退到待绑定' : 'qBittorrent 中未找到任务，订阅项已回退到待绑定')
+    await load(false)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '撤销下载任务失败')
+  } finally {
+    cancelingId.value = null
+  }
+}
+
 onMounted(async () => {
   await load()
   pollingTimer = window.setInterval(() => load(false), 5000)
@@ -198,9 +226,28 @@ onBeforeUnmount(() => {
           <span v-else class="muted-text">—</span>
         </template>
       </el-table-column>
-      <el-table-column v-if="status === 'failed'" label="操作" width="104" fixed="right">
+      <el-table-column v-if="status === 'downloading' || status === 'failed'" label="操作" :width="status === 'failed' ? 184 : 104" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" type="primary" plain :icon="Refresh" :loading="retryingId === row.id" @click="retryJob(row)">重试</el-button>
+          <div class="download-actions">
+            <el-button
+              v-if="status === 'failed'"
+              size="small"
+              type="primary"
+              plain
+              :icon="Refresh"
+              :loading="retryingId === row.id"
+              :disabled="cancelingId === row.id"
+              @click="retryJob(row)"
+            >重试</el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :loading="cancelingId === row.id"
+              :disabled="retryingId === row.id"
+              @click="cancelJob(row)"
+            >撤销下载</el-button>
+          </div>
         </template>
       </el-table-column>
     </el-table>

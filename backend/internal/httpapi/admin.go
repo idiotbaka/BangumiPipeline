@@ -119,6 +119,7 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/actors/{actorID}/image", api.actorImage)
 	mux.HandleFunc("GET /api/download/jobs", api.listDownloadJobs)
 	mux.HandleFunc("POST /api/download/jobs/{jobID}/retry", api.retryDownloadJob)
+	mux.HandleFunc("POST /api/download/jobs/{jobID}/cancel", api.cancelDownloadJob)
 	mux.HandleFunc("GET /api/media/jobs", api.listMediaJobs)
 	mux.HandleFunc("POST /api/media/jobs/{jobID}/retry", api.retryMediaJob)
 	mux.HandleFunc("GET /api/subscription/items", api.listSubscriptionItems)
@@ -1650,6 +1651,31 @@ func (a *AdminAPI) retryDownloadJob(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "download_job_not_found", "下载任务不存在")
 		case errors.Is(err, download.ErrRetryNotAllowed):
 			writeError(w, http.StatusConflict, "download_retry_not_allowed", "只有下载失败的任务可以重试")
+		case errors.Is(err, download.ErrQBitUnavailable):
+			writeError(w, http.StatusBadGateway, "download_qbit_failed", "qBittorrent 操作失败："+err.Error())
+		default:
+			a.internalError(w, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result})
+}
+
+func (a *AdminAPI) cancelDownloadJob(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	id, ok := parsePathID(w, r.PathValue("jobID"))
+	if !ok {
+		return
+	}
+	result, err := a.download.CancelJob(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, download.ErrDownloadJobNotFound):
+			writeError(w, http.StatusNotFound, "download_job_not_found", "下载任务不存在")
+		case errors.Is(err, download.ErrCancelNotAllowed):
+			writeError(w, http.StatusConflict, "download_cancel_not_allowed", "只有下载中或下载失败且尚未进入媒体处理的任务可以撤销")
 		case errors.Is(err, download.ErrQBitUnavailable):
 			writeError(w, http.StatusBadGateway, "download_qbit_failed", "qBittorrent 操作失败："+err.Error())
 		default:

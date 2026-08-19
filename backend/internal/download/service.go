@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -33,6 +34,7 @@ var (
 	ErrInvalidStatus       = errors.New("invalid download status")
 	ErrDownloadJobNotFound = errors.New("download job not found")
 	ErrRetryNotAllowed     = errors.New("download job retry not allowed")
+	ErrCancelNotAllowed    = errors.New("download job cancel not allowed")
 	ErrQBitUnavailable     = errors.New("qBittorrent unavailable")
 )
 
@@ -50,6 +52,7 @@ type Service struct {
 	logger      *slog.Logger
 	downloadDir string
 	now         func() time.Time
+	activeMu    sync.Mutex
 }
 
 type ConnectionTestResult struct {
@@ -66,6 +69,12 @@ type JobPage struct {
 type RetryResult struct {
 	Job    Job    `json:"job"`
 	Action string `json:"action"`
+}
+
+type CancelResult struct {
+	JobID              int64 `json:"jobId"`
+	SubscriptionItemID int64 `json:"subscriptionItemId"`
+	QBitTaskDeleted    bool  `json:"qbitTaskDeleted"`
 }
 
 type Job struct {
@@ -114,6 +123,13 @@ type activeJob struct {
 	StartedAt          *int64
 }
 
+type cancelableJob struct {
+	activeJob
+	SourceType    string
+	BindingStatus string
+	HasMediaJob   bool
+}
+
 func NewService(db database.Executor, settings SettingsProvider, logger *slog.Logger, config Config) *Service {
 	downloadDir := strings.TrimSpace(config.DownloadDir)
 	if downloadDir == "" {
@@ -142,7 +158,9 @@ func (s *Service) Execute(ctx context.Context) error {
 		return fmt.Errorf("连接 qBittorrent: %w", err)
 	}
 
+	s.activeMu.Lock()
 	synced, err := s.syncActiveJobs(ctx, client, settings)
+	s.activeMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("同步 qBittorrent 下载状态: %w", err)
 	}
@@ -249,6 +267,9 @@ func (s *Service) CountJobsByStatus(ctx context.Context, status string) (int, er
 }
 
 func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (RetryResult, error) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+
 	job, err := s.failedJob(ctx, jobID)
 	if err != nil {
 		return RetryResult{}, err
@@ -302,6 +323,101 @@ func (s *Service) RetryFailedJob(ctx context.Context, jobID int64) (RetryResult,
 	}
 	s.logger.Info("qBittorrent 失败任务已删除并重置为待下载", "source", "download", "job_id", jobID, "qbit_hash", torrent.Hash)
 	return RetryResult{Job: updated, Action: "deleted_reset"}, nil
+}
+
+func (s *Service) CancelJob(ctx context.Context, jobID int64) (CancelResult, error) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+
+	job, err := s.cancelableJob(ctx, jobID)
+	if err != nil {
+		return CancelResult{}, err
+	}
+
+	settings, err := s.settings.GetDownloadSettings(ctx)
+	if err != nil {
+		return CancelResult{}, err
+	}
+	client, err := newQBitClient(settings)
+	if err != nil {
+		return CancelResult{}, err
+	}
+	if err := client.login(ctx, settings.Username, settings.Password); err != nil {
+		return CancelResult{}, fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
+	}
+	torrents, err := client.torrents(ctx)
+	if err != nil {
+		return CancelResult{}, fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
+	}
+
+	job.QBitSavePath = s.qBitSavePath(job.SavePath, settings.QBitDownloadDir)
+	torrent, exists := matchTorrent(job.activeJob, torrents, torrentsByHash(torrents))
+	if exists {
+		if err := client.deleteTorrents(ctx, []string{torrent.Hash}, true); err != nil {
+			return CancelResult{}, fmt.Errorf("%w: %w", ErrQBitUnavailable, err)
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CancelResult{}, err
+	}
+	defer tx.Rollback()
+
+	deleted, err := tx.ExecContext(ctx, `
+DELETE FROM download_jobs
+WHERE id = ?
+  AND subscription_item_id = ?
+  AND status IN (?, ?)
+  AND COALESCE(NULLIF(source_type, ''), 'download') = 'download'
+  AND NOT EXISTS (
+      SELECT 1 FROM media_jobs WHERE media_jobs.download_job_id = download_jobs.id
+  )`, job.ID, job.SubscriptionItemID, StatusDownloading, StatusFailed)
+	if err != nil {
+		return CancelResult{}, err
+	}
+	deletedRows, err := deleted.RowsAffected()
+	if err != nil {
+		return CancelResult{}, err
+	}
+	if deletedRows == 0 {
+		return CancelResult{}, ErrCancelNotAllowed
+	}
+
+	updated, err := tx.ExecContext(ctx, `
+UPDATE subscription_items
+SET binding_status = 'pending',
+    binding_note = '下载已手动撤销，等待重新绑定',
+    bound_bangumi_id = NULL,
+    bound_anime_name = '',
+    bound_season_number = NULL,
+    bound_episode_type = '',
+    bound_episode_number = '',
+    bound_at = NULL,
+    ignored_at = NULL,
+    updated_at = ?
+WHERE id = ? AND binding_status = 'bound'`, s.now().UTC().Unix(), job.SubscriptionItemID)
+	if err != nil {
+		return CancelResult{}, err
+	}
+	updatedRows, err := updated.RowsAffected()
+	if err != nil {
+		return CancelResult{}, err
+	}
+	if updatedRows == 0 {
+		return CancelResult{}, ErrCancelNotAllowed
+	}
+	if err := tx.Commit(); err != nil {
+		return CancelResult{}, err
+	}
+
+	tag := tagForItem(job.SubscriptionItemID)
+	if err := client.deleteTags(ctx, []string{tag}); err != nil {
+		s.logger.Warn("撤销下载后清理 qBittorrent 单集标签失败", "source", "download", "job_id", job.ID, "tag", tag, "error", err)
+	}
+	s.logger.Info("下载任务已撤销并回退订阅绑定", "source", "download", "job_id", job.ID,
+		"subscription_item_id", job.SubscriptionItemID, "qbit_task_deleted", exists)
+	return CancelResult{JobID: job.ID, SubscriptionItemID: job.SubscriptionItemID, QBitTaskDeleted: exists}, nil
 }
 
 func (s *Service) CleanupCompletedQBitTask(ctx context.Context, jobID int64) error {
@@ -401,6 +517,33 @@ WHERE id IN (`+strings.Join(placeholders, ",")+`)
 		jobs = append(jobs, job)
 	}
 	return jobs, rows.Err()
+}
+
+func (s *Service) cancelableJob(ctx context.Context, jobID int64) (cancelableJob, error) {
+	var job cancelableJob
+	var hasMediaJob int
+	err := s.db.QueryRowContext(ctx, `
+SELECT dj.id, dj.subscription_item_id, dj.qbit_hash, dj.save_path, dj.status,
+       COALESCE(NULLIF(dj.source_type, ''), 'download'), si.binding_status,
+       EXISTS(SELECT 1 FROM media_jobs mj WHERE mj.download_job_id = dj.id)
+FROM download_jobs dj
+JOIN subscription_items si ON si.id = dj.subscription_item_id
+WHERE dj.id = ?`, jobID).Scan(
+		&job.ID, &job.SubscriptionItemID, &job.QBitHash, &job.SavePath, &job.Status,
+		&job.SourceType, &job.BindingStatus, &hasMediaJob,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return cancelableJob{}, ErrDownloadJobNotFound
+	}
+	if err != nil {
+		return cancelableJob{}, err
+	}
+	job.HasMediaJob = hasMediaJob != 0
+	if (job.Status != StatusDownloading && job.Status != StatusFailed) ||
+		job.SourceType != "download" || job.BindingStatus != "bound" || job.HasMediaJob {
+		return cancelableJob{}, ErrCancelNotAllowed
+	}
+	return job, nil
 }
 
 func (s *Service) failedJob(ctx context.Context, jobID int64) (activeJob, error) {
