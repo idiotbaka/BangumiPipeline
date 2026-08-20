@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 
 import { APIError, api, type SiteSettings, type ViewerUser } from './api'
+import loadingLogo from './assets/loading_logo.png'
 import AppDownloadPage from './components/AppDownloadPage.vue'
 import AuthScreen from './components/AuthScreen.vue'
 import HomeScreen from './components/HomeScreen.vue'
@@ -94,7 +95,7 @@ async function logout() {
   <main v-else-if="!ready" class="boot-screen">
     <div class="boot-halo halo-a" aria-hidden="true" />
     <div class="boot-halo halo-b" aria-hidden="true" />
-    <div class="boot-mark">BP</div>
+    <img class="boot-logo" :src="loadingLogo" alt="BakaVIP" />
     <div class="boot-line"><span /></div>
     <p class="boot-tip">LOADING</p>
   </main>
@@ -156,19 +157,15 @@ async function logout() {
   animation-delay: 3s;
 }
 
-.boot-mark {
+.boot-logo {
   position: relative;
   z-index: 2;
-  display: grid;
-  place-items: center;
-  width: 76px;
-  height: 76px;
-  color: #ffffff;
-  font-size: 25px;
-  letter-spacing: 1px;
-  background: linear-gradient(135deg, var(--pink-500), var(--pink-600) 62%, var(--blue-500));
-  box-shadow: 0 16px 34px rgba(255, 95, 158, 0.34);
-  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+  display: block;
+  width: 260px;
+  max-width: calc(100vw - 48px);
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 16px 24px rgba(255, 95, 158, 0.18));
   animation: bp-rise 0.5s var(--ease-out) both;
 }
 
