@@ -78,6 +78,7 @@ const mediaReady = ref(false)
 const bufferEnd = ref(0)
 const opSkipDismissed = ref(false)
 const episodePickerOpen = ref(false)
+const playbackRateMenuOpen = ref(false)
 const episodePickerList = ref<HTMLElement | null>(null)
 const failedEpisodeCovers = ref<Set<string>>(new Set())
 const contextMenuVisible = ref(false)
@@ -101,6 +102,7 @@ let bufferTimer: ReturnType<typeof setInterval> | null = null
 let volumeBubbleTimer: ReturnType<typeof setTimeout> | null = null
 let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 const bufferRangeToleranceSeconds = 0.5
+const playbackRates = [1, 1.25, 1.5, 2] as const
 
 const activeOPSkip = computed(() => normalizeOPSkip(props.opSkip))
 const progressStyle = computed(() => {
@@ -141,6 +143,7 @@ const withinOPSkipPrompt = computed(() => {
 const opSkipVisible = computed(() => canControlPlayback.value && withinOPSkipPrompt.value && !opSkipDismissed.value)
 const volumeIconSrc = computed(() => muted.value ? volumeMutedIcon : volumeIcon)
 const volumeLabel = computed(() => muted.value ? '取消静音' : '静音')
+const playbackRateButtonLabel = computed(() => playbackRate.value === 1 ? '倍速' : formatPlaybackRate(playbackRate.value))
 const webFullscreenIconSrc = computed(() => webFullscreen.value ? webFullscreenExitIcon : webFullscreenIcon)
 const webFullscreenLabel = computed(() => webFullscreen.value ? '退出网页全屏' : '网页全屏')
 const fullscreenIconSrc = computed(() => fullscreenActive.value ? fullscreenExitIcon : fullscreenIcon)
@@ -208,6 +211,7 @@ watch(
     mediaReady.value = false
     opSkipDismissed.value = false
     episodePickerOpen.value = false
+    playbackRateMenuOpen.value = false
     contextMenuVisible.value = false
     resetDebugState()
     stopProgressTimer()
@@ -393,9 +397,9 @@ function showControls() {
 
 function scheduleControlsHide() {
   stopControlsTimer()
-  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value || contextMenuVisible.value) return
+  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value || playbackRateMenuOpen.value || contextMenuVisible.value) return
   controlsTimer = setTimeout(() => {
-    if (playing.value && !buffering.value && !errorMessage.value && !episodePickerOpen.value && !contextMenuVisible.value) controlsVisible.value = false
+    if (playing.value && !buffering.value && !errorMessage.value && !episodePickerOpen.value && !playbackRateMenuOpen.value && !contextMenuVisible.value) controlsVisible.value = false
     controlsTimer = null
   }, 3_000)
 }
@@ -552,11 +556,31 @@ function toggleMute() {
   showVolumeBubble()
 }
 
-function cyclePlaybackRate() {
-  const rates = [1, 1.25, 1.5, 2]
-  const index = rates.indexOf(playbackRate.value)
-  playbackRate.value = rates[(index + 1) % rates.length]
-  if (video.value) video.value.playbackRate = playbackRate.value
+function selectPlaybackRate(rate: number) {
+  playbackRate.value = rate
+  if (video.value) video.value.playbackRate = rate
+  closePlaybackRateMenu()
+}
+
+function openPlaybackRateMenu() {
+  playbackRateMenuOpen.value = true
+  showControls()
+}
+
+function closePlaybackRateMenu() {
+  if (!playbackRateMenuOpen.value) return
+  playbackRateMenuOpen.value = false
+  scheduleControlsHide()
+}
+
+function handlePlaybackRateFocusOut(event: FocusEvent) {
+  const container = event.currentTarget
+  if (container instanceof HTMLElement && event.relatedTarget instanceof Node && container.contains(event.relatedTarget)) return
+  closePlaybackRateMenu()
+}
+
+function formatPlaybackRate(rate: number) {
+  return `${rate}x`
 }
 
 async function toggleFullscreen() {
@@ -804,6 +828,11 @@ function handleFullscreenChange() {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && playbackRateMenuOpen.value) {
+    closePlaybackRateMenu()
+    event.preventDefault()
+    return
+  }
   if (event.key === 'Escape' && episodePickerOpen.value) {
     episodePickerOpen.value = false
     scheduleControlsHide()
@@ -1178,7 +1207,49 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
             @input="changeVolume"
           />
         </div>
-        <button class="text-control rate" type="button" @click="cyclePlaybackRate">{{ playbackRate }}×</button>
+        <div
+          class="rate-control"
+          @mouseenter="openPlaybackRateMenu"
+          @mouseleave="closePlaybackRateMenu"
+          @focusin="openPlaybackRateMenu"
+          @focusout="handlePlaybackRateFocusOut"
+        >
+          <button
+            id="playback-rate-button"
+            class="text-control rate"
+            :class="{ active: playbackRate !== 1 }"
+            type="button"
+            aria-haspopup="menu"
+            :aria-expanded="playbackRateMenuOpen"
+            aria-controls="playback-rate-menu"
+            :aria-label="`播放倍速，当前 ${formatPlaybackRate(playbackRate)}`"
+            @click="openPlaybackRateMenu"
+          >
+            {{ playbackRateButtonLabel }}
+          </button>
+          <Transition name="rate-menu">
+            <div
+              v-if="playbackRateMenuOpen"
+              id="playback-rate-menu"
+              class="rate-menu"
+              role="menu"
+              aria-labelledby="playback-rate-button"
+            >
+              <button
+                v-for="rate in playbackRates"
+                :key="rate"
+                class="rate-menu-item"
+                :class="{ selected: playbackRate === rate }"
+                type="button"
+                role="menuitemradio"
+                :aria-checked="playbackRate === rate"
+                @click="selectPlaybackRate(rate)"
+              >
+                {{ formatPlaybackRate(rate) }}
+              </button>
+            </div>
+          </Transition>
+        </div>
         <button
           class="icon-control picture-in-picture-control"
           :class="{ active: pictureInPictureActive }"
@@ -1341,7 +1412,17 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
 .episode-picker-control > i { width: 18px; height: 18px; }
 .text-control { height: 32px; min-width: 42px; padding: 0 8px; color: rgba(255,255,255,.78); font-family: var(--font-mono); font-size: 13px; letter-spacing: .2px; border: 1px solid transparent; border-radius: 8px; background: rgba(9,13,23,.2); transition: color 160ms ease, border-color 160ms ease, background 160ms ease; }
 .text-control:hover { color: #fff; border-color: rgba(255,95,158,.42); background: rgba(255,95,158,.14); }
-.text-control.rate { min-width: 46px; }
+.rate-control { position: relative; display: inline-flex; align-items: center; }
+.text-control.rate { min-width: 52px; white-space: nowrap; }
+.text-control.rate.active { color: #fff; border-color: rgba(255,95,158,.42); background: rgba(255,95,158,.14); }
+.rate-menu { position: absolute; bottom: calc(100% + 8px); left: 50%; z-index: 7; width: 82px; display: grid; gap: 2px; padding: 6px; border: 1px solid rgba(142,232,242,.34); border-radius: 8px; background: linear-gradient(145deg, rgba(24,32,50,.98), rgba(13,18,31,.97)); box-shadow: 0 16px 36px rgba(0,0,0,.46), 0 0 0 1px rgba(255,255,255,.05) inset; transform: translateX(-50%); }
+.rate-menu::before { content: ''; position: absolute; top: 100%; left: 0; width: 100%; height: 9px; }
+.rate-menu::after { content: ''; position: absolute; top: 100%; left: 50%; width: 8px; height: 8px; border-right: 1px solid rgba(142,232,242,.34); border-bottom: 1px solid rgba(142,232,242,.34); background: rgba(13,18,31,.97); transform: translate(-50%, -4px) rotate(45deg); }
+.rate-menu-item { position: relative; z-index: 1; width: 100%; height: 30px; color: rgba(255,255,255,.68); font-family: var(--font-mono); font-size: 12px; text-align: center; border: 1px solid transparent; border-radius: 5px; background: transparent; transition: color 150ms ease, border-color 150ms ease, background 150ms ease; }
+.rate-menu-item:hover, .rate-menu-item:focus-visible { color: #fff; border-color: rgba(142,232,242,.3); background: rgba(73,214,233,.12); outline: none; }
+.rate-menu-item.selected { color: #fff; border-color: rgba(255,159,189,.44); background: linear-gradient(90deg, rgba(255,95,158,.2), rgba(73,214,233,.1)); }
+.rate-menu-enter-active, .rate-menu-leave-active { transition: opacity 150ms ease, transform 150ms ease; }
+.rate-menu-enter-from, .rate-menu-leave-to { opacity: 0; transform: translate(-50%, 6px); }
 .volume-range { width: 84px; height: 3px; appearance: none; cursor: pointer; background: linear-gradient(90deg, rgba(142,232,242,.86) 0 var(--volume), rgba(255,255,255,.3) var(--volume) 100%); }
 .volume-range::-webkit-slider-thumb { width: 9px; height: 9px; appearance: none; background: var(--cyan-300); transform: rotate(45deg); }
 .episode-picker { position: absolute; right: 0; bottom: calc(100% + 12px); z-index: 6; width: min(430px, calc(100vw - 48px)); max-height: min(390px, calc(100vh - 176px)); display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; color: rgba(255,255,255,.94); border: 1px solid rgba(142,232,242,.34); border-radius: 0; background: linear-gradient(145deg, rgba(24,32,50,.97), rgba(13,18,31,.96)); box-shadow: 0 20px 48px rgba(0,0,0,.48), 0 0 0 1px rgba(255,255,255,.05) inset; clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px)); }
