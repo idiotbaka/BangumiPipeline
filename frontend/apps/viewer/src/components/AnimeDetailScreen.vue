@@ -642,7 +642,7 @@ function formatInfoValue(value: unknown): string {
 .character-copy { min-width: 0; padding: 4px 5px 2px 0; }
 .relation-tag { display: inline-flex; min-height: 27px; align-items: center; padding: 0 9px; color: var(--pink-600); font-size: 13px; background: var(--pink-50); border-left: 2px solid var(--pink-400); }
 .character-copy h3 { margin-top: 7px; color: var(--ink-900); font-size: 16px; }
-.character-copy > p { margin-top: 8px; display: -webkit-box; overflow: hidden; color: var(--ink-400); font-size: 13px; line-height: 1.65; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.character-copy > p { margin-top: 8px; color: var(--ink-400); font-size: 13px; line-height: 1.65; }
 .actor-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
 .actor-chip { min-width: 155px; max-width: 220px; display: flex; align-items: center; gap: 9px; padding: 6px 10px 6px 6px; background: rgba(246,249,253,.9); border: 1px solid rgba(85,119,217,.12); clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); }
 .actor-chip > div { width: 38px; height: 38px; flex: 0 0 auto; overflow: hidden; display: grid; place-items: center; color: var(--blue-500); font-family: var(--font-mono); font-size: 13px; background: var(--cyan-50); }
