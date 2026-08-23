@@ -488,7 +488,19 @@ function formatInfoValue(value: unknown): string {
         </article>
 
         <article class="metadata-panel info-panel">
-          <header><p>METADATA</p><h2>档案信息</h2></header>
+          <header>
+            <div><p>METADATA</p><h2>档案信息</h2></div>
+            <a
+              class="bangumi-subject-link"
+              :href="`https://bangumi.tv/subject/${anime.bangumiId}`"
+              target="_blank"
+              rel="noopener noreferrer"
+              :aria-label="`前往 bgm.tv 查看《${anime.title}》的详情`"
+            >
+              前往 bgm.tv
+              <i aria-hidden="true" />
+            </a>
+          </header>
           <dl>
             <div v-for="item in metadataItems" :key="item.key">
               <dt>{{ item.key }}</dt><dd>{{ item.value }}</dd>
@@ -627,6 +639,11 @@ function formatInfoValue(value: unknown): string {
 .anime-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 20px; }
 .anime-tags span { min-height: 31px; display: inline-flex; align-items: center; padding: 0 12px; color: var(--pink-600); font-size: 13px; border: 1px solid var(--line); background: var(--pink-50); clip-path: polygon(var(--bevel-sm)); }
 .anime-tags span.meta-tag { color: var(--blue-500); border-color: var(--line-cool); background: var(--cyan-50); }
+.metadata-panel header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.bangumi-subject-link { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: 0 0 auto; padding: 0 12px; color: var(--blue-500); font-size: 12px; border: 1px solid var(--line-cool); background: var(--cyan-50); box-shadow: 0 7px 16px rgba(85,119,217,.08); clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); transition: color 160ms ease, border-color 160ms ease, background 160ms ease, transform 160ms ease; }
+.bangumi-subject-link:hover { color: #fff; border-color: transparent; background: linear-gradient(135deg, var(--blue-400), var(--blue-500)); transform: translateY(-1px); }
+.bangumi-subject-link:focus-visible { outline: 2px solid rgba(85,119,217,.28); outline-offset: 2px; }
+.bangumi-subject-link i { width: 6px; height: 6px; border-top: 1px solid currentColor; border-right: 1px solid currentColor; transform: rotate(45deg); }
 .metadata-panel dl { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; margin-top: 16px; }
 .metadata-panel dl > div { min-width: 0; display: grid; grid-template-columns: 105px 1fr; gap: 10px; padding: 11px 0; border-bottom: 1px dashed rgba(85,119,217,.12); }
 .metadata-panel dt { color: var(--ink-400); font-size: 13px; }
