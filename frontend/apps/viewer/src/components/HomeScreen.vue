@@ -39,6 +39,7 @@ const detailAnimeId = ref<number | null>(null)
 const detailMediaId = ref(0)
 const detailPosition = ref(0)
 const homeLoading = ref(false)
+const homeInitialized = ref(false)
 const homeError = ref('')
 const hotPage = ref(0)
 const followPage = ref(0)
@@ -168,6 +169,7 @@ async function loadHome() {
     homeError.value = error instanceof Error ? error.message : '首页数据加载失败'
   } finally {
     homeLoading.value = false
+    homeInitialized.value = true
   }
 }
 
@@ -460,34 +462,42 @@ function isMainView(value: unknown): value is MainView {
       <div class="stage-halo halo-a" aria-hidden="true" />
       <div class="stage-halo halo-b" aria-hidden="true" />
 
-      <div class="content-wrap">
+      <div class="content-wrap" :class="{ 'without-hero': homeInitialized && !currentHero }">
         <!-- ===== 首页轮播 ===== -->
         <section
+          v-if="!homeInitialized || currentHero"
           class="hero-carousel"
-          :class="{ 'has-slide': currentHero, clickable: currentHero }"
+          :class="{ 'has-slide': currentHero, 'is-loading': !homeInitialized, clickable: currentHero && homeInitialized }"
           aria-label="精选轮播"
+          :aria-busy="!homeInitialized"
           @click="openCurrentHero"
         >
           <img
-            v-if="currentHero"
+            v-if="homeInitialized && currentHero"
             class="hero-image"
             :src="carouselImageURL(currentHero.id, currentHero.imageUpdatedAt)"
             :alt="currentHero.title"
           />
-          <div v-if="currentHero" class="hero-shade" aria-hidden="true" />
+          <div v-if="homeInitialized && currentHero" class="hero-shade" aria-hidden="true" />
 
-          <!-- 未配置轮播图时保留原有几何背景 -->
-          <div v-else class="hero-bg" aria-hidden="true">
-            <div class="hero-glow glow-pink" />
-            <div class="hero-glow glow-cyan" />
-            <div class="hero-glow glow-yellow" />
-            <div class="hero-plate plate-a" />
-            <div class="hero-plate plate-b" />
-            <div class="hero-plate plate-c" />
+          <div v-if="!homeInitialized" class="hero-skeleton-backdrop" aria-hidden="true" />
+
+          <ParticleField v-if="homeInitialized" :count="14" palette="cool" :max-size="40" />
+
+          <div v-if="!homeInitialized" class="hero-skeleton" role="status" aria-label="轮播内容加载中">
+            <span class="hero-skeleton-block skeleton-tag" />
+            <span class="hero-skeleton-block skeleton-kicker" />
+            <span class="hero-skeleton-block skeleton-heading" />
+            <span class="hero-skeleton-block skeleton-heading short" />
+            <div class="skeleton-meta-row">
+              <span class="hero-skeleton-block" />
+              <span class="hero-skeleton-block" />
+            </div>
+            <span class="hero-skeleton-block skeleton-summary" />
+            <span class="hero-skeleton-block skeleton-summary short" />
           </div>
-          <ParticleField :count="14" palette="cool" :max-size="40" />
 
-          <div v-if="currentHero" :key="currentHero.id" class="hero-content">
+          <div v-else-if="currentHero" :key="currentHero.id" class="hero-content">
             <span class="hero-index-tag">
               <i>{{ String(heroIndex + 1).padStart(2, '0') }}</i>
               <span>/ {{ String(heroSlides.length).padStart(2, '0') }}</span>
@@ -505,17 +515,6 @@ function isMainView(value: unknown): value is MainView {
               </span>
             </div>
             <p class="hero-summary">{{ currentHero.summary || '暂无剧情简介' }}</p>
-          </div>
-
-          <!-- 空态：暂无轮播配置 -->
-          <div v-else class="hero-content hero-empty">
-            <span class="hero-index-tag">
-              <i>00</i>
-              <span>/ 00</span>
-            </span>
-            <p class="hero-kicker">FEATURED</p>
-            <h1 class="hero-title">{{ siteName }}</h1>
-            <p class="hero-summary">暂无轮播内容，请在管理后台的轮播图管理中新增配置。</p>
           </div>
 
           <!-- 切换箭头 -->
@@ -1112,12 +1111,16 @@ function isMainView(value: unknown): value is MainView {
   padding: 34px 0 64px;
 }
 
+.content-wrap.without-hero > .anime-section:first-of-type {
+  margin-top: 0;
+}
+
 /* ============ 首页轮播 ============ */
 .hero-carousel {
   position: relative;
   display: grid;
   align-items: center;
-  min-height: 340px;
+  height: 420px;
   overflow: hidden;
   background: linear-gradient(120deg, rgba(255, 255, 255, 0.92), rgba(255, 244, 248, 0.84) 42%, rgba(236, 253, 255, 0.9));
   border: 1px solid var(--line-soft);
@@ -1130,6 +1133,12 @@ function isMainView(value: unknown): value is MainView {
   background: #101624;
   border-color: rgba(255, 255, 255, 0.2);
   box-shadow: 0 28px 64px rgba(26, 36, 58, 0.28);
+}
+
+.hero-carousel.is-loading {
+  background: #111722;
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 28px 64px rgba(26, 36, 58, 0.24);
 }
 
 .hero-carousel.clickable {
@@ -1155,81 +1164,55 @@ function isMainView(value: unknown): value is MainView {
     linear-gradient(0deg, rgba(6, 11, 22, 0.28), transparent 56%);
 }
 
-.hero-bg {
+.hero-skeleton-backdrop {
   position: absolute;
   inset: 0;
   z-index: 0;
-  pointer-events: none;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(6, 10, 18, 0.96) 0%, rgba(9, 14, 24, 0.82) 40%, rgba(14, 20, 30, 0.5) 72%, rgba(23, 29, 39, 0.34) 100%),
+    linear-gradient(135deg, #313844, #1c2330 48%, #39404a);
 }
 
-.hero-glow {
+.hero-skeleton-backdrop::after {
+  content: '';
   position: absolute;
-  border-radius: 50%;
-  filter: blur(56px);
-  animation: bp-halo 7s ease-in-out infinite;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 20%, rgba(255, 255, 255, 0.075) 44%, transparent 68%);
+  animation: bp-skeleton 1.5s ease-in-out infinite;
 }
 
-.glow-pink {
-  width: 360px;
-  height: 360px;
-  left: 8%;
-  top: -60px;
-  background: radial-gradient(circle, rgba(255, 127, 166, 0.5), transparent 70%);
+.hero-skeleton {
+  position: relative;
+  z-index: 3;
+  width: min(620px, 100%);
+  padding: 48px 48px 48px 56px;
 }
 
-.glow-cyan {
-  width: 320px;
-  height: 320px;
-  right: 10%;
-  top: 20px;
-  background: radial-gradient(circle, rgba(73, 214, 233, 0.4), transparent 70%);
-  animation-delay: 2.4s;
+.hero-skeleton-block {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.025) inset;
 }
 
-.glow-yellow {
-  width: 280px;
-  height: 280px;
-  right: 32%;
-  bottom: -80px;
-  background: radial-gradient(circle, rgba(255, 229, 122, 0.42), transparent 70%);
-  animation-delay: 4.2s;
-}
-
-.hero-plate {
+.hero-skeleton-block::after {
+  content: '';
   position: absolute;
-  border: 1px solid rgba(255, 255, 255, 0.78);
-  box-shadow: 0 18px 46px rgba(85, 119, 217, 0.1);
-  animation: bp-sway 6s ease-in-out infinite alternate;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 18%, rgba(255, 255, 255, 0.18) 46%, transparent 72%);
+  animation: bp-skeleton 1.25s ease-in-out infinite;
 }
 
-.plate-a {
-  right: 70px;
-  top: 40px;
-  width: 240px;
-  height: 150px;
-  background: linear-gradient(135deg, rgba(255, 127, 166, 0.3), rgba(255, 255, 255, 0.5));
-  clip-path: polygon(0 0, 100% 0, 84% 100%, 0 100%);
-}
-
-.plate-b {
-  right: 200px;
-  bottom: 50px;
-  width: 180px;
-  height: 110px;
-  background: linear-gradient(135deg, rgba(73, 214, 233, 0.28), rgba(255, 255, 255, 0.5));
-  clip-path: polygon(14% 0, 100% 0, 100% 80%, 86% 100%, 0 100%, 0 16%);
-  animation-delay: 1.2s;
-}
-
-.plate-c {
-  right: 40px;
-  bottom: 120px;
-  width: 90px;
-  height: 90px;
-  background: linear-gradient(135deg, rgba(255, 229, 122, 0.4), rgba(255, 255, 255, 0.5));
-  clip-path: polygon(var(--bevel-diamond));
-  animation-delay: 2s;
-}
+.hero-skeleton .skeleton-tag { width: 78px; height: 28px; margin-bottom: 18px; clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%); }
+.hero-skeleton .skeleton-kicker { width: 112px; height: 11px; margin-bottom: 15px; }
+.hero-skeleton .skeleton-heading { width: min(440px, 88%); height: 34px; }
+.hero-skeleton .skeleton-heading.short { width: min(310px, 64%); margin-top: 10px; }
+.skeleton-meta-row { display: flex; gap: 10px; margin-top: 21px; }
+.skeleton-meta-row .hero-skeleton-block { width: 112px; height: 30px; clip-path: polygon(var(--bevel-tag)); }
+.hero-skeleton .skeleton-summary { width: min(520px, 96%); height: 13px; margin-top: 20px; }
+.hero-skeleton .skeleton-summary.short { width: min(380px, 72%); margin-top: 10px; }
 
 .hero-content {
   position: relative;
@@ -1348,11 +1331,6 @@ function isMainView(value: unknown): value is MainView {
 .has-slide .hero-summary {
   color: rgba(255, 255, 255, 0.84);
   text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
-}
-
-.hero-empty .hero-summary {
-  display: block;
-  -webkit-line-clamp: unset;
 }
 
 /* 切换箭头 */
