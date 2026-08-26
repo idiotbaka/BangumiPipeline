@@ -1,0 +1,311 @@
+/* 夜间主题集中覆盖已有浅色组件；下载页始终由 index.html 保持 light。
+ * 图片、视频和播放器自身的深色控制层保留原色。 */
+:root[data-viewer-theme='dark'] {
+  --ink-900: #f0f3fa;
+  --ink-700: #d9dfeb;
+  --ink-600: #bcc6d8;
+  --ink-500: #adb9ce;
+  --ink-400: #a3aec2;
+  --ink-300: #8994aa;
+  --pink-50: #2b1e2d;
+  --pink-100: #3d2639;
+  --pink-600: #ff83b3;
+  --pink-700: #ff9ebd;
+  --cyan-50: #192b36;
+  --cyan-100: #203a46;
+  --blue-400: #a0b5f0;
+  --blue-500: #92acf2;
+  --blue-600: #abc0ff;
+  --line: rgba(255, 131, 179, 0.26);
+  --line-soft: rgba(255, 131, 179, 0.12);
+  --line-cool: rgba(160, 181, 240, 0.18);
+  --glass: rgba(26, 32, 46, 0.8);
+  --glass-strong: rgba(24, 29, 43, 0.94);
+  --glass-pink: rgba(43, 30, 45, 0.8);
+  --glass-cyan: rgba(25, 43, 54, 0.8);
+  --night-bg: #10131d;
+  --night-surface: #1a202e;
+  --night-raised: #232b3c;
+  --night-inset: #141a26;
+  --night-border: rgba(170, 187, 219, 0.16);
+  --night-shadow: 0 16px 38px rgba(0, 0, 0, 0.22);
+  --night-tint: linear-gradient(115deg, #302235, #1c2c39);
+  --night-action: linear-gradient(135deg, #bf3c76, #993568);
+  color-scheme: dark;
+  color: var(--ink-900);
+  background: var(--night-bg);
+}
+
+:root[data-viewer-theme='dark'] body {
+  background: var(--night-bg);
+}
+
+:root[data-viewer-theme='dark'] ::selection {
+  color: #fff;
+  background: #813958;
+}
+
+:root[data-viewer-theme='dark'] ::-webkit-scrollbar-track {
+  background: var(--night-inset);
+}
+
+:root[data-viewer-theme='dark'] ::-webkit-scrollbar-thumb {
+  background: #67445f;
+  border-color: var(--night-inset);
+}
+
+:root[data-viewer-theme='dark'] ::-webkit-scrollbar-thumb:hover {
+  background: #ad5c87;
+}
+
+/* 页面底色与低亮度几何光晕。 */
+:root[data-viewer-theme='dark'] :is(.home-shell, .schedule-stage, .library-stage, .history-stage, .follow-stage, .detail-stage, .settings-stage) {
+  background: linear-gradient(145deg, #181522, var(--night-bg) 46%, #111e29);
+}
+
+:root[data-viewer-theme='dark'] :is(.stage-halo, .schedule-halo, .library-halo, .history-halo, .follow-halo, .detail-halo, .settings-halo, .bg-halo, .boot-halo) {
+  filter: blur(90px) brightness(0.42);
+}
+
+:root[data-viewer-theme='dark'] .bp-particles {
+  opacity: 0.28;
+}
+
+/* 顶栏和菜单：实体深色底，保持文字与交互状态清晰。 */
+:root[data-viewer-theme='dark'] :is(.main-nav, .search-box, .app-download-link, .night-mode-button, .user-chip) {
+  background: var(--night-surface);
+  border-color: var(--night-border);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-viewer-theme='dark'] .user-menu {
+  background: #1d2433;
+  border-color: var(--night-border);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-viewer-theme='dark'] :is(.nav-item:hover, .nav-item.active, .app-download-link:hover, .night-mode-button:hover, .night-mode-button[aria-pressed='true']) {
+  color: var(--pink-600);
+  background: var(--pink-50);
+}
+
+:root[data-viewer-theme='dark'] .app-download-link {
+  color: var(--pink-600);
+}
+
+:root[data-viewer-theme='dark'] .night-mode-button[aria-pressed='true'] {
+  border-color: var(--line);
+}
+
+/* 轮播、封面与信息徽标。黄底贴片使用固定深色文字。 */
+:root[data-viewer-theme='dark'] .hero-carousel:not(.has-slide):not(.is-loading) {
+  background: var(--night-tint);
+}
+
+:root[data-viewer-theme='dark'] :is(.hero-arrow, .arrow-button, .meta-pill, .episode-total) {
+  background: var(--glass-strong);
+  border-color: var(--night-border);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-viewer-theme='dark'] :is(.poster-frame, .card-cover, .history-cover, .follow-cover, .episode-thumb) {
+  background: var(--night-raised);
+  border-color: var(--night-border);
+}
+
+:root[data-viewer-theme='dark'] .cover-fallback {
+  background: var(--night-tint);
+}
+
+:root[data-viewer-theme='dark'] :is(.new-tag, .hero-index-tag, .panel-tag) {
+  color: #302a21;
+  background: #e6c66e;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+/* 列表、筛选与所有页面的空状态。 */
+:root[data-viewer-theme='dark'] :is(.season-selector, .weekday-tabs, .filter-panel, .library-search, .state-panel, .schedule-state, .library-state, .history-state, .follow-state, .characters-empty) {
+  background: var(--night-surface);
+  border-color: var(--night-border);
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-viewer-theme='dark'] :is(.day-count, .lineup-count, .result-count) {
+  background: var(--night-raised);
+}
+
+:root[data-viewer-theme='dark'] :is(.history-stage, .follow-stage) .result-heading > span {
+  background: var(--night-raised);
+}
+
+:root[data-viewer-theme='dark'] :is(.filter-panel-head, .panel-tabs, .profile-summary) {
+  background: var(--night-tint);
+}
+
+:root[data-viewer-theme='dark'] .filter-panel-head > button,
+:root[data-viewer-theme='dark'] .filter-panel-head > button span,
+:root[data-viewer-theme='dark'] .filter-tags button:not(.active),
+:root[data-viewer-theme='dark'] .library-pagination button:not(.active),
+:root[data-viewer-theme='dark'] .history-heading > button,
+:root[data-viewer-theme='dark'] .follow-heading > button {
+  background: var(--night-raised);
+}
+
+:root[data-viewer-theme='dark'] .weekday-tab:hover,
+:root[data-viewer-theme='dark'] .filter-panel-head > button:hover:not(:disabled),
+:root[data-viewer-theme='dark'] .filter-tags button:hover:not(.active):not(:disabled),
+:root[data-viewer-theme='dark'] .library-pagination button:hover:not(.active):not(:disabled) {
+  background: var(--pink-50);
+}
+
+/* 详情、选集和评论：主卡片、嵌套内容采用不同深度。 */
+:root[data-viewer-theme='dark'] :is(.episode-panel, .info-panel, .character-card) {
+  background: var(--night-surface);
+  border-color: var(--night-border);
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-viewer-theme='dark'] :is(.back-button, .follow-button, .detail-state button, .comment-error-state button) {
+  background: var(--night-raised);
+}
+
+:root[data-viewer-theme='dark'] :is(.back-button:hover, .panel-tab:hover, .panel-tab.active, .episode-item:hover:not(:disabled)) {
+  background: var(--pink-50);
+}
+
+:root[data-viewer-theme='dark'] .episode-item.selected {
+  background: var(--night-tint);
+  box-shadow: inset 2px 0 var(--pink-400);
+}
+
+:root[data-viewer-theme='dark'] :is(.episode-summary, .actor-chip, .comment-context) {
+  background: var(--night-inset);
+}
+
+:root[data-viewer-theme='dark'] .comment-item {
+  background: var(--night-surface);
+  border-color: var(--night-border);
+}
+
+:root[data-viewer-theme='dark'] .comment-item.reply {
+  background: var(--night-raised);
+  border-color: var(--night-border);
+}
+
+:root[data-viewer-theme='dark'] .comment-external-image {
+  background: var(--night-inset);
+  border-color: var(--night-border);
+}
+
+:root[data-viewer-theme='dark'] .comment-strike {
+  text-decoration-color: var(--ink-400);
+}
+
+:root[data-viewer-theme='dark'] .comment-mask {
+  text-shadow: 0 0 8px #090d17;
+  background: #090d17;
+}
+
+:root[data-viewer-theme='dark'] :is(.comment-mask:hover, .comment-mask:focus) {
+  color: var(--ink-700);
+  text-shadow: none;
+  background: #493044;
+}
+
+:root[data-viewer-theme='dark'] :is(.follow-error, .comment-error-state) {
+  color: #ff9caf;
+}
+
+/* 账号设置、邀请码表格与密码输入框。 */
+:root[data-viewer-theme='dark'] :is(.settings-sidebar, .settings-panel, .invitation-table) {
+  background: var(--night-surface);
+  border-color: var(--night-border);
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-viewer-theme='dark'] :is(.invitation-actions, .invitation-table th, .password-form input) {
+  background: var(--night-inset);
+}
+
+:root[data-viewer-theme='dark'] .password-form input:focus {
+  background: var(--night-raised);
+}
+
+:root[data-viewer-theme='dark'] .form-feedback.success {
+  color: #8cddd1;
+  background: #183536;
+}
+
+/* 启动、登录与注册也遵守已保存的主题。 */
+:root[data-viewer-theme='dark'] .boot-screen {
+  background:
+    radial-gradient(ellipse at 36% 36%, rgba(133, 55, 101, 0.12), transparent 48%),
+    radial-gradient(ellipse at 70% 72%, rgba(49, 112, 144, 0.1), transparent 48%),
+    var(--night-bg);
+}
+
+:root[data-viewer-theme='dark'] :is(.boot-line, .mode-switch) {
+  background: var(--night-raised);
+}
+
+:root[data-viewer-theme='dark'] .auth-screen {
+  background: var(--night-bg);
+}
+
+:root[data-viewer-theme='dark'] .visual-zone {
+  background:
+    linear-gradient(135deg, rgba(44, 29, 47, 0.88), rgba(17, 24, 37, 0.92) 46%, rgba(22, 47, 58, 0.84)),
+    repeating-linear-gradient(90deg, var(--line-cool) 0 1px, transparent 1px 56px);
+}
+
+:root[data-viewer-theme='dark'] .auth-panel {
+  background:
+    linear-gradient(var(--night-surface), var(--night-surface)) padding-box,
+    linear-gradient(135deg, rgba(255, 131, 179, 0.48), rgba(73, 214, 233, 0.3)) border-box;
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-viewer-theme='dark'] .field input:focus {
+  background:
+    linear-gradient(var(--night-raised), var(--night-raised)) padding-box,
+    linear-gradient(135deg, var(--pink-400), var(--cyan-400)) border-box;
+}
+
+:root[data-viewer-theme='dark'] :is(.visual-plate, .visual-caption) {
+  border-color: var(--night-border);
+}
+
+:root[data-viewer-theme='dark'] .visual-plate {
+  opacity: 0.4;
+}
+
+:root[data-viewer-theme='dark'] .corner-note {
+  color: var(--ink-400);
+}
+
+:root[data-viewer-theme='dark'] input:autofill {
+  -webkit-text-fill-color: var(--ink-900);
+  box-shadow: inset 0 0 0 100px var(--night-raised);
+}
+
+/* 深色骨架屏，避免原先白色扫光在夜间刺眼。 */
+:root[data-viewer-theme='dark'] .skeleton-block {
+  background: var(--night-raised);
+}
+
+:root[data-viewer-theme='dark'] .skeleton-block::after {
+  background: linear-gradient(100deg, transparent 20%, rgba(174, 191, 223, 0.09) 45%, transparent 70%);
+}
+
+/* 实心主操作用较沉稳的玫红承托白字；文字链接仍使用明亮粉色。 */
+:root[data-viewer-theme='dark'] :is(.submit-button, .switch-ink, .cap-num, .search-button, .weekday-tab.active, .filter-tags button.active, .library-pagination button.active, .settings-nav-group > button.active, .invitation-actions > button, .password-form > button, .follow-button.followed),
+:root[data-viewer-theme='dark'] :is(.state-panel, .schedule-state, .library-state, .history-state, .follow-state) button,
+:root[data-viewer-theme='dark'] :is(.hero-arrow:hover, .arrow-button:hover, .follow-button:hover:not(:disabled), .history-heading > button:hover:not(:disabled), .follow-heading > button:hover:not(:disabled), .filter-tags button.active:hover:not(:disabled), .library-pagination button.active:hover:not(:disabled)) {
+  color: #fff;
+  background: var(--night-action);
+}
+
+:root[data-viewer-theme='dark'] .bangumi-subject-link:hover {
+  color: #fff;
+  background: #435c9b;
+}

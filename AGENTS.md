@@ -87,8 +87,6 @@ Dockerfile                多阶段生产构建
 
 规则：
 
-- 新代码和文档优先使用 `BP_*`。
-- `AB_*` 只作为旧配置兼容 fallback。
 - 不提交代理地址、账号、Cookie、Bangumi Token、qBittorrent 密码或 LLM API KEY。
 - Bangumi 请求需要可识别 User-Agent，例如 `your-id/BangumiPipeline/0.1`。
 - 额外媒体存储根目录、网络代理、下载设置、LLM 设置保存在数据库系统设置中。

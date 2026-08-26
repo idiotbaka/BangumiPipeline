@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#ff5f9e" />
+    <!-- 在 CSS / Vue 加载前恢复主题，避免启动和深链访问时闪白。 -->
+    <script>
+      (() => {
+        const isDownloadPage = window.location.pathname.replace(/\/+$/, '') === '/app/download'
+        let theme = 'light'
+        try {
+          if (!isDownloadPage && localStorage.getItem('bp-viewer-theme') === 'dark') theme = 'dark'
+        } catch { /* 存储被禁用时仍可正常打开页面。 */ }
+        document.documentElement.dataset.viewerTheme = theme
+        if (isDownloadPage) document.documentElement.classList.add('app-download-mode')
+        document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#10131d' : '#ff5f9e'
+      })()
+    </script>
+    <style>
+      :root { color-scheme: light; background: #fff; }
+      :root[data-viewer-theme='dark'] { color-scheme: dark; background: #10131d; }
+    </style>
     <title>Viewer</title>
   </head>
   <body>

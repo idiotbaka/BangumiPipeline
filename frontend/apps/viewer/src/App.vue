@@ -7,6 +7,7 @@ import AppDownloadPage from './components/AppDownloadPage.vue'
 import AuthScreen from './components/AuthScreen.vue'
 import HomeScreen from './components/HomeScreen.vue'
 import { initializePushNotifications, removePushNotifications } from './pushNotifications'
+import { useViewerTheme } from './theme'
 
 const defaultSiteName = 'BangumiPipeline Viewer'
 const user = ref<ViewerUser | null>(null)
@@ -18,10 +19,7 @@ const registrationEnabled = ref(true)
 const inviteRequired = ref(false)
 const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
 const isAppDownloadPage = currentPath === '/app/download'
-
-if (isAppDownloadPage) {
-  document.documentElement.classList.add('app-download-mode')
-}
+const { isNightMode, toggleNightMode } = useViewerTheme(isAppDownloadPage)
 
 onMounted(async () => {
   if (isAppDownloadPage) {
@@ -110,7 +108,15 @@ async function logout() {
   />
 
   <!-- 已登录首页 -->
-  <HomeScreen v-else :user="user" :site-name="siteName" :loading="loading" @logout="logout" />
+  <HomeScreen
+    v-else
+    :user="user"
+    :site-name="siteName"
+    :loading="loading"
+    :is-night-mode="isNightMode"
+    @toggle-night-mode="toggleNightMode"
+    @logout="logout"
+  />
 </template>
 
 <style scoped>

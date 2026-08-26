@@ -16,10 +16,14 @@ interface Props {
   user: ViewerUser
   siteName: string
   loading: boolean
+  isNightMode: boolean
 }
 
 defineProps<Props>()
-const emit = defineEmits<{ (e: 'logout'): void }>()
+const emit = defineEmits<{
+  (e: 'logout'): void
+  (e: 'toggle-night-mode'): void
+}>()
 
 type MainView = 'home' | 'schedule' | 'library' | 'history' | 'follows' | 'settings'
 
@@ -397,6 +401,21 @@ function isMainView(value: unknown): value is MainView {
         <span>APP下载</span>
       </a>
 
+      <button
+        class="night-mode-button"
+        type="button"
+        aria-label="深色模式"
+        :aria-pressed="isNightMode"
+        :title="isNightMode ? '退出深色模式' : '进入深色模式'"
+        @click="emit('toggle-night-mode')"
+      >
+        <svg viewBox="0 0 1024 1024" fill="currentColor" aria-hidden="true">
+          <path d="M339.456 891.904s-0.512 0-1.024-0.512l-13.312-4.608c-33.792-11.776-34.304-12.288-55.808-22.016-14.336-6.656-55.296-34.304-77.824-50.176-1.024-0.512-2.048-1.536-3.072-2.048-8.704-7.168-16.896-14.848-25.088-23.04-43.52-44.032-74.752-95.744-94.208-154.112 140.8 77.824 315.392 52.736 429.568-62.976s138.752-292.352 61.952-434.688c57.856 19.456 108.544 51.2 152.064 95.232 21.504 22.016 39.936 46.08 55.808 71.68l4.608 7.68c16.384 32.256 16.384 32.768 25.088 54.784 8.192 21.504 22.016 69.632 22.016 70.144 4.096 14.336 16.896 23.552 30.72 23.552 3.072 0 5.632-0.512 8.704-1.536 16.896-5.12 27.136-23.04 22.016-39.936 0 0 0-0.512-0.512-1.024h0.512c-10.752-51.712-29.696-100.864-56.832-145.92l-1.536-3.584c-1.024-2.56-2.56-4.608-4.608-6.656-17.408-27.136-37.376-52.736-60.416-75.776A459.008 459.008 0 0 0 573.44 72.704c-18.944-5.632-48.128-5.632-66.56 13.312-20.48 20.48-17.92 50.176-9.728 69.12l1.024 1.536 1.024 1.536c69.632 118.784 50.688 269.824-46.08 367.616s-245.76 116.736-362.496 46.592l-1.536-1.024c-10.24-5.12-46.08-20.992-69.632 2.56-23.04 23.04-15.872 60.928-13.312 71.68l0.512 2.048c21.504 70.144 60.416 134.656 111.616 186.88 56.832 57.344 127.488 98.816 204.8 119.296 1.536 0.512 3.584 0.512 5.12 0.512 13.312 0 25.6-8.192 30.208-21.504 6.144-16.384-2.56-34.816-18.944-40.96z" />
+          <path d="M531.968 671.744c-16.384 0-29.696 13.312-29.696 29.696 0 16.384 13.312 29.696 29.696 29.696h267.264c16.384 0 29.696-13.312 29.696-29.696 0-16.384-13.312-29.696-29.696-29.696h-267.264z m459.264 160.256h-573.44c-16.384 0-29.696 13.312-29.696 29.696 0 16.384 13.312 29.696 29.696 29.696h573.952c16.384 0 29.696-13.312 29.696-29.696-0.512-16.384-13.824-29.696-30.208-29.696z m-366.08-296.448c0 16.384 13.312 29.696 29.696 29.696h336.384c16.384 0 29.696-13.312 29.696-29.696s-13.312-29.696-29.696-29.696h-336.384c-16.384 0-29.696 13.312-29.696 29.696zM323.072 189.44h22.528v22.528c0 10.752 8.704 19.968 19.968 19.968 10.752 0 19.968-8.704 19.968-19.968V189.44h22.528c10.752 0 19.968-8.704 19.968-19.968s-8.704-19.968-19.968-19.968h-22.528v-22.528c0-10.752-8.704-19.968-19.968-19.968-10.752 0-19.968 8.704-19.968 19.968v22.528h-22.528c-10.752 0-19.968 8.704-19.968 19.968S312.32 189.44 323.072 189.44z m-204.8 275.968h37.376v37.376c0 13.824 11.264 25.088 24.576 25.088 13.824 0 24.576-11.264 24.576-25.088v-37.376h37.376c13.824 0 24.576-11.264 24.576-25.088s-11.264-25.088-24.576-25.088H204.8v-37.376c0-13.824-11.264-25.088-24.576-25.088-13.824 0-24.576 11.264-24.576 25.088v37.376h-37.376c-13.824 0-24.576 11.264-24.576 25.088s10.752 25.088 24.576 25.088z" />
+        </svg>
+        <span>{{ isNightMode ? '退出深色' : '深色模式' }}</span>
+      </button>
+
       <div class="user-area">
         <button class="user-chip" type="button" aria-haspopup="menu">
           <img class="user-avatar" :src="defaultAvatar" alt="" />
@@ -737,10 +756,10 @@ function isMainView(value: unknown): value is MainView {
   z-index: 20;
   height: 86px;
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto 230px auto auto;
+  grid-template-columns: minmax(140px, 1fr) auto minmax(140px, 230px) auto auto auto;
   align-items: center;
-  gap: 16px;
-  padding: 0 32px;
+  gap: 12px;
+  padding: 0 28px;
   background: var(--glass-strong);
   border-bottom: 1px solid var(--line-soft);
   backdrop-filter: blur(18px);
@@ -862,7 +881,8 @@ function isMainView(value: unknown): value is MainView {
   color: var(--ink-300);
 }
 
-.app-download-link {
+.app-download-link,
+.night-mode-button {
   height: 44px;
   display: inline-flex;
   align-items: center;
@@ -895,6 +915,26 @@ function isMainView(value: unknown): value is MainView {
   width: 23px;
   height: 23px;
   flex: 0 0 auto;
+}
+
+.night-mode-button {
+  color: var(--ink-600);
+}
+
+.night-mode-button svg {
+  width: 21px;
+  height: 21px;
+  flex: 0 0 auto;
+}
+
+.night-mode-button:hover {
+  color: var(--pink-600);
+  background: var(--pink-50);
+}
+
+.night-mode-button:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--pink-400);
 }
 
 /* 用户区 */
