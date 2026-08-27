@@ -1,12 +1,14 @@
 ## Default Permission
 
-Allows the mobile player to control native fullscreen and playback wake lock.
+Allows native fullscreen, playback wake lock, app theme system bars, and copying invitation codes.
 
 #### This default permission set includes the following:
 
 - `allow-enterFullscreen`
 - `allow-exitFullscreen`
 - `allow-setKeepScreenOn`
+- `allow-setTheme`
+- `allow-copyText`
 - `allow-enter-fullscreen`
 - `allow-exit-fullscreen`
 - `allow-set-keep-screen-on`
@@ -19,6 +21,32 @@ Allows the mobile player to control native fullscreen and playback wake lock.
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`player:allow-copyText`
+
+</td>
+<td>
+
+Enables the copyText command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`player:deny-copyText`
+
+</td>
+<td>
+
+Denies the copyText command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>
@@ -146,6 +174,32 @@ Enables the setKeepScreenOn command without any pre-configured scope.
 <td>
 
 Denies the setKeepScreenOn command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`player:allow-setTheme`
+
+</td>
+<td>
+
+Enables the setTheme command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`player:deny-setTheme`
+
+</td>
+<td>
+
+Denies the setTheme command without any pre-configured scope.
 
 </td>
 </tr>

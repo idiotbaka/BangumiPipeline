@@ -4,6 +4,30 @@ export interface ViewerUser {
   id: number
   username: string
   createdAt: number
+  registrationSource: 'open' | 'system_invite' | 'user_invite' | string
+  invitedByUsername: string
+}
+
+export interface ViewerInvitation {
+  id: number
+  code: string
+  used: boolean
+  usedByUserId: number | null
+  usedByUsername: string
+  usedAt: number | null
+  createdAt: number
+}
+
+export interface ViewerInvitationOverview {
+  items: ViewerInvitation[]
+  allowance: {
+    eligibleTotal: number
+    createdCount: number
+    remainingCount: number
+    maximumTotal: number
+    canCreate: boolean
+    nextEligibleAt: number | null
+  }
 }
 
 export interface SiteSettings {
@@ -322,6 +346,13 @@ export const api = {
   siteSettings: () => request<{ settings: SiteSettings }>('/api/site-settings'),
   latestAppRelease: () => request<{ release: AppRelease | null }>('/api/app/releases/latest'),
   me: () => request<{ user: ViewerUser }>('/api/auth/me'),
+  invitations: () => request<{ invitations: ViewerInvitationOverview }>('/api/invitations'),
+  generateInvitation: () => request<{ invite: ViewerInvitation }>('/api/invitations', { method: 'POST', body: '{}' }),
+  changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) =>
+    request<void>('/api/auth/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
+    }),
   login: (username: string, password: string) =>
     applyAuthResponse(
       request<AuthResponse>('/api/auth/login', {

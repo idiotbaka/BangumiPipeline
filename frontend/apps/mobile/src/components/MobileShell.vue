@@ -27,6 +27,11 @@ import refreshIcon from '../assets/pull-refresh.svg'
 import scheduleNavIcon from '../assets/nav-schedule.svg?raw'
 import searchIcon from '../assets/search.svg?raw'
 import MobileAnimeDetailScreen from './MobileAnimeDetailScreen.vue'
+import ThemeSettingsPage from './ThemeSettingsPage.vue'
+import InvitationSettingsPage from './InvitationSettingsPage.vue'
+import PasswordSettingsPage from './PasswordSettingsPage.vue'
+import { formatAccountDate, registrationMethod } from '../account'
+import type { MobileTheme } from '../theme'
 
 interface Props {
   user: ViewerUser
@@ -34,6 +39,9 @@ interface Props {
   apiBaseUrl: string
   checkingAppUpdate: boolean
   appUpdateCheckMessage: string
+  theme: MobileTheme
+  themeSaving: boolean
+  themeMessage: string
 }
 
 const props = defineProps<Props>()
@@ -41,11 +49,12 @@ const emit = defineEmits<{
   (event: 'logout'): void
   (event: 'server-address-change', value: string): void
   (event: 'check-app-update'): void
+  (event: 'theme-change', value: MobileTheme): void
 }>()
 
 type MainTab = 'home' | 'schedule' | 'library' | 'profile'
 type RefreshableTab = Exclude<MainTab, 'profile'>
-type RoutePage = 'search' | 'follows' | 'history' | 'settings' | 'server-address' | 'about' | 'detail' | null
+type RoutePage = 'search' | 'follows' | 'history' | 'settings' | 'theme' | 'invitations' | 'password' | 'server-address' | 'about' | 'detail' | null
 type SubRoutePage = Exclude<RoutePage, 'detail' | null>
 type DetailReturnPage = Exclude<RoutePage, 'detail'>
 type PageTransitionName = 'page-slide-forward' | 'page-slide-back' | 'page-none'
@@ -245,6 +254,9 @@ const pageTitle = computed(() => {
   if (routePage.value === 'follows') return '我的追番'
   if (routePage.value === 'history') return '观看历史'
   if (routePage.value === 'settings') return '系统设置'
+  if (routePage.value === 'theme') return '主题设置'
+  if (routePage.value === 'invitations') return '邀请码'
+  if (routePage.value === 'password') return '修改密码'
   if (routePage.value === 'server-address') return '服务器地址'
   if (routePage.value === 'about') return '关于'
   if (routePage.value === 'detail') return '番剧详情'
@@ -472,6 +484,9 @@ function isRoutePage(value: unknown): value is RoutePage {
     value === 'follows' ||
     value === 'history' ||
     value === 'settings' ||
+    value === 'theme' ||
+    value === 'invitations' ||
+    value === 'password' ||
     value === 'server-address' ||
     value === 'about' ||
     value === 'detail'
@@ -1507,6 +1522,13 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
       <div v-else-if="routePage === 'settings'" class="page-stack settings-page">
         <section class="menu-list settings-list">
+          <button type="button" @click="openRoute('theme')">
+            <span class="settings-option-copy">
+              <strong>主题设置</strong>
+              <small>{{ props.theme === 'dark' ? '深色模式' : '浅色模式' }}</small>
+            </span>
+            <span class="chevron" aria-hidden="true">&gt;</span>
+          </button>
           <button type="button" @click="openServerAddressSettings">
             <span class="settings-option-copy">
               <strong>服务器地址</strong>
@@ -1523,6 +1545,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           </button>
         </section>
       </div>
+
+      <InvitationSettingsPage v-else-if="routePage === 'invitations'" />
+      <PasswordSettingsPage v-else-if="routePage === 'password'" />
+      <ThemeSettingsPage
+        v-else-if="routePage === 'theme'"
+        :theme="props.theme"
+        :saving="props.themeSaving"
+        :message="props.themeMessage"
+        @change="emit('theme-change', $event)"
+      />
 
       <div v-else-if="routePage === 'server-address'" class="page-stack settings-page">
         <section class="settings-editor-card">
@@ -1993,10 +2025,14 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           <div v-else class="page-stack profile-page">
             <section class="profile-head">
               <img :src="appIcon" alt="" />
-              <div>
+              <div class="profile-identity">
                 <p class="profile-name">{{ props.user.username }}</p>
                 <p class="profile-subtitle">{{ appName }}</p>
               </div>
+              <dl class="profile-details">
+                <div><dt>注册时间</dt><dd>{{ formatAccountDate(props.user.createdAt) }}</dd></div>
+                <div><dt>注册方式</dt><dd>{{ registrationMethod(props.user) }}</dd></div>
+              </dl>
             </section>
 
             <div v-if="profileError" class="state-card error">{{ profileError }}</div>
@@ -2004,6 +2040,14 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             <section class="menu-list">
               <button type="button" @click="openRoute('settings')">
                 <span>系统设置</span>
+                <span class="chevron" aria-hidden="true">&gt;</span>
+              </button>
+              <button type="button" @click="openRoute('invitations')">
+                <span>邀请码</span>
+                <span class="chevron" aria-hidden="true">&gt;</span>
+              </button>
+              <button type="button" @click="openRoute('password')">
+                <span>修改密码</span>
                 <span class="chevron" aria-hidden="true">&gt;</span>
               </button>
               <button type="button" @click="openRoute('follows')">
@@ -3833,12 +3877,14 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
 
 .profile-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 14px;
   padding: 16px;
 }
 
 .profile-head img {
+  flex: 0 0 auto;
   width: 64px;
   height: 64px;
   border-radius: 8px;
@@ -3851,6 +3897,12 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.profile-identity { flex: 1; min-width: 0; }
+.profile-details { flex: 0 0 100%; display: grid; gap: 12px; margin: 0; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.profile-details > div { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 12px; font-size: 12px; line-height: 1.7; }
+.profile-details dt { color: var(--ink-400); }
+.profile-details dd { margin: 0; color: var(--ink-700); overflow-wrap: anywhere; }
 
 .profile-subtitle {
   margin-top: 3px;

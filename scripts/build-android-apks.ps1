@@ -177,7 +177,7 @@ $config = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
 $appName = ConvertTo-FileSafeName $config.productName
 $version = ConvertTo-FileSafeName $config.version
 if (-not $appName) { $appName = "BakaVip2" }
-if (-not $version) { $version = "1.2.2" }
+if (-not $version) { $version = "1.2.3" }
 
 $zipalign = Find-AndroidBuildTool "zipalign.exe"
 $apksigner = Find-AndroidBuildTool "apksigner.bat"

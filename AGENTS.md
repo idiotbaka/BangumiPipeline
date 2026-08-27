@@ -685,7 +685,7 @@ qBittorrent `torrents/info` 响应可能很大；读取、JSON 解析和错误�
 
 Android 原生和资源约定：
 
-- APP 名称默认为 `BakaVip2`，版本默认为 `1.2.2`，包名为 `vip.baka.bangumipipeline.mobile`。
+- APP 名称默认为 `BakaVip2`，版本默认为 `1.2.3`，包名为 `vip.baka.bangumipipeline.mobile`。
 - Tauri bundle 图标来自 `src-tauri/icons/icon.png` 和 `src-tauri/icons/icon.ico`。
 - Android launcher 图标覆盖在 `src-tauri/android-res/mipmap-*`，不要只改 Tauri 默认图标而忘记 Android 资源。
 - Android 主题、应用名、颜色、启动窗口资源覆盖在 `src-tauri/android-res/values*` 和 `drawable/`。
@@ -837,7 +837,7 @@ Viewer API 在 `backend/internal/httpapi/viewer.go`。
 - npm workspace/package：`bangumi-pipeline`、`@bangumi-pipeline/*`
 - 移动端 npm workspace：`@bangumi-pipeline/mobile`
 - 移动端 APP 名称：`BakaVip2`
-- 移动端默认版本：`1.2.2`
+- 移动端默认版本：`1.2.3`
 - 移动端 Android package identifier：`vip.baka.bangumipipeline.mobile`
 - 移动端 Rust crate：`bangumi-pipeline-mobile`
 - Docker 二进制：`bangumi-pipeline`

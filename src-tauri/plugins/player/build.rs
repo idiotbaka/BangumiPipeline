@@ -2,6 +2,8 @@ const COMMANDS: &[&str] = &[
     "enterFullscreen",
     "exitFullscreen",
     "setKeepScreenOn",
+    "setTheme",
+    "copyText",
     "enter_fullscreen",
     "exit_fullscreen",
     "set_keep_screen_on",

@@ -1,0 +1,315 @@
+/* APP 深色外观：保持粉色点缀，以蓝灰色区分页面、卡片和嵌套内容。
+ * 仅调整界面，封面、立绘、视频及原本为黑色的媒体查看器保持原色。 */
+:root[data-mobile-theme='dark'] {
+  --ink-900: #edf1f8;
+  --ink-700: #d5ddea;
+  --ink-600: #b9c5d8;
+  --ink-400: #9ba9bf;
+  --ink-300: #8493ac;
+  --pink-50: #302332;
+  --pink-100: #432b40;
+  --pink-600: #ff8bb7;
+  --cyan-50: #1b303b;
+  --blue-400: #9cafea;
+  --blue-500: #96b5f5;
+  --line: rgba(255, 139, 183, .26);
+  --line-soft: rgba(255, 139, 183, .14);
+  --line-cool: rgba(150, 181, 245, .2);
+  --glass: rgba(28, 35, 49, .85);
+  --glass-strong: rgba(28, 35, 49, .96);
+  --night-bg: #11151f;
+  --night-surface: #1c2331;
+  --night-raised: #273245;
+  --night-inset: #151c29;
+  --night-border: rgba(166, 186, 221, .13);
+  --night-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+  --night-tint: linear-gradient(135deg, #332537, #1e3442);
+  --night-action: #b83972;
+  color-scheme: dark;
+  color: var(--ink-900);
+  background: var(--night-bg);
+}
+
+:root[data-mobile-theme='dark'] body {
+  background: var(--night-bg);
+}
+
+:root[data-mobile-theme='dark'] body:is(.mobile-player-fullscreen, .mobile-image-viewer-open) {
+  background: #000;
+}
+
+:root[data-mobile-theme='dark'] ::selection {
+  color: #fff;
+  background: #813958;
+}
+
+/* 顶底导航和页面切换时露出的底层都使用深色。 */
+:root[data-mobile-theme='dark'] :is(.mobile-shell, .detail-mode) {
+  background: linear-gradient(180deg, #1c1928, var(--night-bg) 340px);
+}
+
+:root[data-mobile-theme='dark'] :is(.app-topbar, .sub-topbar, .bottom-nav) {
+  background: rgba(25, 31, 44, .97);
+  border-color: var(--night-border);
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-mobile-theme='dark'] :is(.top-search, .search-page-form, .sub-topbar button, .season-actions button) {
+  background: var(--night-raised);
+  border-color: var(--night-border);
+}
+
+/* 主页面卡片、我的、系统设置和各种空/错误状态。 */
+:root[data-mobile-theme='dark'] :is(.content-section, .schedule-toolbar, .library-filter-card, .profile-head, .menu-list, .settings-editor-card, .about-info-card, .about-update-card, .state-card, .list-row, .weekday-scroll, .load-more-button, .pull-refresh-indicator) {
+  background: var(--night-surface);
+  border-color: var(--night-border);
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-mobile-theme='dark'] :is(.weekday-scroll button, .tag-rail button, .server-address-field input) {
+  background: var(--night-inset);
+  border-color: var(--night-border);
+}
+
+:root[data-mobile-theme='dark'] :is(.weekday-scroll button.active, .tag-rail button.active) {
+  color: var(--pink-600);
+  background: var(--pink-50);
+  border-color: var(--line);
+}
+
+:root[data-mobile-theme='dark'] :is(.menu-list button:active, .about-update-card button:active:not(:disabled)) {
+  background: var(--night-raised);
+}
+
+:root[data-mobile-theme='dark'] :is(.episode-cover, .poster-cover, .library-cover, .list-cover, .poster-card img) {
+  background: var(--night-raised);
+}
+
+:root[data-mobile-theme='dark'] .episode-total {
+  color: var(--ink-700);
+  background: rgba(21, 28, 41, .9);
+}
+
+/* 长按番剧操作面板（Teleport 到 body）。 */
+:root[data-mobile-theme='dark'] :is(.anime-actions-panel, .episode-sheet-panel) {
+  background: var(--night-surface);
+  border-color: var(--night-border);
+  box-shadow: 0 -16px 48px rgba(0, 0, 0, .4);
+}
+
+:root[data-mobile-theme='dark'] :is(.anime-actions-handle, .episode-sheet-handle) {
+  background: #58657d;
+}
+
+:root[data-mobile-theme='dark'] .anime-actions-cover {
+  background: var(--night-tint);
+}
+
+:root[data-mobile-theme='dark'] :is(.anime-actions-metadata span, .anime-actions-error button, .anime-actions-buttons button) {
+  background: var(--night-raised);
+  border-color: var(--night-border);
+}
+
+:root[data-mobile-theme='dark'] .anime-actions-tags span {
+  background: var(--pink-50);
+  border-color: var(--line-soft);
+}
+
+/* 详情、选集、剧情和人物资料。 */
+:root[data-mobile-theme='dark'] .detail-screen {
+  background: linear-gradient(180deg, #090d17 0 214px, #1e1b2b 214px, var(--night-bg) 55%), var(--night-bg);
+}
+
+:root[data-mobile-theme='dark'] :is(.detail-state, .detail-skeleton) {
+  background: var(--night-bg);
+}
+
+:root[data-mobile-theme='dark'] :is(.playback-sticky, .detail-tabs, .detail-block, .detail-skeleton-card, .follow-button, .detail-state button) {
+  background: var(--night-surface);
+  border-color: var(--night-border);
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-mobile-theme='dark'] .detail-tab.active {
+  background: linear-gradient(180deg, transparent, var(--pink-50));
+}
+
+:root[data-mobile-theme='dark'] :is(.summary-box, .metadata-box)::after {
+  background: linear-gradient(transparent, var(--night-surface));
+}
+
+:root[data-mobile-theme='dark'] :is(.fact-row span, .character-card, .episode-sheet-panel > header button) {
+  background: var(--night-inset);
+  border-color: var(--night-border);
+}
+
+:root[data-mobile-theme='dark'] :is(.actor-chip, .relation-tag, .episode-sheet-item.selected .episode-sheet-meta > i) {
+  background: var(--night-raised);
+}
+
+:root[data-mobile-theme='dark'] .episode-sheet-item.selected {
+  background: var(--night-tint);
+  border-color: var(--line);
+}
+
+/* 评论正文、回复、遮罩与外链图片的占位底。 */
+:root[data-mobile-theme='dark'] :is(.comment-item, .comments-loading-list article, .comments-error-state button) {
+  background: var(--night-surface);
+  border-color: var(--night-border);
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-mobile-theme='dark'] .comment-item.reply {
+  background: var(--night-raised);
+  border-color: var(--night-border);
+  box-shadow: none;
+}
+
+:root[data-mobile-theme='dark'] .comment-external-image {
+  background: var(--night-inset);
+  border-color: var(--night-border);
+}
+
+:root[data-mobile-theme='dark'] .comment-strike {
+  text-decoration-color: var(--ink-400);
+}
+
+:root[data-mobile-theme='dark'] .comment-mask {
+  background: #080c14;
+  text-shadow: 0 0 8px #080c14;
+}
+
+:root[data-mobile-theme='dark'] :is(.comment-mask:focus, .comment-mask:active) {
+  color: var(--ink-700);
+  background: #4c3148;
+  text-shadow: none;
+}
+
+:root[data-mobile-theme='dark'] :is(.follow-error, .comments-error-state) {
+  color: #ffa1b5;
+}
+
+/* 关于 APP 和更新弹窗也沿用同一套主题。 */
+:root[data-mobile-theme='dark'] :is(.about-hero-card, .update-dialog) {
+  color: var(--ink-900);
+  background: linear-gradient(145deg, #2d2336, var(--night-surface) 52%, #1d3340);
+  border-color: var(--night-border);
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-mobile-theme='dark'] :is(.about-logo-shell, .about-version) {
+  background: var(--night-raised);
+  border-color: var(--night-border);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .22);
+}
+
+:root[data-mobile-theme='dark'] :is(.update-badge, .update-error) {
+  color: var(--pink-600);
+  background: var(--pink-50);
+  border-color: var(--line);
+}
+
+:root[data-mobile-theme='dark'] :is(.update-dialog header p, .version-track) {
+  color: var(--ink-400);
+}
+
+:root[data-mobile-theme='dark'] :is(.update-dialog header strong, .version-track .latest) {
+  color: var(--pink-600);
+}
+
+:root[data-mobile-theme='dark'] .update-notes {
+  background: var(--night-inset);
+  border-color: var(--night-border);
+}
+
+:root[data-mobile-theme='dark'] :is(.update-notes p, .ignore-button) {
+  color: var(--ink-600);
+}
+
+:root[data-mobile-theme='dark'] .ignore-button {
+  background: var(--night-raised);
+  border-color: var(--night-border);
+}
+
+/* 立绘开屏与登录注册；减少背景装饰亮度，保留立绘原色。 */
+:root[data-mobile-theme='dark'] :is(.boot-screen, .auth-screen, .signed-screen) {
+  background:
+    radial-gradient(ellipse at 95% 6%, rgba(142, 60, 112, .18), transparent 48%),
+    radial-gradient(ellipse at 6% 92%, rgba(51, 128, 155, .12), transparent 48%),
+    var(--night-bg);
+}
+
+:root[data-mobile-theme='dark'] .boot-screen::before {
+  background: linear-gradient(135deg, rgba(113, 55, 100, .22), rgba(42, 94, 116, .2));
+}
+
+:root[data-mobile-theme='dark'] .boot-grid {
+  background:
+    repeating-linear-gradient(0deg, rgba(150, 181, 245, .04) 0 1px, transparent 1px 38px),
+    repeating-linear-gradient(90deg, rgba(255, 139, 183, .04) 0 1px, transparent 1px 30px);
+}
+
+:root[data-mobile-theme='dark'] :is(.boot-float-card, .signed-card, .auth-back-button, .server-disclosure) {
+  background: var(--glass);
+  border-color: var(--night-border);
+  box-shadow: var(--night-shadow);
+}
+
+:root[data-mobile-theme='dark'] :is(.server-disclosure.expanded, .server-disclosure:active:not(:disabled), .server-editor-row input, .auth-input-shell) {
+  background: var(--night-inset);
+  border-color: var(--night-border);
+}
+
+:root[data-mobile-theme='dark'] .auth-input-shell:focus-within {
+  background: var(--night-surface);
+  border-color: var(--pink-300);
+}
+
+:root[data-mobile-theme='dark'] .auth-input-shell input::placeholder {
+  color: var(--ink-300);
+}
+
+:root[data-mobile-theme='dark'] .server-status-dot {
+  border-color: var(--night-surface);
+}
+
+:root[data-mobile-theme='dark'] .server-editor > small.success {
+  color: #82daca;
+}
+
+:root[data-mobile-theme='dark'] .form-message {
+  color: #ffb1c9;
+  background: #3b2333;
+}
+
+:root[data-mobile-theme='dark'] input:autofill {
+  -webkit-text-fill-color: var(--ink-900);
+  box-shadow: inset 0 0 0 100px var(--night-inset);
+}
+
+/* 白字实心操作采用较深玫红，避免浅粉背景降低可读性。 */
+:root[data-mobile-theme='dark'] :is(.submit-button, .save-settings-button, .download-button, .search-page-form button, .follow-button.followed, .anime-actions-buttons .anime-action-primary, .anime-actions-buttons .anime-action-danger) {
+  color: #fff;
+  background: var(--night-action);
+}
+
+/* 页面与评论的骨架占位，包含详情首屏和长按面板。 */
+:root[data-mobile-theme='dark'] :is(.skeleton-block, .skeleton-card .poster-cover, .skeleton-card .library-cover, .skeleton-continue-card .episode-cover, .skeleton-list-row .poster-fallback, .detail-skeleton-shimmer, .comments-loading-list i, .comments-loading-list span, .comments-loading-list p) {
+  background: var(--night-raised);
+}
+
+:root[data-mobile-theme='dark'] :is(.skeleton-block, .detail-skeleton-shimmer, .comments-loading-list i, .comments-loading-list span, .comments-loading-list p)::after {
+  background: linear-gradient(100deg, transparent 18%, rgba(160, 182, 220, .09) 45%, transparent 72%);
+}
+
+:root[data-mobile-theme='dark'] .detail-skeleton-player {
+  background: #101522;
+}
+
+:root[data-mobile-theme='dark'] .anime-actions-loading i {
+  background: linear-gradient(90deg, var(--night-inset), var(--night-raised), var(--night-inset));
+}
+
+:root[data-mobile-theme='dark'] body.bp-tv-app :focus-visible {
+  box-shadow: 0 0 0 8px var(--night-raised), 0 12px 30px rgba(0, 0, 0, .24);
+}

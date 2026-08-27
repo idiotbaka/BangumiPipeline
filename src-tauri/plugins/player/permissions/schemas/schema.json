@@ -295,6 +295,18 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the copyText command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-copyText",
+          "markdownDescription": "Enables the copyText command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the copyText command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-copyText",
+          "markdownDescription": "Denies the copyText command without any pre-configured scope."
+        },
+        {
           "description": "Enables the enterFullscreen command without any pre-configured scope.",
           "type": "string",
           "const": "allow-enterFullscreen",
@@ -355,6 +367,18 @@
           "markdownDescription": "Denies the setKeepScreenOn command without any pre-configured scope."
         },
         {
+          "description": "Enables the setTheme command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-setTheme",
+          "markdownDescription": "Enables the setTheme command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the setTheme command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-setTheme",
+          "markdownDescription": "Denies the setTheme command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_keep_screen_on command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-keep-screen-on",
@@ -367,10 +391,10 @@
           "markdownDescription": "Denies the set_keep_screen_on command without any pre-configured scope."
         },
         {
-          "description": "Allows the mobile player to control native fullscreen and playback wake lock.\n#### This default permission set includes:\n\n- `allow-enterFullscreen`\n- `allow-exitFullscreen`\n- `allow-setKeepScreenOn`\n- `allow-enter-fullscreen`\n- `allow-exit-fullscreen`\n- `allow-set-keep-screen-on`",
+          "description": "Allows native fullscreen, playback wake lock, app theme system bars, and copying invitation codes.\n#### This default permission set includes:\n\n- `allow-enterFullscreen`\n- `allow-exitFullscreen`\n- `allow-setKeepScreenOn`\n- `allow-setTheme`\n- `allow-copyText`\n- `allow-enter-fullscreen`\n- `allow-exit-fullscreen`\n- `allow-set-keep-screen-on`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Allows the mobile player to control native fullscreen and playback wake lock.\n#### This default permission set includes:\n\n- `allow-enterFullscreen`\n- `allow-exitFullscreen`\n- `allow-setKeepScreenOn`\n- `allow-enter-fullscreen`\n- `allow-exit-fullscreen`\n- `allow-set-keep-screen-on`"
+          "markdownDescription": "Allows native fullscreen, playback wake lock, app theme system bars, and copying invitation codes.\n#### This default permission set includes:\n\n- `allow-enterFullscreen`\n- `allow-exitFullscreen`\n- `allow-setKeepScreenOn`\n- `allow-setTheme`\n- `allow-copyText`\n- `allow-enter-fullscreen`\n- `allow-exit-fullscreen`\n- `allow-set-keep-screen-on`"
         }
       ]
     }

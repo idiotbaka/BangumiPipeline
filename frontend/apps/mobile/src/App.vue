@@ -17,11 +17,13 @@ import AppUpdateDialog from './components/AppUpdateDialog.vue'
 import MobileShell from './components/MobileShell.vue'
 import { openExternalURL } from './native/opener'
 import { isTVApp } from './platform'
+import { useMobileTheme } from './theme'
 import charaImage from '../../viewer/src/assets/chara.png'
 import tauriConfig from '../../../../src-tauri/tauri.conf.json'
 
 const appName = isTVApp ? 'BakaVip2 TV' : 'BakaVip2'
 const appVersion = tauriConfig.version
+const { theme, saving: themeSaving, message: themeMessage, setTheme, initializeNativeTheme } = useMobileTheme()
 
 const ready = ref(false)
 const loading = ref(false)
@@ -68,6 +70,7 @@ const submitLabel = computed(() => {
 const submitDisabled = computed(() => loading.value || (mode.value === 'register' && !registrationEnabled.value))
 
 onMounted(async () => {
+  void initializeNativeTheme()
   document.title = appName
   const config = await loadAppConfig()
   apiBaseUrl.value = config.apiBaseUrl
@@ -349,6 +352,10 @@ function saveAndApplyAPIBaseURL() {
     :api-base-url="apiBaseUrl"
     :checking-app-update="checkingAppUpdate"
     :app-update-check-message="appUpdateCheckMessage"
+    :theme="theme"
+    :theme-saving="themeSaving"
+    :theme-message="themeMessage"
+    @theme-change="setTheme"
     @logout="logout"
     @server-address-change="changeServerAddress"
     @check-app-update="checkAppUpdate(true)"

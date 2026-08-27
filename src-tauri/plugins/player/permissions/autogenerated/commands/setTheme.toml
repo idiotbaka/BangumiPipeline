@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-setTheme"
+description = "Enables the setTheme command without any pre-configured scope."
+commands.allow = ["setTheme"]
+
+[[permission]]
+identifier = "deny-setTheme"
+description = "Denies the setTheme command without any pre-configured scope."
+commands.deny = ["setTheme"]

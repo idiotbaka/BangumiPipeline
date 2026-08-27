@@ -7,6 +7,21 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no"
     />
     <meta name="theme-color" content="#ff5f9e" />
+    <!-- 在 WebView 首次绘制前恢复外观，立绘开屏也使用已保存的主题。 -->
+    <script>
+      (() => {
+        let theme = 'light'
+        try {
+          if (localStorage.getItem('bp.mobile.theme') === 'dark') theme = 'dark'
+        } catch { /* 存储不可用时默认浅色。 */ }
+        document.documentElement.dataset.mobileTheme = theme
+        document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#11151f' : '#ff5f9e'
+      })()
+    </script>
+    <style>
+      :root { color-scheme: light; background: #fff; }
+      :root[data-mobile-theme='dark'] { color-scheme: dark; background: #11151f; }
+    </style>
     <title>BakaVip2</title>
   </head>
   <body>

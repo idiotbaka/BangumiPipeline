@@ -3,6 +3,8 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import { isTVApp } from './platform'
 import './style.css'
+import './theme.css'
+import './account.css'
 import { installTVFocusNavigation } from './tvFocus'
 
 document.documentElement.classList.toggle('bp-tv-app', isTVApp)

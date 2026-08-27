@@ -1,0 +1,33 @@
+/* 账号子页面直接使用主题色变量，深浅模式共用布局。 */
+.account-page { display: grid; gap: 14px; padding: 14px; }
+.account-panel { min-width: 0; padding: 18px 16px; background: var(--glass-strong); border: 1px solid var(--line-soft); border-radius: 16px; }
+.account-kicker { margin-bottom: 8px; font-size: 10px; letter-spacing: 2px; color: var(--pink-600); }
+.account-panel h2 { font-size: 20px; color: var(--ink-900); }
+.account-description { margin-top: 8px; font-size: 12px; line-height: 1.8; color: var(--ink-400); overflow-wrap: anywhere; }
+.account-primary { width: 100%; min-height: 46px; margin-top: 20px; padding: 10px 14px; color: #fff; background: #c53d78; border-radius: 10px; font-size: 14px; }
+.account-primary:disabled { opacity: .45; cursor: not-allowed; }
+.account-feedback { padding: 12px 14px; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; color: var(--ink-700); background: var(--cyan-50); border: 1px solid var(--line-cool); border-radius: 12px; }
+.account-feedback.error { color: var(--pink-600); background: var(--pink-50); border-color: var(--line); }
+.account-feedback button { padding: 7px 0; color: var(--pink-600); text-decoration: underline; }
+.invitation-allowance { display: grid; gap: 6px; margin: 20px 0 12px; }
+.invitation-allowance strong { font-size: 34px; color: var(--pink-600); }
+.invitation-allowance small, .invitation-allowance > span { font-size: 12px; color: var(--ink-400); font-weight: 400; }
+.invitation-list { display: grid; gap: 10px; min-width: 0; }
+.account-section-heading, .invitation-card header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.account-section-heading { padding: 5px 2px; }
+.account-section-heading h3 { font-size: 15px; }
+.account-section-heading > span, .invitation-card header small { font-size: 11px; color: var(--ink-400); }
+.invitation-status { padding: 4px 8px; border-radius: 6px; background: var(--pink-50); color: var(--pink-600); font-size: 11px; }
+.invitation-status.used { background: var(--cyan-50); color: var(--ink-400); }
+.invitation-code-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+.invitation-code-row code { flex: 1; min-width: 0; color: var(--ink-900); font-size: 17px; letter-spacing: 1px; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.invitation-code-row button { flex: 0 0 auto; min-height: 40px; padding: 8px 13px; border: 1px solid var(--line); border-radius: 9px; color: var(--pink-600); background: var(--pink-50); }
+.password-form fieldset { display: grid; gap: 10px; min-width: 0; margin: 22px 0 0; padding: 0; border: 0; }
+.password-form label { margin-top: 8px; font-size: 13px; color: var(--ink-700); }
+.password-form input { width: 100%; min-width: 0; height: 48px; padding: 0 12px; border: 1px solid var(--line-cool); border-radius: 10px; background: var(--glass); color: var(--ink-900); font-size: 16px; }
+.password-form input::placeholder { color: var(--ink-400); }
+.password-form input:focus { outline: 2px solid var(--pink-300); outline-offset: 1px; }
+.password-form small { font-size: 11px; color: var(--ink-400); }
+.password-form .password-mismatch { color: var(--pink-600); }
+.password-form .account-feedback { margin-top: 16px; }
+@media (min-width: 760px) { .account-page { width: min(100%, 680px); margin: 0 auto; padding: 24px; } }

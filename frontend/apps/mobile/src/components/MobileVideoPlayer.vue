@@ -57,6 +57,12 @@ const opSkipDismissed = ref(false)
 const seekGestureActive = ref(false)
 const seekGestureDelta = ref(0)
 const seekGestureTarget = ref(0)
+const seekGestureDragging = ref(false)
+const boostActive = ref(false)
+const displayedTime = computed(() => seekGestureDragging.value ? seekGestureTarget.value : currentTime.value)
+let boostTimer: ReturnType<typeof setTimeout> | null = null
+let boostedVideo: HTMLVideoElement | null = null
+let originalPlaybackRate = 1
 
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
@@ -84,6 +90,7 @@ let seekGesture:
       canSeek: boolean
       tracking: boolean
       moved: boolean
+      boosted: boolean
     }
   | null = null
 
@@ -92,13 +99,15 @@ const seekGestureClickTolerance = 6
 const doubleTapDelay = 260
 const doubleTapDistance = 42
 const maxSeekGestureSeconds = 600
+const boostDelay = 450
+const boostMoveTolerance = 10
 
 const playerLoading = computed(() => Boolean(props.src) && !mediaReady.value && !errorMessage.value)
 const canControlPlayback = computed(() => Boolean(props.src) && mediaReady.value && !errorMessage.value)
 const hasEpisodes = computed(() => props.episodes.length > 0)
 const activeOPSkip = computed(() => normalizeOPSkip(props.opSkip))
 const progressStyle = computed(() => {
-  const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0
+  const progress = duration.value > 0 ? (displayedTime.value / duration.value) * 100 : 0
   const buffered = duration.value > 0 ? (bufferedEnd.value / duration.value) * 100 : progress
   const clampedProgress = clampPercent(progress)
   const clampedBuffered = Math.max(clampedProgress, clampPercent(buffered))
@@ -153,12 +162,17 @@ watch(withinOPSkipPrompt, (inside) => {
 window.addEventListener('popstate', handlePopState)
 
 onMounted(() => {
+  window.addEventListener('blur', cancelSeekGesture)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   if (isTVApp) {
     window.addEventListener('bp-tv-key', handleTVRemoteEvent as EventListener)
   }
 })
 
 onBeforeUnmount(() => {
+  cancelSeekGesture()
+  window.removeEventListener('blur', cancelSeekGesture)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener('popstate', handlePopState)
   window.removeEventListener('bp-tv-key', handleTVRemoteEvent as EventListener)
   reportProgress()
@@ -284,6 +298,7 @@ function handlePlay() {
 }
 
 function handlePause() {
+  cancelSeekGesture()
   playing.value = false
   void setNativeKeepScreenOn(false)
   reportProgress()
@@ -293,6 +308,7 @@ function handlePause() {
 }
 
 function handleEnded() {
+  cancelSeekGesture()
   playing.value = false
   currentTime.value = duration.value
   void setNativeKeepScreenOn(false)
@@ -331,6 +347,7 @@ function attemptAutoplay() {
 }
 
 function handleError() {
+  cancelSeekGesture()
   errorMessage.value = '视频加载失败，请稍后重试'
   mediaReady.value = false
   buffering.value = false
@@ -345,9 +362,8 @@ function handleInteraction() {
 }
 
 function handlePointerDown(event: PointerEvent) {
-  resetSeekGesturePreview()
-  if (!event.isPrimary || isInteractiveTarget(event.target)) {
-    seekGesture = null
+  cancelSeekGesture()
+  if (!event.isPrimary || event.button !== 0 || isInteractiveTarget(event.target)) {
     return
   }
   seekGesture = {
@@ -359,9 +375,23 @@ function handlePointerDown(event: PointerEvent) {
     canSeek: canStartSeekGesture(event),
     tracking: false,
     moved: false,
+    boosted: false,
   }
   if (seekGesture.canSeek) {
     player.value?.setPointerCapture?.(event.pointerId)
+    boostTimer = setTimeout(() => {
+      boostTimer = null
+      const element = video.value
+      if (!seekGesture || seekGesture.tracking || !element || element.paused || element.ended || !canControlPlayback.value) return
+      stopTapTimer()
+      lastTap = null
+      originalPlaybackRate = element.playbackRate
+      boostedVideo = element
+      element.playbackRate = 2
+      seekGesture.boosted = true
+      boostActive.value = true
+      stopControlsTimer()
+    }, boostDelay)
   }
 }
 
@@ -374,6 +404,9 @@ function handlePointerMove(event: PointerEvent) {
   const deltaY = event.clientY - seekGesture.startY
   const absX = Math.abs(deltaX)
   const absY = Math.abs(deltaY)
+  // 一次按住只进入一种手势，倍速触发后移动也不再转为快进。
+  if (seekGesture.boosted) return
+  if (absX > boostMoveTolerance || absY > boostMoveTolerance) stopBoostTimer()
   if (absX > seekGestureClickTolerance || absY > seekGestureClickTolerance) {
     seekGesture.moved = true
   }
@@ -389,6 +422,10 @@ function handlePointerMove(event: PointerEvent) {
       return
     }
     seekGesture.tracking = true
+    stopBoostTimer()
+    stopTapTimer()
+    lastTap = null
+    seekGestureDragging.value = true
     seekGestureActive.value = true
     showControls()
   }
@@ -404,10 +441,9 @@ function handlePointerUp(event: PointerEvent) {
     applySeekGesture()
   }
   const controlsVisibleAtStart = seekGesture.controlsVisibleAtStart
-  const shouldHandleTap = !seekGesture.tracking && !seekGesture.moved && !isInteractiveTarget(event.target)
-  releaseGesturePointerCapture(event.pointerId)
-  seekGesture = null
-  resetSeekGesturePreview()
+  const shouldHandleTap = !seekGesture.boosted && !seekGesture.tracking && !seekGesture.moved && !isInteractiveTarget(event.target)
+  cancelSeekGesture()
+  scheduleControlsHide()
   if (shouldHandleTap) {
     handlePlayerTap(event, controlsVisibleAtStart)
   }
@@ -458,11 +494,23 @@ function applySeekGesture() {
 }
 
 function cancelSeekGesture() {
-  if (seekGesture?.pointerId !== undefined) {
-    releaseGesturePointerCapture(seekGesture.pointerId)
-  }
+  stopBoostTimer()
+  if (boostedVideo) boostedVideo.playbackRate = originalPlaybackRate
+  boostedVideo = null
+  boostActive.value = false
+  const pointerId = seekGesture?.pointerId
   seekGesture = null
   resetSeekGesturePreview()
+  if (pointerId !== undefined) releaseGesturePointerCapture(pointerId)
+}
+
+function stopBoostTimer() {
+  if (boostTimer !== null) clearTimeout(boostTimer)
+  boostTimer = null
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) cancelSeekGesture()
 }
 
 function releaseGesturePointerCapture(pointerId: number) {
@@ -474,6 +522,7 @@ function releaseGesturePointerCapture(pointerId: number) {
 }
 
 function resetSeekGesturePreview() {
+  seekGestureDragging.value = false
   seekGestureActive.value = false
   seekGestureDelta.value = 0
   seekGestureTarget.value = currentTime.value
@@ -525,7 +574,7 @@ function showControls() {
 
 function scheduleControlsHide() {
   stopControlsTimer()
-  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value || tvControlHasFocus()) return
+  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value || boostActive.value || seekGestureDragging.value || tvControlHasFocus()) return
   controlsTimer = setTimeout(() => {
     if (
       playing.value
@@ -732,6 +781,7 @@ function skipOP() {
 }
 
 async function toggleEpisodePicker() {
+  cancelSeekGesture()
   if (!hasEpisodes.value) return
   if (!nativeFullscreen.value) {
     emit('open-episode-sheet')
@@ -805,6 +855,7 @@ async function toggleFullscreen() {
 }
 
 async function enterFullscreen() {
+  cancelSeekGesture()
   if (nativeFullscreen.value) return
   nativeFullscreen.value = true
   document.body.classList.add('mobile-player-fullscreen')
@@ -818,6 +869,7 @@ async function enterFullscreen() {
 }
 
 async function exitFullscreen(options: { fromPopState?: boolean; fromUnmount?: boolean } = {}) {
+  cancelSeekGesture()
   if (!nativeFullscreen.value) return
   episodePickerOpen.value = false
   episodePickerHistoryPushed = false
@@ -909,7 +961,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
     <section
       ref="player"
       class="mobile-player"
-      :class="{ fullscreen: nativeFullscreen, 'ui-hidden': !controlsVisible, loading: playerLoading, 'tv-player': isTVApp }"
+      :class="{ fullscreen: nativeFullscreen, 'ui-hidden': !controlsVisible, loading: playerLoading, 'tv-player': isTVApp, boosting: boostActive }"
       tabindex="0"
       :data-tv-key-scope="isTVApp ? 'player' : undefined"
       :data-tv-autofocus="isTVApp ? 'true' : undefined"
@@ -920,6 +972,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
       @pointerup="handlePointerUp"
       @pointercancel="handlePointerCancel"
       @lostpointercapture="handlePointerCancel"
+      @contextmenu.prevent
       @focusin="handleInteraction"
     >
     <video
@@ -958,6 +1011,11 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
       <small>{{ seekGestureDirection === 'forward' ? '快进到' : '快退到' }} {{ seekGestureTargetText }}</small>
     </div>
 
+    <div v-if="boostActive" class="boost-status" role="status">
+      <span class="boost-arrows" aria-hidden="true"><i /><i /><i /></span>
+      <strong>2×</strong><span>倍速播放中</span>
+    </div>
+
     <div class="player-title">
       <span>{{ nativeFullscreen ? '正在播放' : 'BakaVip2' }}</span>
       <p>{{ title }}</p>
@@ -982,7 +1040,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
         min="0"
         :max="duration || 0"
         step="0.1"
-        :value="currentTime"
+        :value="displayedTime"
         :style="progressStyle"
         :disabled="!canControlPlayback"
         aria-label="播放进度"
@@ -998,7 +1056,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
         >
           <i :class="{ pause: playing }" aria-hidden="true" />
         </button>
-        <span>{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
+        <span>{{ formatTime(displayedTime) }} / {{ formatTime(duration) }}</span>
         <button
           type="button"
           class="episode-picker-button"
@@ -1074,6 +1132,32 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
 </template>
 
 <style scoped>
+.boost-status {
+  position: absolute;
+  z-index: 12;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 13px;
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  background: rgba(15, 20, 32, .82);
+  border: 1px solid rgba(255, 139, 183, .36);
+  border-radius: 999px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.boost-status strong { color: #ff9fc3; }
+.boost-arrows { display: flex; gap: 2px; margin-right: 2px; }
+.boost-arrows i { width: 6px; height: 8px; background: #ff9fc3; clip-path: polygon(0 0, 100% 50%, 0 100%); animation: boost-flow 800ms infinite; }
+.boost-arrows i:nth-child(2) { animation-delay: 130ms; }
+.boost-arrows i:nth-child(3) { animation-delay: 260ms; }
+@keyframes boost-flow { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .boost-arrows i { animation: none; } }
+
 .mobile-player {
   position: relative;
   width: 100%;
@@ -1615,6 +1699,23 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
 
 .mobile-player.ui-hidden .hidden-progress {
   opacity: 1;
+}
+
+/* 长按倍速期间只保留倍速状态，让视频画面不受控制 UI 和渐变遮罩影响。 */
+.mobile-player.boosting .player-shade,
+.mobile-player.boosting .player-title,
+.mobile-player.boosting .player-controls,
+.mobile-player.boosting .hidden-progress {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mobile-player.boosting .player-title {
+  transform: translateY(-8px);
+}
+
+.mobile-player.boosting .player-controls {
+  transform: translateY(8px);
 }
 
 .tv-remote-hint {
