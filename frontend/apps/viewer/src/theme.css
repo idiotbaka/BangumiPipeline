@@ -72,29 +72,25 @@
 }
 
 /* 顶栏和菜单：实体深色底，保持文字与交互状态清晰。 */
-:root[data-viewer-theme='dark'] :is(.main-nav, .search-box, .app-download-link, .night-mode-button, .user-chip) {
+:root[data-viewer-theme='dark'] :is(.main-nav, .search-box, .app-download-link, .theme-button, .user-chip) {
   background: var(--night-surface);
   border-color: var(--night-border);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
 }
 
-:root[data-viewer-theme='dark'] .user-menu {
+:root[data-viewer-theme='dark'] :is(.theme-menu, .user-menu) {
   background: #1d2433;
   border-color: var(--night-border);
   box-shadow: 0 18px 38px rgba(0, 0, 0, 0.4);
 }
 
-:root[data-viewer-theme='dark'] :is(.nav-item:hover, .nav-item.active, .app-download-link:hover, .night-mode-button:hover, .night-mode-button[aria-pressed='true']) {
+:root[data-viewer-theme='dark'] :is(.nav-item:hover, .nav-item.active, .app-download-link:hover, .theme-button:hover) {
   color: var(--pink-600);
   background: var(--pink-50);
 }
 
 :root[data-viewer-theme='dark'] .app-download-link {
   color: var(--pink-600);
-}
-
-:root[data-viewer-theme='dark'] .night-mode-button[aria-pressed='true'] {
-  border-color: var(--line);
 }
 
 /* 轮播、封面与信息徽标。黄底贴片使用固定深色文字。 */

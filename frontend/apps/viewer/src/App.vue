@@ -19,7 +19,7 @@ const registrationEnabled = ref(true)
 const inviteRequired = ref(false)
 const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
 const isAppDownloadPage = currentPath === '/app/download'
-const { isNightMode, toggleNightMode } = useViewerTheme(isAppDownloadPage)
+const { isNightMode, setTheme } = useViewerTheme(isAppDownloadPage)
 
 onMounted(async () => {
   if (isAppDownloadPage) {
@@ -114,7 +114,7 @@ async function logout() {
     :site-name="siteName"
     :loading="loading"
     :is-night-mode="isNightMode"
-    @toggle-night-mode="toggleNightMode"
+    @select-theme="setTheme"
     @logout="logout"
   />
 </template>

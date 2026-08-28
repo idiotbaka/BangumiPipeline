@@ -3,6 +3,8 @@ import { onMounted, onUnmounted, readonly, ref } from 'vue'
 // 与 index.html 中首次绘制前执行的主题初始化保持一致。
 const storageKey = 'bp-viewer-theme'
 
+export type ViewerTheme = 'light' | 'dark'
+
 export function useViewerTheme(isAppDownloadPage: boolean) {
   const isNightMode = ref(!isAppDownloadPage && document.documentElement.dataset.viewerTheme === 'dark')
 
@@ -13,11 +15,11 @@ export function useViewerTheme(isAppDownloadPage: boolean) {
     if (meta) meta.content = isNightMode.value ? '#10131d' : '#ff5f9e'
   }
 
-  function toggleNightMode() {
+  function setTheme(theme: ViewerTheme) {
     if (isAppDownloadPage) return
-    applyTheme(!isNightMode.value)
+    applyTheme(theme === 'dark')
     try {
-      localStorage.setItem(storageKey, isNightMode.value ? 'dark' : 'light')
+      localStorage.setItem(storageKey, theme)
     } catch {
       // 隐私设置或存储配额限制不应阻止本次浏览切换主题。
     }
@@ -32,5 +34,5 @@ export function useViewerTheme(isAppDownloadPage: boolean) {
   onMounted(() => window.addEventListener('storage', syncTheme))
   onUnmounted(() => window.removeEventListener('storage', syncTheme))
 
-  return { isNightMode: readonly(isNightMode), toggleNightMode }
+  return { isNightMode: readonly(isNightMode), setTheme }
 }
