@@ -243,6 +243,7 @@ function stagger(index: number) {
           @keydown.enter="emit('open-anime', item.bangumiId)"
         >
           <div class="card-cover">
+            <span v-if="item.isCompleted" class="completed-tag">完结</span>
             <img
               v-if="hasCover(item)"
               :src="coverURL(item)"

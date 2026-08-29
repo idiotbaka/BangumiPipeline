@@ -2,6 +2,35 @@ package viewer
 
 import "testing"
 
+func TestFollowedAnimeCompletedRequiresFinalRegularEpisode(t *testing.T) {
+	cases := []struct {
+		name          string
+		totalEpisodes int
+		episodeType   string
+		episodeNumber string
+		want          bool
+	}{
+		{name: "unknown total", totalEpisodes: 0, episodeType: "episode", episodeNumber: "12"},
+		{name: "earlier regular episode", totalEpisodes: 12, episodeType: "episode", episodeNumber: "11"},
+		{name: "fractional regular episode", totalEpisodes: 13, episodeType: "episode", episodeNumber: "13.5"},
+		{name: "sp final number", totalEpisodes: 12, episodeType: "sp", episodeNumber: "12"},
+		{name: "ova final number", totalEpisodes: 12, episodeType: "ova", episodeNumber: "12"},
+		{name: "oad final number", totalEpisodes: 12, episodeType: "oad", episodeNumber: "12"},
+		{name: "final regular episode", totalEpisodes: 12, episodeType: "episode", episodeNumber: "12", want: true},
+		{name: "legacy regular episode", totalEpisodes: 12, episodeType: "", episodeNumber: "12.0", want: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			media := []followedMedia{{ref: historyEpisodeRef{
+				episodeType: test.episodeType, episodeNumber: test.episodeNumber,
+			}}}
+			if got := followedAnimeCompleted(test.totalEpisodes, media); got != test.want {
+				t.Fatalf("followedAnimeCompleted() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestSortFollowedAnimePlacesCompletedFollowsLast(t *testing.T) {
 	items := []FollowedAnime{
 		{BangumiID: 1, WatchCompleted: true, CaughtUp: true, LastWatchedAt: 400, FollowedAt: 1},

@@ -54,6 +54,7 @@ export interface ViewerAnimeCard {
   nameCN: string
   title: string
   airDate: string
+  isCompleted: boolean
   hasCover: boolean
   imageStatus: string
   ratingScore: number | null
@@ -87,6 +88,7 @@ export interface ViewerScheduleCard {
   airDate: string
   airWeekday: number
   totalEpisodes: number
+  isCompleted: boolean
   hasCover: boolean
   imageStatus: string
   latestEpisode: string
@@ -221,6 +223,7 @@ export interface ViewerFollowedAnime {
   bangumiId: number
   animeTitle: string
   totalEpisodes: number
+  isCompleted: boolean
   mediaId: number
   episodeLabel: string
   episodeTitle: string

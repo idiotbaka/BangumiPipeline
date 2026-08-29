@@ -160,6 +160,27 @@ a {
   text-decoration: none;
 }
 
+/* 卡片完结标识：所有观看端番剧卡片共用同一视觉。 */
+.completed-tag {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  min-width: 48px;
+  height: 24px;
+  padding: 0 10px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 1px;
+  background: linear-gradient(135deg, var(--pink-400), var(--pink-600));
+  box-shadow: 0 8px 18px rgba(238, 63, 134, 0.4);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  transform: rotate(-3deg);
+}
+
 ::selection {
   background: var(--pink-200);
   color: var(--ink-900);

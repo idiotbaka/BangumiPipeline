@@ -131,6 +131,7 @@ type ViewerAnimeCard struct {
 	NameCN             string   `json:"nameCN"`
 	Title              string   `json:"title"`
 	AirDate            string   `json:"airDate"`
+	IsCompleted        bool     `json:"isCompleted"`
 	HasCover           bool     `json:"hasCover"`
 	ImageStatus        string   `json:"imageStatus"`
 	RatingScore        *float64 `json:"ratingScore"`
@@ -484,6 +485,7 @@ func (c *Catalog) viewerAnimeAggregates(ctx context.Context) ([]viewerAnimeAggre
 	rows, err := c.db.QueryContext(ctx, `
 SELECT am.bangumi_id, am.name, am.name_cn, am.air_date,
        am.image_local_path != '', am.image_status, am.rating_json,
+       CASE WHEN am.total_episodes > 0 THEN am.total_episodes ELSE am.eps END,
        mj.season_number,
        COALESCE(NULLIF(mj.episode_type, ''), 'episode') AS episode_type,
        mj.episode_number,
@@ -517,10 +519,11 @@ ORDER BY am.bangumi_id, media_updated_at DESC, mj.id DESC`)
 	for rows.Next() {
 		var card ViewerAnimeCard
 		var ratingJSON string
+		var totalEpisodes int
 		var episode viewerEpisodeRef
 		if err := rows.Scan(
 			&card.BangumiID, &card.Name, &card.NameCN, &card.AirDate,
-			&card.HasCover, &card.ImageStatus, &ratingJSON,
+			&card.HasCover, &card.ImageStatus, &ratingJSON, &totalEpisodes,
 			&episode.season, &episode.episodeType, &episode.episodeNumber, &episode.title, &episode.updatedAt,
 		); err != nil {
 			return nil, err
@@ -534,6 +537,9 @@ ORDER BY am.bangumi_id, media_updated_at DESC, mj.id DESC`)
 			indexByID[card.BangumiID] = index
 		}
 		aggregate := &aggregates[index]
+		if viewerAnimeCompleted(totalEpisodes, episode) {
+			aggregate.card.IsCompleted = true
+		}
 		if !aggregate.hasProgress || viewerEpisodeProgressLess(aggregate.progressEpisode, episode) {
 			aggregate.progressEpisode = episode
 			aggregate.hasProgress = true
@@ -1006,6 +1012,18 @@ func viewerEpisodeTypeRank(value string) int {
 func viewerEpisodeNumber(value string) (float64, bool) {
 	number, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 	return number, err == nil
+}
+
+func viewerAnimeCompleted(totalEpisodes int, episode viewerEpisodeRef) bool {
+	if totalEpisodes <= 0 {
+		return false
+	}
+	episodeType := strings.ToLower(strings.TrimSpace(episode.episodeType))
+	if episodeType != "" && episodeType != "episode" {
+		return false
+	}
+	number, ok := viewerEpisodeNumber(episode.episodeNumber)
+	return ok && number == float64(totalEpisodes)
 }
 
 func nullableInt64Value(value *int64) int64 {

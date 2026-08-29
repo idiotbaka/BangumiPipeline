@@ -18,6 +18,7 @@ type ViewerScheduleCard struct {
 	AirDate                string `json:"airDate"`
 	AirWeekday             int    `json:"airWeekday"`
 	TotalEpisodes          int    `json:"totalEpisodes"`
+	IsCompleted            bool   `json:"isCompleted"`
 	HasCover               bool   `json:"hasCover"`
 	ImageStatus            string `json:"imageStatus"`
 	LatestEpisode          string `json:"latestEpisode"`
@@ -122,6 +123,10 @@ ORDER BY bangumi_id, id`, strings.Join(placeholders, ",")), args...)
 			&episode.episodeNumber, &episode.updatedAt,
 		); err != nil {
 			return err
+		}
+		index := indexByID[bangumiID]
+		if viewerAnimeCompleted(items[index].TotalEpisodes, episode) {
+			items[index].IsCompleted = true
 		}
 		current, exists := progress[bangumiID]
 		if !exists || viewerEpisodeProgressLess(current, episode) {

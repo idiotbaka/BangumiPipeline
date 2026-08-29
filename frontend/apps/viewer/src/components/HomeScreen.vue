@@ -671,7 +671,9 @@ function isMainView(value: unknown): value is MainView {
               @keydown.enter="openAnime(item.bangumiId)"
             >
               <div class="poster-frame">
-                <span class="new-tag">NEW</span>
+                <span :class="item.isCompleted ? 'completed-tag' : 'new-tag'">
+                  {{ item.isCompleted ? '完结' : 'NEW' }}
+                </span>
                 <img
                   v-if="hasCover(item)"
                   :src="coverURL(item)"
@@ -745,6 +747,7 @@ function isMainView(value: unknown): value is MainView {
               @keydown.enter="openAnime(item.bangumiId)"
             >
               <div class="poster-frame">
+                <span v-if="item.isCompleted" class="completed-tag">完结</span>
                 <img
                   v-if="hasCover(item)"
                   :src="coverURL(item)"

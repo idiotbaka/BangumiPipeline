@@ -39,6 +39,7 @@ function updateText() {
     @keydown.enter="emit('open', item)"
   >
     <div class="follow-cover">
+      <span v-if="item.isCompleted" class="completed-tag">完结</span>
       <img
         v-if="item.mediaId > 0 && item.hasCover && !coverFailed"
         :src="coverURL()"

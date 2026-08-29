@@ -146,8 +146,8 @@ func TestViewerHomeRecentUpdatesReturnsTwentyFourCards(t *testing.T) {
 		itemKey := fmt.Sprintf("recent-%02d", index)
 		updatedAt := int64(1_800_000_000 - index)
 		_, err := db.ExecContext(ctx, `
-INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, air_date, image_status, created_at)
-VALUES (?, ?, ?, ?, '2026-07-01', 'not_found', ?)`,
+INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, air_date, total_episodes, image_status, created_at)
+VALUES (?, ?, ?, ?, '2026-07-01', 1, 'not_found', ?)`,
 			bangumiID, fmt.Sprintf("https://bgm.tv/subject/%d", bangumiID), fmt.Sprintf("Anime %02d", index), fmt.Sprintf("番剧 %02d", index), updatedAt)
 		if err != nil {
 			t.Fatal(err)
@@ -197,6 +197,9 @@ INSERT INTO media_jobs(
 	}
 	if home.RecentUpdates[0].BangumiID != 5000 || home.RecentUpdates[23].BangumiID != 5023 {
 		t.Fatalf("recent updates were not sorted and limited as expected: first=%+v last=%+v", home.RecentUpdates[0], home.RecentUpdates[23])
+	}
+	if !home.RecentUpdates[0].IsCompleted {
+		t.Fatalf("recent anime with its final regular episode should be completed: %+v", home.RecentUpdates[0])
 	}
 }
 

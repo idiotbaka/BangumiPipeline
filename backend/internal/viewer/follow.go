@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,7 @@ type FollowedAnime struct {
 	BangumiID           int64   `json:"bangumiId"`
 	AnimeTitle          string  `json:"animeTitle"`
 	TotalEpisodes       int     `json:"totalEpisodes"`
+	IsCompleted         bool    `json:"isCompleted"`
 	MediaID             int64   `json:"mediaId"`
 	EpisodeLabel        string  `json:"episodeLabel"`
 	EpisodeTitle        string  `json:"episodeTitle"`
@@ -142,6 +144,7 @@ func (s *Service) FollowedAnime(ctx context.Context, userID int64) ([]FollowedAn
 			TotalEpisodes: base.TotalEpisodes, FollowedAt: base.FollowedAt,
 		}
 		mediaItems := media[base.BangumiID]
+		item.IsCompleted = followedAnimeCompleted(base.TotalEpisodes, mediaItems)
 		var earliest, latest followedMedia
 		if len(mediaItems) > 0 {
 			earliest = mediaItems[0]
@@ -362,6 +365,23 @@ func followPlaceholders(ids []int64) (string, []any) {
 		args[index] = id
 	}
 	return strings.Join(placeholders, ","), args
+}
+
+func followedAnimeCompleted(totalEpisodes int, mediaItems []followedMedia) bool {
+	if totalEpisodes <= 0 {
+		return false
+	}
+	for _, media := range mediaItems {
+		episodeType := strings.ToLower(strings.TrimSpace(media.ref.episodeType))
+		if episodeType != "" && episodeType != "episode" {
+			continue
+		}
+		number, err := strconv.ParseFloat(strings.TrimSpace(media.ref.episodeNumber), 64)
+		if err == nil && number == float64(totalEpisodes) {
+			return true
+		}
+	}
+	return false
 }
 
 func sameFollowEpisode(left, right historyEpisodeRef) bool {
