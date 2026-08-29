@@ -22,6 +22,16 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 			t.Fatal(err)
 		}
 	}
+	if _, err := db.ExecContext(ctx, `
+UPDATE anime_metadata SET eps = 12, total_episodes = 13 WHERE bangumi_id = 18;
+UPDATE anime_metadata SET eps = 0, total_episodes = 3 WHERE bangumi_id = 17;
+INSERT INTO anime_episodes(bangumi_id, episode_id, ep_number, sort_number, type, created_at, updated_at)
+VALUES
+    (17, 1701, 1, 1, 0, 1, 1),
+    (17, 1702, 2, 2, 0, 1, 1),
+    (17, 1703, 0, 2.5, 1, 1, 1);`); err != nil {
+		t.Fatal(err)
+	}
 
 	catalog := bangumi.NewCatalog(db)
 	firstPage, err := catalog.ViewerLibraryPage(ctx, "", nil, 1, 16)
@@ -30,6 +40,12 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 	}
 	if firstPage.Total != 18 || len(firstPage.Items) != 16 || firstPage.Items[0].BangumiID != 18 {
 		t.Fatalf("unexpected first page: %+v", firstPage)
+	}
+	if firstPage.Items[0].TotalEpisodes != 12 {
+		t.Fatalf("library total should use configured regular episodes: %+v", firstPage.Items[0])
+	}
+	if firstPage.Items[1].BangumiID != 17 || firstPage.Items[1].TotalEpisodes != 2 {
+		t.Fatalf("library total fallback should count only regular episode rows: %+v", firstPage.Items[1])
 	}
 	secondPage, err := catalog.ViewerLibraryPage(ctx, "", nil, 2, 16)
 	if err != nil {

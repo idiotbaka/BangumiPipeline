@@ -1,6 +1,49 @@
 package viewer
 
-import "testing"
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"bangumipipeline.local/server/internal/database"
+)
+
+func TestFollowedAnimeUsesRegularEpisodeTotal(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "viewer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO viewer_users(id, username, password_hash, created_at, updated_at)
+VALUES (1, 'alice', 'hash', 1, 1);
+INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, eps, total_episodes, created_at)
+VALUES (1001, 'https://bgm.tv/subject/1001', 'Regular Anime', '正片番剧', 12, 13, 1);
+INSERT INTO viewer_anime_follows(user_id, bangumi_id, created_at, updated_at)
+VALUES (1, 1001, 1, 1);
+INSERT INTO subscription_items(id, item_key, title, bangumi_id, created_at, updated_at)
+VALUES (1, 'episode-12', 'Episode 12', 1001, 1, 1);
+INSERT INTO download_jobs(id, subscription_item_id, status, created_at, updated_at)
+VALUES (1, 1, 'completed', 1, 1);
+INSERT INTO media_jobs(
+    id, download_job_id, subscription_item_id, bangumi_id, anime_name,
+    season_number, episode_type, episode_number, status, output_path,
+    created_at, updated_at, completed_at
+) VALUES (1, 1, 1, 1001, '正片番剧', 1, 'episode', '12', 'completed', '/media/12.mp4', 1, 1, 1);`); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := NewService(db, time.Hour).FollowedAnime(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].TotalEpisodes != 12 || !items[0].IsCompleted {
+		t.Fatalf("follow should use the regular episode total for display and completion: %+v", items)
+	}
+}
 
 func TestFollowedAnimeCompletedRequiresFinalRegularEpisode(t *testing.T) {
 	cases := []struct {

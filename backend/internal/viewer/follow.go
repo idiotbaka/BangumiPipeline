@@ -263,7 +263,12 @@ func (s *Service) followedAnimeBases(ctx context.Context, userID int64) ([]follo
 	rows, err := s.db.QueryContext(ctx, `
 SELECT follow.bangumi_id,
        COALESCE(NULLIF(anime.name_cn, ''), anime.name),
-       CASE WHEN anime.total_episodes > 0 THEN anime.total_episodes ELSE anime.eps END,
+       CASE WHEN anime.eps > 0 THEN anime.eps ELSE (
+           SELECT COUNT(*)
+           FROM anime_episodes regular_episode
+           WHERE regular_episode.bangumi_id = anime.bangumi_id
+             AND regular_episode.type = 0
+       ) END,
        follow.created_at
 FROM viewer_anime_follows follow
 JOIN anime_metadata anime ON anime.bangumi_id = follow.bangumi_id

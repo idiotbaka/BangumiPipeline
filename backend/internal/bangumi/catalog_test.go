@@ -20,7 +20,7 @@ INSERT INTO anime_metadata(
     collection_json, meta_tags_json, created_at
 ) VALUES (
     1234, 'https://bgm.tv/subject/1234', 'Original', '中文标题', '2026-07-01', 3, 'Summary',
-    12, 12, 0, 'cover.jpg', 'downloaded', 'completed', 'completed',
+    12, 13, 0, 'cover.jpg', 'downloaded', 'completed', 'completed',
     '[{"key":"话数","value":"12"}]', '{"score":8.2}', '{}', '["TV"]', 100
 );
 INSERT INTO anime_tags(bangumi_id, name, count) VALUES (1234, '动画', 10);
@@ -62,6 +62,13 @@ INSERT INTO anime_characters(
 	}
 	if detail.Episodes[0].NameCN != "第一话" || detail.Episodes[1].SortNumber != 1.5 || detail.Episodes[1].Type != 1 {
 		t.Fatalf("unexpected episode metadata: %+v", detail.Episodes)
+	}
+	viewerDetail, err := catalog.ViewerAnimeDetail(ctx, 1234)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if viewerDetail.TotalEpisodes != 12 {
+		t.Fatalf("viewer detail total should exclude special episodes: %+v", viewerDetail)
 	}
 }
 
@@ -146,8 +153,8 @@ func TestViewerHomeRecentUpdatesReturnsTwentyFourCards(t *testing.T) {
 		itemKey := fmt.Sprintf("recent-%02d", index)
 		updatedAt := int64(1_800_000_000 - index)
 		_, err := db.ExecContext(ctx, `
-INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, air_date, total_episodes, image_status, created_at)
-VALUES (?, ?, ?, ?, '2026-07-01', 1, 'not_found', ?)`,
+INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, air_date, eps, total_episodes, image_status, created_at)
+VALUES (?, ?, ?, ?, '2026-07-01', 1, 2, 'not_found', ?)`,
 			bangumiID, fmt.Sprintf("https://bgm.tv/subject/%d", bangumiID), fmt.Sprintf("Anime %02d", index), fmt.Sprintf("番剧 %02d", index), updatedAt)
 		if err != nil {
 			t.Fatal(err)

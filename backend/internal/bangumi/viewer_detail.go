@@ -99,7 +99,7 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 		AirWeekday:    detail.AirWeekday,
 		Platform:      detail.Platform,
 		Summary:       detail.Summary,
-		TotalEpisodes: detail.TotalEpisodes,
+		TotalEpisodes: viewerRegularEpisodeTotal(detail.Eps, detail.Episodes),
 		HasCover:      detail.HasCover,
 		RatingScore:   mapRatingScore(detail.Rating),
 		Infobox:       detail.Infobox,
@@ -107,9 +107,6 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 		Tags:          detail.Tags,
 		Characters:    detail.Characters,
 		Episodes:      make([]ViewerDetailEpisode, 0, len(detail.Episodes)),
-	}
-	if result.TotalEpisodes <= 0 {
-		result.TotalEpisodes = detail.Eps
 	}
 	sort.SliceStable(result.Characters, func(i, j int) bool {
 		return viewerCharacterRelationRank(result.Characters[i].Relation) < viewerCharacterRelationRank(result.Characters[j].Relation)
@@ -209,6 +206,19 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 		return left.Key < right.Key
 	})
 	return result, nil
+}
+
+func viewerRegularEpisodeTotal(configuredEpisodes int, episodes []AnimeEpisode) int {
+	if configuredEpisodes > 0 {
+		return configuredEpisodes
+	}
+	total := 0
+	for _, episode := range episodes {
+		if episode.Type == 0 {
+			total++
+		}
+	}
+	return total
 }
 
 func (c *Catalog) viewerEpisodeCommentCounts(ctx context.Context, bangumiID int64) (map[int64]int, error) {

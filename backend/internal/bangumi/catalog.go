@@ -485,7 +485,12 @@ func (c *Catalog) viewerAnimeAggregates(ctx context.Context) ([]viewerAnimeAggre
 	rows, err := c.db.QueryContext(ctx, `
 SELECT am.bangumi_id, am.name, am.name_cn, am.air_date,
        am.image_local_path != '', am.image_status, am.rating_json,
-       CASE WHEN am.total_episodes > 0 THEN am.total_episodes ELSE am.eps END,
+       CASE WHEN am.eps > 0 THEN am.eps ELSE (
+           SELECT COUNT(*)
+           FROM anime_episodes regular_episode
+           WHERE regular_episode.bangumi_id = am.bangumi_id
+             AND regular_episode.type = 0
+       ) END,
        mj.season_number,
        COALESCE(NULLIF(mj.episode_type, ''), 'episode') AS episode_type,
        mj.episode_number,

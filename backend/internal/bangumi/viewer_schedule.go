@@ -41,7 +41,12 @@ SELECT am.bangumi_id,
        COALESCE(NULLIF(am.name_cn, ''), am.name),
        am.air_date,
        am.air_weekday,
-       CASE WHEN am.total_episodes > 0 THEN am.total_episodes ELSE am.eps END,
+       CASE WHEN am.eps > 0 THEN am.eps ELSE (
+           SELECT COUNT(*)
+           FROM anime_episodes regular_episode
+           WHERE regular_episode.bangumi_id = am.bangumi_id
+             AND regular_episode.type = 0
+       ) END,
        am.image_local_path != '',
        am.image_status
 FROM anime_metadata am

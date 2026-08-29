@@ -14,8 +14,8 @@ func TestViewerScheduleIncludesLatestEpisodeUpdatedAt(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, air_date, air_weekday, eps, total_episodes, created_at)
 VALUES
-    (7001, 'https://bgm.tv/subject/7001', 'Updated Anime', '更新番剧', '2026-07-01', 3, 2, 0, 1),
-    (7002, 'https://bgm.tv/subject/7002', 'Special Anime', '特别篇番剧', '2026-07-02', 4, 2, 2, 1);
+    (7001, 'https://bgm.tv/subject/7001', 'Updated Anime', '更新番剧', '2026-07-01', 3, 2, 3, 1),
+    (7002, 'https://bgm.tv/subject/7002', 'Special Anime', '特别篇番剧', '2026-07-02', 4, 2, 3, 1);
 
 INSERT INTO anime_tags(bangumi_id, name, count)
 VALUES (7001, '2026年7月', 1), (7002, '2026年7月', 1);
@@ -60,6 +60,9 @@ INSERT INTO media_jobs(
 	}
 	if !updated.IsCompleted {
 		t.Fatalf("anime with its final regular episode should be completed: %+v", updated)
+	}
+	if updated.TotalEpisodes != 2 {
+		t.Fatalf("schedule total should use regular episodes instead of all metadata episodes: %+v", updated)
 	}
 	specialOnly := items[7002]
 	if specialOnly.LatestEpisodeLabel != "SP 2" || specialOnly.LatestEpisodeUpdatedAt == nil || *specialOnly.LatestEpisodeUpdatedAt != 300 {
