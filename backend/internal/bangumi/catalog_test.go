@@ -72,6 +72,72 @@ INSERT INTO anime_characters(
 	}
 }
 
+func TestViewerAnimeDetailReportsCompletionFromFinalRegularEpisode(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openDatabase(t, ctx)
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO anime_metadata(bangumi_id, url, name, eps, total_episodes, created_at)
+VALUES (8123, 'https://bgm.tv/subject/8123', 'Completed Anime', 12, 13, 1);
+
+INSERT INTO subscription_items(id, item_key, title, bangumi_id, created_at, updated_at)
+VALUES (8123, 'detail-special-12', 'Special 12', 8123, 1, 1);
+
+INSERT INTO download_jobs(id, subscription_item_id, status, created_at, updated_at)
+VALUES (8123, 8123, 'completed', 1, 1);
+
+INSERT INTO media_jobs(
+    id, download_job_id, subscription_item_id, bangumi_id, anime_name,
+    season_number, episode_type, episode_number, status, output_path,
+    created_at, updated_at, completed_at
+) VALUES (
+    8123, 8123, 8123, 8123, 'Completed Anime',
+    1, 'sp', '12', 'completed', '/media/sp-12.mp4',
+    1, 1, 1
+);`); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := bangumi.NewCatalog(db)
+	detail, err := catalog.ViewerAnimeDetail(ctx, 8123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.IsCompleted {
+		t.Fatalf("a matching-number special episode must not complete the detail: %+v", detail)
+	}
+
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO subscription_items(id, item_key, title, bangumi_id, created_at, updated_at)
+VALUES (8124, 'detail-episode-12', 'Episode 12', 8123, 2, 2);
+
+INSERT INTO download_jobs(id, subscription_item_id, status, created_at, updated_at)
+VALUES (8124, 8124, 'completed', 2, 2);
+
+INSERT INTO media_jobs(
+    id, download_job_id, subscription_item_id, bangumi_id, anime_name,
+    season_number, episode_type, episode_number, status, output_path,
+    created_at, updated_at, completed_at
+) VALUES (
+    8124, 8124, 8124, 8123, 'Completed Anime',
+    1, 'episode', '12', 'completed', '/media/episode-12.mp4',
+    2, 2, 2
+);`); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err = catalog.ViewerAnimeDetail(ctx, 8123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !detail.IsCompleted {
+		t.Fatalf("the final regular episode should complete the detail: %+v", detail)
+	}
+	if detail.TotalEpisodes != 12 {
+		t.Fatalf("detail completion should use the regular episode total: %+v", detail)
+	}
+}
+
 func TestCatalogListIncludesOnlyBoundSubscriptionEpisodes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

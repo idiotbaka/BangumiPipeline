@@ -140,7 +140,12 @@ SELECT history.bangumi_id,
            ORDER BY episode.type, episode.episode_id
            LIMIT 1
        ), ''),
-       CASE WHEN anime.total_episodes > 0 THEN anime.total_episodes ELSE anime.eps END,
+       CASE WHEN anime.eps > 0 THEN anime.eps ELSE (
+           SELECT COUNT(*)
+           FROM anime_episodes regular_episode
+           WHERE regular_episode.bangumi_id = anime.bangumi_id
+             AND regular_episode.type = 0
+       ) END,
        history.position_seconds,
        history.duration_seconds,
        history.completed,

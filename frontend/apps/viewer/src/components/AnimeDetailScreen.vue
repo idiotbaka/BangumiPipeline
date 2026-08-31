@@ -355,6 +355,10 @@ function formatInfoValue(value: unknown): string {
             <span>{{ weekdays[anime.airWeekday] || '放送日未定' }}</span>
             <i />
             <span>{{ anime.totalEpisodes > 0 ? `全 ${anime.totalEpisodes} 话` : '话数未定' }}</span>
+            <template v-if="anime.isCompleted">
+              <i />
+              <span class="completion-status">已完结</span>
+            </template>
           </div>
         </div>
       </header>
@@ -574,6 +578,7 @@ function formatInfoValue(value: unknown): string {
 .heading-meta { display: grid; justify-items: end; gap: 11px; padding-bottom: 5px; color: var(--ink-600); font-size: 13px; white-space: nowrap; }
 .heading-facts { display: flex; align-items: center; gap: 10px; }
 .heading-facts i { width: 5px; height: 5px; background: var(--pink-300); transform: rotate(45deg); }
+.heading-facts .completion-status { color: var(--pink-600); }
 .follow-button { min-width: 96px; height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; padding: 0 17px; color: var(--pink-600); font-size: 14px; border: 1px solid var(--pink-200); background: rgba(255,255,255,.76); box-shadow: 0 10px 22px rgba(255,95,158,.1); clip-path: polygon(var(--bevel-sm)); transition: color 160ms ease, background 160ms ease; }
 .follow-button:hover:not(:disabled), .follow-button.followed { color: #fff; background: linear-gradient(135deg, var(--pink-400), var(--pink-600)); }
 .follow-button:disabled { cursor: wait; opacity: .65; }

@@ -22,6 +22,7 @@ type ViewerAnimeDetail struct {
 	Platform      string                `json:"platform"`
 	Summary       string                `json:"summary"`
 	TotalEpisodes int                   `json:"totalEpisodes"`
+	IsCompleted   bool                  `json:"isCompleted"`
 	HasCover      bool                  `json:"hasCover"`
 	RatingScore   *float64              `json:"ratingScore"`
 	Infobox       []map[string]any      `json:"infobox"`
@@ -115,6 +116,15 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 	mediaItems, err := c.viewerDetailMedia(ctx, bangumiID)
 	if err != nil {
 		return ViewerAnimeDetail{}, err
+	}
+	for _, media := range mediaItems {
+		if viewerAnimeCompleted(result.TotalEpisodes, viewerEpisodeRef{
+			episodeType:   media.episodeType,
+			episodeNumber: media.episodeNumber,
+		}) {
+			result.IsCompleted = true
+			break
+		}
 	}
 	commentCounts, err := c.viewerEpisodeCommentCounts(ctx, bangumiID)
 	if err != nil {

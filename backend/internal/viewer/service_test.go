@@ -77,7 +77,7 @@ INSERT INTO viewer_users(id, username, password_hash, created_at, updated_at)
 VALUES (1, 'alice', 'hash', 1, 1), (2, 'bob', 'hash', 2, 2);
 
 INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, eps, total_episodes, created_at)
-VALUES (1001, 'https://bgm.tv/subject/1001', 'Original Anime', '测试番剧', 12, 12, 1);
+VALUES (1001, 'https://bgm.tv/subject/1001', 'Original Anime', '测试番剧', 12, 13, 1);
 
 INSERT INTO anime_episodes(bangumi_id, episode_id, ep_number, sort_number, type, name, name_cn, created_at, updated_at)
 VALUES
@@ -151,5 +151,8 @@ INSERT INTO viewer_watch_history(
 	}
 	if activities[0].LatestEpisodeLabel != "第 2 话" {
 		t.Fatalf("expected latest episode label to be attached, got %q", activities[0].LatestEpisodeLabel)
+	}
+	if activities[0].TotalEpisodes != 12 || activities[1].TotalEpisodes != 12 {
+		t.Fatalf("watch history totals should use regular episodes: %+v", activities)
 	}
 }

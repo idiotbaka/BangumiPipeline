@@ -185,6 +185,7 @@ export interface ViewerAnimeDetail {
   platform: string
   summary: string
   totalEpisodes: number
+  isCompleted: boolean
   hasCover: boolean
   ratingScore: number | null
   infobox: Array<Record<string, unknown>>

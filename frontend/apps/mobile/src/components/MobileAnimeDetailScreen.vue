@@ -122,11 +122,13 @@ const playerTitle = computed(() => {
 const basicFacts = computed(() => {
   const detail = anime.value
   if (!detail) return []
-  return [
+  const facts = [
     formatAirDate(detail.airDate),
     weekdays[detail.airWeekday] || '播出日未定',
     detail.totalEpisodes > 0 ? `全 ${detail.totalEpisodes} 话` : '话数未定',
   ]
+  if (detail.isCompleted) facts.push('已完结')
+  return facts
 })
 const metadataItems = computed(() => {
   const detail = anime.value

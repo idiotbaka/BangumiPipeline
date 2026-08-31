@@ -1660,7 +1660,10 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
                 @error="markImageFailed(`follow-list-${item.bangumiId}`)"
               />
               <div v-else class="media-fallback">{{ item.episodeLabel || item.animeTitle.slice(0, 2) }}</div>
-              <span>{{ followListOverlayText(item) }}</span>
+              <div v-if="item.isCompleted" class="card-top-tags">
+                <span class="card-top-tag">完结</span>
+              </div>
+              <span class="progress-caption">{{ followListOverlayText(item) }}</span>
               <div class="list-progress">
                 <i :style="{ width: progressWidth(item.hasWatchProgress ? (item.watchCompleted ? 100 : item.progressPercent) : 0) }" />
               </div>
@@ -1701,7 +1704,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
                 @error="markImageFailed(`history-${item.mediaId}`)"
               />
               <div v-else class="media-fallback">{{ item.episodeLabel }}</div>
-              <span>{{ historyListOverlayText(item) }}</span>
+              <span class="progress-caption">{{ historyListOverlayText(item) }}</span>
               <div class="list-progress">
                 <i :style="{ width: progressWidth(item.completed ? 100 : item.progressPercent) }" />
               </div>
@@ -1752,6 +1755,9 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
                   @error="markImageFailed(`home-follow-${item.bangumiId}`)"
                 />
                 <div v-else class="media-fallback">{{ item.episodeLabel || item.animeTitle.slice(0, 2) }}</div>
+                <div v-if="item.isCompleted" class="card-top-tags">
+                  <span class="card-top-tag">完结</span>
+                </div>
                 <div class="progress-overlay">
                   <span>{{ followOverlayText(item) }}</span>
                   <div><i :style="{ width: `${item.hasWatchProgress ? item.progressPercent : 0}%` }" /></div>
@@ -1799,6 +1805,9 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
                   @error="markImageFailed(`recent-${item.bangumiId}`)"
                 />
                 <div v-else class="poster-fallback">{{ item.title.slice(0, 2) }}</div>
+                <div v-if="item.isCompleted" class="card-top-tags">
+                  <span class="card-top-tag">完结</span>
+                </div>
                 <span class="time-pill">{{ formatUpdatedAt(item.updatedAt) }}</span>
               </div>
               <p class="item-title">{{ item.title }}</p>
@@ -1841,6 +1850,9 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
                   @error="markImageFailed(`hot-${item.bangumiId}`)"
                 />
                 <div v-else class="poster-fallback">{{ item.title.slice(0, 2) }}</div>
+                <div v-if="item.isCompleted" class="card-top-tags">
+                  <span class="card-top-tag">完结</span>
+                </div>
                 <span class="score-overlay">{{ ratingText(item.ratingScore) }}</span>
               </div>
               <p class="item-title">{{ item.title }}</p>
@@ -1905,13 +1917,16 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
             @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
           >
-            <img
-              v-if="imageAvailable(`schedule-${item.bangumiId}`, item.hasCover)"
-              :src="animeCoverURL(item.bangumiId)"
-              :alt="item.title"
-              @error="markImageFailed(`schedule-${item.bangumiId}`)"
-            />
-            <div v-else class="poster-fallback small">{{ item.title.slice(0, 2) }}</div>
+            <div class="schedule-cover">
+              <img
+                v-if="imageAvailable(`schedule-${item.bangumiId}`, item.hasCover)"
+                :src="animeCoverURL(item.bangumiId)"
+                :alt="item.title"
+                @error="markImageFailed(`schedule-${item.bangumiId}`)"
+              />
+              <div v-else class="poster-fallback small">{{ item.title.slice(0, 2) }}</div>
+              <span v-if="item.isCompleted" class="schedule-completed-overlay">完结</span>
+            </div>
             <div>
               <p class="item-title">{{ item.title }}</p>
               <p>{{ formatAirDate(item.airDate) }} / {{ totalEpisodesText(item.totalEpisodes) }}</p>
@@ -2006,7 +2021,10 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
                     @error="markImageFailed(`library-${item.bangumiId}`)"
                   />
                   <div v-else class="poster-fallback">{{ item.title.slice(0, 2) }}</div>
-                  <span class="episode-total">{{ totalEpisodesText(item.totalEpisodes) }}</span>
+                  <div class="card-top-tags">
+                    <span class="card-top-tag">{{ totalEpisodesText(item.totalEpisodes) }}</span>
+                    <span v-if="item.isCompleted" class="card-top-tag">完结</span>
+                  </div>
                   <span class="library-progress">{{ scheduleProgress(item) }}</span>
                 </div>
                 <p class="item-title">{{ item.title }}</p>
@@ -3034,6 +3052,31 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   border-radius: 0;
 }
 
+.card-top-tags {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: calc(100% - 12px);
+}
+
+.card-top-tag {
+  min-width: 0;
+  padding: 3px 6px;
+  overflow: hidden;
+  color: var(--ink-700);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 4px;
+}
+
 .time-pill {
   position: absolute;
   right: 5px;
@@ -3298,22 +3341,6 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   border-radius: 0;
 }
 
-.episode-total {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  max-width: calc(100% - 12px);
-  padding: 3px 6px;
-  overflow: hidden;
-  color: var(--ink-700);
-  font-size: 10px;
-  line-height: 1.1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: rgba(255, 255, 255, 0.88);
-  border-radius: 4px;
-}
-
 .library-progress {
   position: absolute;
   right: 0;
@@ -3472,6 +3499,37 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   border-radius: 8px;
 }
 
+.schedule-cover {
+  position: relative;
+  width: 62px;
+  height: 88px;
+  overflow: hidden;
+  background: #eef2f7;
+  border-radius: 8px;
+}
+
+.schedule-cover img,
+.schedule-cover .poster-fallback.small {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+.schedule-completed-overlay {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  padding: 6px 4px;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1;
+  text-align: center;
+  background: rgba(27, 31, 42, 0.78);
+}
+
 .media-row {
   grid-template-columns: 132px minmax(0, 1fr);
 }
@@ -3492,7 +3550,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   border-radius: 0;
 }
 
-.list-cover span {
+.list-cover .progress-caption {
   position: absolute;
   right: 0;
   bottom: 0;
