@@ -5,10 +5,16 @@ import fullscreenIcon from '../assets/player-icons/fullscreen.svg?raw'
 import fullscreenExitIcon from '../assets/player-icons/fullscreen-exit.svg?raw'
 import episodePickerIcon from '../assets/player-icons/episode-picker.svg?raw'
 import pictureInPictureIcon from '../assets/player-icons/picture-in-picture.svg?raw'
+import settingsIcon from '../assets/player-icons/settings.svg?raw'
 import volumeIcon from '../assets/player-icons/volume.svg?raw'
 import volumeMutedIcon from '../assets/player-icons/volume-muted.svg?raw'
 import webFullscreenIcon from '../assets/player-icons/web-fullscreen.svg?raw'
 import webFullscreenExitIcon from '../assets/player-icons/web-fullscreen-exit.svg?raw'
+import {
+  loadPlayerPreferences,
+  savePlayerPreferences,
+  type PlaybackMode,
+} from '../playerPreferences'
 
 interface OPSkipSegment {
   startSeconds: number
@@ -56,13 +62,16 @@ const emit = defineEmits<{
 }>()
 const player = ref<HTMLElement | null>(null)
 const video = ref<HTMLVideoElement | null>(null)
+const initialPreferences = loadPlayerPreferences()
 const playing = ref(false)
 const buffering = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
-const volume = ref(1)
-const muted = ref(false)
+const volume = ref(initialPreferences.volume)
+const muted = ref(initialPreferences.muted)
 const playbackRate = ref(1)
+const playbackMode = ref<PlaybackMode>(initialPreferences.playbackMode)
+const showOPSkipButton = ref(initialPreferences.showOPSkipButton)
 const errorMessage = ref('')
 const webFullscreen = ref(false)
 const fullscreenActive = ref(false)
@@ -79,6 +88,7 @@ const bufferEnd = ref(0)
 const opSkipDismissed = ref(false)
 const episodePickerOpen = ref(false)
 const playbackRateMenuOpen = ref(false)
+const settingsMenuOpen = ref(false)
 const episodePickerList = ref<HTMLElement | null>(null)
 const failedEpisodeCovers = ref<Set<string>>(new Set())
 const contextMenuVisible = ref(false)
@@ -86,6 +96,7 @@ const contextMenuPosition = ref({ left: 16, top: 16 })
 const statisticsVisible = ref(false)
 const copyFeedbackVisible = ref(false)
 const copyFeedbackMessage = ref('')
+const autoplayMediaID = ref(0)
 const debugState = ref({
   width: 0,
   height: 0,
@@ -140,7 +151,9 @@ const withinOPSkipPrompt = computed(() => {
       currentTime.value < segment.promptEndSeconds,
   )
 })
-const opSkipVisible = computed(() => canControlPlayback.value && withinOPSkipPrompt.value && !opSkipDismissed.value)
+const opSkipVisible = computed(() => (
+  showOPSkipButton.value && canControlPlayback.value && withinOPSkipPrompt.value && !opSkipDismissed.value
+))
 const volumeIconSrc = computed(() => muted.value ? volumeMutedIcon : volumeIcon)
 const volumeLabel = computed(() => muted.value ? '取消静音' : '静音')
 const playbackRateButtonLabel = computed(() => playbackRate.value === 1 ? '倍速' : formatPlaybackRate(playbackRate.value))
@@ -158,6 +171,10 @@ const pictureInPictureLabel = computed(() => {
   return pictureInPictureActive.value ? '退出画中画' : '画中画'
 })
 const hasEpisodes = computed(() => props.episodes.length > 0)
+const nextEpisode = computed(() => {
+  const currentIndex = props.episodes.findIndex((episode) => episode.key === props.selectedEpisodeKey)
+  return currentIndex >= 0 ? props.episodes[currentIndex + 1] ?? null : null
+})
 const contextMenuStyle = computed(() => ({
   left: `${contextMenuPosition.value.left}px`,
   top: `${contextMenuPosition.value.top}px`,
@@ -212,6 +229,8 @@ watch(
     opSkipDismissed.value = false
     episodePickerOpen.value = false
     playbackRateMenuOpen.value = false
+    settingsMenuOpen.value = false
+    if (autoplayMediaID.value !== props.mediaId) autoplayMediaID.value = 0
     contextMenuVisible.value = false
     resetDebugState()
     stopProgressTimer()
@@ -234,6 +253,7 @@ watch(withinOPSkipPrompt, (inside) => {
 })
 
 onMounted(() => {
+  applyStoredVolume()
   window.addEventListener('keydown', handleWindowKeydown)
   document.addEventListener('fullscreenchange', handleFullscreenChange)
   document.addEventListener('pointerdown', closeContextMenu)
@@ -351,6 +371,10 @@ function handleEnded() {
   reportProgress()
   stopProgressTimer()
   stopBufferTimer()
+  if (playbackMode.value === 'auto-next' && nextEpisode.value) {
+    autoplayMediaID.value = nextEpisode.value.mediaId
+    emit('select-episode', nextEpisode.value)
+  }
 }
 
 function handleWaiting() {
@@ -375,12 +399,20 @@ function handleCanPlay() {
   updateDuration()
   buffering.value = false
   updateBuffered()
+  if (autoplayMediaID.value === props.mediaId) {
+    autoplayMediaID.value = 0
+    void video.value?.play().catch(() => {
+      showCopyFeedback('已切换下一集，请点击播放')
+      showControls()
+    })
+  }
   if (playing.value) scheduleControlsHide()
 }
 
 function handleError() {
   errorMessage.value = '视频加载失败，请稍后重试'
   mediaReady.value = false
+  if (autoplayMediaID.value === props.mediaId) autoplayMediaID.value = 0
   stopBufferTimer()
   showControls()
 }
@@ -397,9 +429,9 @@ function showControls() {
 
 function scheduleControlsHide() {
   stopControlsTimer()
-  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value || playbackRateMenuOpen.value || contextMenuVisible.value) return
+  if (!playing.value || buffering.value || errorMessage.value || episodePickerOpen.value || playbackRateMenuOpen.value || settingsMenuOpen.value || contextMenuVisible.value) return
   controlsTimer = setTimeout(() => {
-    if (playing.value && !buffering.value && !errorMessage.value && !episodePickerOpen.value && !playbackRateMenuOpen.value && !contextMenuVisible.value) controlsVisible.value = false
+    if (playing.value && !buffering.value && !errorMessage.value && !episodePickerOpen.value && !playbackRateMenuOpen.value && !settingsMenuOpen.value && !contextMenuVisible.value) controlsVisible.value = false
     controlsTimer = null
   }, 3_000)
 }
@@ -516,12 +548,14 @@ function changeVolume(event: Event) {
 
 function setPlayerVolume(value: number) {
   const element = video.value
-  if (!element) return
   const nextVolume = Math.round(Math.max(0, Math.min(1, value)) * 100) / 100
-  element.volume = nextVolume
-  element.muted = nextVolume === 0
+  if (element) {
+    element.volume = nextVolume
+    element.muted = nextVolume === 0
+  }
   volume.value = nextVolume
   muted.value = nextVolume === 0
+  persistPreferences()
   showVolumeBubble()
 }
 
@@ -546,13 +580,15 @@ function seekBy(seconds: number) {
 }
 
 function toggleMute() {
-  if (!video.value) return
-  if (video.value.muted && volume.value === 0) {
-    video.value.volume = 0.6
+  const element = video.value
+  if (!element) return
+  if (muted.value && volume.value === 0) {
     volume.value = 0.6
+    element.volume = volume.value
   }
-  video.value.muted = !video.value.muted
-  muted.value = video.value.muted
+  muted.value = !muted.value
+  element.muted = muted.value
+  persistPreferences()
   showVolumeBubble()
 }
 
@@ -563,6 +599,8 @@ function selectPlaybackRate(rate: number) {
 }
 
 function openPlaybackRateMenu() {
+  episodePickerOpen.value = false
+  settingsMenuOpen.value = false
   playbackRateMenuOpen.value = true
   showControls()
 }
@@ -646,7 +684,10 @@ function handleLeavePictureInPicture() {
 
 async function toggleEpisodePicker() {
   if (!hasEpisodes.value) return
-  episodePickerOpen.value = !episodePickerOpen.value
+  const nextOpen = !episodePickerOpen.value
+  playbackRateMenuOpen.value = false
+  settingsMenuOpen.value = false
+  episodePickerOpen.value = nextOpen
   showControls()
   if (!episodePickerOpen.value) {
     scheduleControlsHide()
@@ -657,9 +698,47 @@ async function toggleEpisodePicker() {
 }
 
 function selectEpisode(episode: SelectableEpisode) {
+  autoplayMediaID.value = 0
   episodePickerOpen.value = false
   emit('select-episode', episode)
   scheduleControlsHide()
+}
+
+function toggleSettingsMenu() {
+  const nextOpen = !settingsMenuOpen.value
+  episodePickerOpen.value = false
+  playbackRateMenuOpen.value = false
+  settingsMenuOpen.value = nextOpen
+  showControls()
+  if (!nextOpen) scheduleControlsHide()
+}
+
+function selectPlaybackMode(mode: PlaybackMode) {
+  playbackMode.value = mode
+  persistPreferences()
+  showControls()
+}
+
+function selectOPSkipVisibility(visible: boolean) {
+  showOPSkipButton.value = visible
+  persistPreferences()
+  showControls()
+}
+
+function applyStoredVolume() {
+  const element = video.value
+  if (!element) return
+  element.volume = volume.value
+  element.muted = muted.value
+}
+
+function persistPreferences() {
+  savePlayerPreferences({
+    playbackMode: playbackMode.value,
+    showOPSkipButton: showOPSkipButton.value,
+    volume: volume.value,
+    muted: muted.value,
+  })
 }
 
 function scrollSelectedPickerEpisodeIntoView() {
@@ -828,6 +907,12 @@ function handleFullscreenChange() {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && settingsMenuOpen.value) {
+    settingsMenuOpen.value = false
+    scheduleControlsHide()
+    event.preventDefault()
+    return
+  }
   if (event.key === 'Escape' && playbackRateMenuOpen.value) {
     closePlaybackRateMenu()
     event.preventDefault()
@@ -1251,6 +1336,20 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
           </Transition>
         </div>
         <button
+          id="player-settings-button"
+          class="icon-control settings-control"
+          :class="{ active: settingsMenuOpen }"
+          type="button"
+          aria-haspopup="dialog"
+          :aria-expanded="settingsMenuOpen"
+          aria-controls="player-settings-menu"
+          aria-label="设置"
+          title="设置"
+          @click="toggleSettingsMenu"
+        >
+          <i aria-hidden="true" v-html="settingsIcon" />
+        </button>
+        <button
           class="icon-control picture-in-picture-control"
           :class="{ active: pictureInPictureActive }"
           type="button"
@@ -1315,6 +1414,74 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
               </div>
               <i v-if="selectedEpisodeKey === episode.key" class="episode-playing" aria-label="正在播放" />
             </button>
+          </div>
+        </aside>
+      </Transition>
+      <Transition name="settings-menu">
+        <aside
+          v-if="settingsMenuOpen"
+          id="player-settings-menu"
+          class="player-settings-menu"
+          role="dialog"
+          aria-labelledby="player-settings-title"
+        >
+          <header>
+            <span>SETTINGS</span>
+            <strong id="player-settings-title">播放设置</strong>
+          </header>
+          <div class="player-settings-content">
+            <section class="player-setting-group">
+              <div class="player-setting-label">
+                <strong>播放方式</strong>
+                <small>当前视频播放结束后的行为</small>
+              </div>
+              <div class="player-setting-options" role="radiogroup" aria-label="播放方式">
+                <button
+                  type="button"
+                  role="radio"
+                  :class="{ selected: playbackMode === 'pause' }"
+                  :aria-checked="playbackMode === 'pause'"
+                  @click="selectPlaybackMode('pause')"
+                >
+                  播完暂停
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  :class="{ selected: playbackMode === 'auto-next' }"
+                  :aria-checked="playbackMode === 'auto-next'"
+                  @click="selectPlaybackMode('auto-next')"
+                >
+                  自动切集
+                </button>
+              </div>
+            </section>
+            <section class="player-setting-group">
+              <div class="player-setting-label">
+                <strong>跳过 OP 按钮</strong>
+                <small>进入 OP 区域时是否显示按钮</small>
+              </div>
+              <div class="player-setting-options" role="radiogroup" aria-label="跳过 OP 按钮">
+                <button
+                  type="button"
+                  role="radio"
+                  :class="{ selected: showOPSkipButton }"
+                  :aria-checked="showOPSkipButton"
+                  @click="selectOPSkipVisibility(true)"
+                >
+                  显示
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  :class="{ selected: !showOPSkipButton }"
+                  :aria-checked="!showOPSkipButton"
+                  @click="selectOPSkipVisibility(false)"
+                >
+                  不显示
+                </button>
+              </div>
+            </section>
           </div>
         </aside>
       </Transition>
@@ -1410,6 +1577,7 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
 .volume-control > i { width: 22px; height: 22px; }
 .episode-picker-control { border-radius: 0; clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px)); }
 .episode-picker-control > i { width: 18px; height: 18px; }
+.settings-control > i { width: 19px; height: 19px; }
 .text-control { height: 32px; min-width: 42px; padding: 0 8px; color: rgba(255,255,255,.78); font-family: var(--font-mono); font-size: 13px; letter-spacing: .2px; border: 1px solid transparent; border-radius: 8px; background: rgba(9,13,23,.2); transition: color 160ms ease, border-color 160ms ease, background 160ms ease; }
 .text-control:hover { color: #fff; border-color: rgba(255,95,158,.42); background: rgba(255,95,158,.14); }
 .rate-control { position: relative; display: inline-flex; align-items: center; }
@@ -1425,6 +1593,23 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
 .rate-menu-enter-from, .rate-menu-leave-to { opacity: 0; transform: translate(-50%, 6px); }
 .volume-range { width: 84px; height: 3px; appearance: none; cursor: pointer; background: linear-gradient(90deg, rgba(142,232,242,.86) 0 var(--volume), rgba(255,255,255,.3) var(--volume) 100%); }
 .volume-range::-webkit-slider-thumb { width: 9px; height: 9px; appearance: none; background: var(--cyan-300); transform: rotate(45deg); }
+.player-settings-menu { position: absolute; right: 0; bottom: calc(100% + 12px); z-index: 7; width: min(360px, calc(100vw - 48px)); overflow: hidden; color: rgba(255,255,255,.94); border: 1px solid rgba(142,232,242,.34); background: linear-gradient(145deg, rgba(24,32,50,.98), rgba(13,18,31,.97)); box-shadow: 0 20px 48px rgba(0,0,0,.48), 0 0 0 1px rgba(255,255,255,.05) inset; clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px)); }
+.player-settings-menu::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .3; background: linear-gradient(rgba(142,232,242,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,159,189,.07) 1px, transparent 1px); background-size: 28px 28px; }
+.player-settings-menu > header { position: relative; z-index: 1; display: grid; gap: 2px; padding: 13px 16px 12px; border-bottom: 1px solid rgba(255,255,255,.1); background: rgba(8,12,22,.36); }
+.player-settings-menu > header span { color: var(--cyan-300); font-family: var(--font-mono); font-size: 11px; letter-spacing: 1.4px; }
+.player-settings-menu > header strong { font-size: 15px; }
+.player-settings-content { position: relative; z-index: 1; display: grid; padding: 4px 14px 12px; }
+.player-setting-group { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px dashed rgba(142,232,242,.16); }
+.player-setting-group:last-child { border-bottom: 0; }
+.player-setting-label { min-width: 0; display: grid; gap: 3px; }
+.player-setting-label strong { font-size: 13px; font-weight: 500; }
+.player-setting-label small { color: rgba(255,255,255,.48); font-size: 10px; white-space: nowrap; }
+.player-setting-options { display: inline-grid; grid-auto-flow: column; gap: 3px; padding: 3px; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; background: rgba(3,8,17,.36); }
+.player-setting-options button { min-width: 68px; height: 30px; padding: 0 9px; color: rgba(255,255,255,.58); font-size: 12px; white-space: nowrap; border: 1px solid transparent; border-radius: 5px; background: transparent; transition: color 150ms ease, border-color 150ms ease, background 150ms ease; }
+.player-setting-options button:hover, .player-setting-options button:focus-visible { color: #fff; border-color: rgba(142,232,242,.3); outline: none; }
+.player-setting-options button.selected { color: #fff; border-color: rgba(255,159,189,.44); background: linear-gradient(90deg, rgba(255,95,158,.24), rgba(73,214,233,.12)); }
+.settings-menu-enter-active, .settings-menu-leave-active { transition: opacity 160ms ease, transform 160ms ease; }
+.settings-menu-enter-from, .settings-menu-leave-to { opacity: 0; transform: translateY(10px) scale(.98); }
 .episode-picker { position: absolute; right: 0; bottom: calc(100% + 12px); z-index: 6; width: min(430px, calc(100vw - 48px)); max-height: min(390px, calc(100vh - 176px)); display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; color: rgba(255,255,255,.94); border: 1px solid rgba(142,232,242,.34); border-radius: 0; background: linear-gradient(145deg, rgba(24,32,50,.97), rgba(13,18,31,.96)); box-shadow: 0 20px 48px rgba(0,0,0,.48), 0 0 0 1px rgba(255,255,255,.05) inset; clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px)); }
 .episode-picker::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .35; background: linear-gradient(rgba(142,232,242,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,159,189,.07) 1px, transparent 1px); background-size: 28px 28px; }
 .episode-picker::after { content: ''; position: absolute; inset: 11px; z-index: 0; pointer-events: none; border: 1px solid rgba(255,255,255,.1); clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 9px 100%, 0 calc(100% - 9px)); }
@@ -1469,6 +1654,8 @@ function normalizeOPSkip(segment: OPSkipSegment | null) {
 .anime-player.web-fullscreen .op-skip-button { right: 44px; bottom: 118px; }
 .anime-player:fullscreen .episode-picker,
 .anime-player.web-fullscreen .episode-picker { width: min(470px, calc(100vw - 88px)); max-height: min(470px, calc(100vh - 220px)); }
+.anime-player:fullscreen .player-settings-menu,
+.anime-player.web-fullscreen .player-settings-menu { width: min(380px, calc(100vw - 88px)); }
 .anime-player:fullscreen .player-context-menu,
 .anime-player.web-fullscreen .player-context-menu { width: min(248px, calc(100vw - 88px)); }
 .anime-player:fullscreen .player-statistics-card,
