@@ -83,6 +83,8 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("POST /api/viewer/invites", api.generateViewerInvite)
 	mux.HandleFunc("GET /api/viewer/site-settings", api.getViewerSiteSettings)
 	mux.HandleFunc("PUT /api/viewer/site-settings", api.updateViewerSiteSettings)
+	mux.HandleFunc("GET /api/viewer/single-pages", api.getViewerSinglePages)
+	mux.HandleFunc("PUT /api/viewer/single-pages", api.updateViewerSinglePages)
 	mux.HandleFunc("GET /api/viewer/site-settings/comment-filter", api.getViewerCommentFilterSettings)
 	mux.HandleFunc("PUT /api/viewer/site-settings/comment-filter", api.updateViewerCommentFilterSettings)
 	mux.HandleFunc("GET /api/viewer/site-settings/favicon", api.viewerFavicon)
@@ -412,6 +414,41 @@ func (a *AdminAPI) getViewerSiteSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})
+}
+
+func (a *AdminAPI) getViewerSinglePages(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	config, err := a.viewer.SinglePageConfig(r.Context())
+	if err != nil {
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, config)
+}
+
+func (a *AdminAPI) updateViewerSinglePages(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdministrator(w, r) {
+		return
+	}
+	var input struct {
+		ActiveKey string `json:"activeKey"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	config, err := a.viewer.SetActiveSinglePage(r.Context(), input.ActiveKey)
+	if err != nil {
+		if errors.Is(err, viewer.ErrInvalidSinglePage) {
+			writeError(w, http.StatusBadRequest, "invalid_single_page", "单页面不存在")
+			return
+		}
+		a.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, config)
 }
 
 func (a *AdminAPI) updateViewerSiteSettings(w http.ResponseWriter, r *http.Request) {

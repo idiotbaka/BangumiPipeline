@@ -80,12 +80,13 @@ type Session struct {
 }
 
 type SiteSettings struct {
-	SiteName            string `json:"siteName"`
-	RegistrationEnabled bool   `json:"registrationEnabled"`
-	InviteRequired      bool   `json:"inviteRequired"`
-	HasFavicon          bool   `json:"hasFavicon"`
-	FaviconUpdatedAt    *int64 `json:"faviconUpdatedAt"`
-	UpdatedAt           int64  `json:"updatedAt"`
+	SiteName            string      `json:"siteName"`
+	RegistrationEnabled bool        `json:"registrationEnabled"`
+	InviteRequired      bool        `json:"inviteRequired"`
+	HasFavicon          bool        `json:"hasFavicon"`
+	FaviconUpdatedAt    *int64      `json:"faviconUpdatedAt"`
+	UpdatedAt           int64       `json:"updatedAt"`
+	SinglePage          *SinglePage `json:"singlePage"`
 }
 
 type SiteSettingsUpdate struct {
@@ -644,15 +645,17 @@ func (s *Service) SiteSettings(ctx context.Context) (SiteSettings, error) {
 	var settings SiteSettings
 	var faviconUpdatedAt sql.NullInt64
 	var faviconBytes int
+	var activeSinglePageKey string
 	err := s.db.QueryRowContext(ctx, `
 SELECT site_name,
        registration_enabled,
        invite_required,
        CASE WHEN favicon_png IS NULL THEN 0 ELSE length(favicon_png) END,
        favicon_updated_at,
-       updated_at
+       updated_at,
+       active_single_page_key
 FROM viewer_site_settings
-WHERE id = 1`).Scan(&settings.SiteName, &settings.RegistrationEnabled, &settings.InviteRequired, &faviconBytes, &faviconUpdatedAt, &settings.UpdatedAt)
+WHERE id = 1`).Scan(&settings.SiteName, &settings.RegistrationEnabled, &settings.InviteRequired, &faviconBytes, &faviconUpdatedAt, &settings.UpdatedAt, &activeSinglePageKey)
 	if err != nil {
 		return SiteSettings{}, err
 	}
@@ -660,6 +663,7 @@ WHERE id = 1`).Scan(&settings.SiteName, &settings.RegistrationEnabled, &settings
 	if faviconUpdatedAt.Valid {
 		settings.FaviconUpdatedAt = ptrInt64(faviconUpdatedAt.Int64)
 	}
+	settings.SinglePage = singlePageByKey(activeSinglePageKey)
 	return settings, nil
 }
 

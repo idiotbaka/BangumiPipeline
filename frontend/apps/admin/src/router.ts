@@ -14,6 +14,7 @@ import DownloadManagementPage from './pages/DownloadManagementPage.vue'
 import TranscodeManagementPage from './pages/TranscodeManagementPage.vue'
 import ViewerUserManagementPage from './pages/ViewerUserManagementPage.vue'
 import ViewerSiteSettingsPage from './pages/ViewerSiteSettingsPage.vue'
+import ViewerSinglePageManagementPage from './pages/ViewerSinglePageManagementPage.vue'
 import ViewerInviteManagementPage from './pages/ViewerInviteManagementPage.vue'
 import ViewerCarouselManagementPage from './pages/ViewerCarouselManagementPage.vue'
 import ViewerFilterManagementPage from './pages/ViewerFilterManagementPage.vue'
@@ -43,6 +44,7 @@ const router = createRouter({
         { path: 'viewer-users', name: 'viewer-users', component: ViewerUserManagementPage },
         { path: 'viewer-invites', name: 'viewer-invites', component: ViewerInviteManagementPage },
         { path: 'viewer-site-settings', name: 'viewer-site-settings', component: ViewerSiteSettingsPage },
+        { path: 'viewer-single-pages', name: 'viewer-single-pages', component: ViewerSinglePageManagementPage },
         { path: 'viewer-carousels', name: 'viewer-carousels', component: ViewerCarouselManagementPage },
         { path: 'viewer-filters', name: 'viewer-filters', component: ViewerFilterManagementPage },
         { path: 'app-releases', name: 'app-releases', component: AppReleaseManagementPage },

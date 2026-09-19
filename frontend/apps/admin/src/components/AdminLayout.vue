@@ -81,6 +81,10 @@ async function logout() {
             <el-icon><Setting /></el-icon>
             <span>网站设置</span>
           </el-menu-item>
+          <el-menu-item index="/viewer-single-pages">
+            <el-icon><Document /></el-icon>
+            <span>单页面管理</span>
+          </el-menu-item>
           <el-menu-item index="/viewer-carousels">
             <el-icon><Picture /></el-icon>
             <span>轮播图管理</span>

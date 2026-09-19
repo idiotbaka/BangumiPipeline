@@ -63,6 +63,19 @@
   background: linear-gradient(145deg, #181522, var(--night-bg) 46%, #111e29);
 }
 
+:root[data-viewer-theme='dark'] .season-preview-stage {
+  --report-bg: linear-gradient(145deg, #181522, var(--night-bg) 46%, #111e29);
+  --report-grid: rgba(255, 131, 179, .05);
+  --report-surface: var(--night-surface);
+  --report-card: var(--night-surface);
+  --report-input: var(--night-raised);
+  --report-inset: var(--night-raised);
+  --report-border: var(--night-border);
+  --report-art-border: #343d50;
+  --report-shadow: var(--night-shadow);
+  --report-halo-opacity: .15;
+}
+
 :root[data-viewer-theme='dark'] :is(.stage-halo, .schedule-halo, .library-halo, .history-halo, .follow-halo, .detail-halo, .settings-halo, .bg-halo, .boot-halo) {
   filter: blur(90px) brightness(0.42);
 }

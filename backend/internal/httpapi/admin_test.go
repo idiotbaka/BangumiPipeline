@@ -95,6 +95,29 @@ func TestAdministratorSetupAndLoginLifecycle(t *testing.T) {
 		t.Fatalf("unexpected current user: %+v", mePayload.User)
 	}
 
+	pages := doJSON(t, client, http.MethodGet, server.URL+"/api/viewer/single-pages", nil)
+	assertStatus(t, pages, http.StatusOK)
+	var pageConfig viewer.SinglePageConfig
+	decodeResponse(t, pages, &pageConfig)
+	if len(pageConfig.Items) != 1 || pageConfig.ActiveKey != "" {
+		t.Fatalf("unexpected single page config: %+v", pageConfig)
+	}
+	invalidPage := doJSON(t, client, http.MethodPut, server.URL+"/api/viewer/single-pages", map[string]string{"activeKey": "unknown"})
+	assertStatus(t, invalidPage, http.StatusBadRequest)
+	invalidPage.Body.Close()
+	pages = doJSON(t, client, http.MethodPut, server.URL+"/api/viewer/single-pages", map[string]string{"activeKey": "202610-preview"})
+	assertStatus(t, pages, http.StatusOK)
+	decodeResponse(t, pages, &pageConfig)
+	if pageConfig.ActiveKey != "202610-preview" {
+		t.Fatalf("single page was not enabled: %+v", pageConfig)
+	}
+	pages = doJSON(t, client, http.MethodPut, server.URL+"/api/viewer/single-pages", map[string]string{"activeKey": ""})
+	assertStatus(t, pages, http.StatusOK)
+	decodeResponse(t, pages, &pageConfig)
+	if pageConfig.ActiveKey != "" {
+		t.Fatalf("single page was not disabled: %+v", pageConfig)
+	}
+
 	commentFilter := doJSON(t, client, http.MethodPut, server.URL+"/api/viewer/site-settings/comment-filter", map[string]any{
 		"usernames": []string{"spam-user", "CaseUser"},
 	})

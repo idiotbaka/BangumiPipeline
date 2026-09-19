@@ -37,6 +37,13 @@ export interface SiteSettings {
   hasFavicon: boolean
   faviconUpdatedAt: number | null
   updatedAt: number
+  singlePage: ViewerSinglePage | null
+}
+
+export interface ViewerSinglePage {
+  key: string
+  title: string
+  path: string
 }
 
 export interface AppRelease {

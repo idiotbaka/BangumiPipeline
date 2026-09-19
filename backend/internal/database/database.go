@@ -1407,6 +1407,19 @@ VALUES (36, unixepoch());`); err != nil {
 			return fmt.Errorf("finish version 36 migration: %w", err)
 		}
 	}
+	// A single selected key makes it impossible to expose two seasonal pages at once.
+	applied, err = migrationApplied(ctx, db, 37)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		if err := ensureColumn(ctx, db, "viewer_site_settings", "active_single_page_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (37, unixepoch())`); err != nil {
+			return fmt.Errorf("finish version 37 migration: %w", err)
+		}
+	}
 	return nil
 }
 

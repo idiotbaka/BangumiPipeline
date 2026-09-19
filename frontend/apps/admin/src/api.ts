@@ -96,6 +96,17 @@ export interface ViewerSiteSettings {
   updatedAt: number
 }
 
+export interface ViewerSinglePage {
+  key: string
+  title: string
+  path: string
+}
+
+export interface ViewerSinglePageConfig {
+  items: ViewerSinglePage[]
+  activeKey: string
+}
+
 export interface ViewerCommentFilterSettings {
   usernames: string[]
 }
@@ -698,6 +709,11 @@ export const api = {
       body: '{}',
     }),
   viewerSiteSettings: () => request<{ settings: ViewerSiteSettings }>('/api/viewer/site-settings'),
+  viewerSinglePages: () => request<ViewerSinglePageConfig>('/api/viewer/single-pages'),
+  updateViewerSinglePages: (activeKey: string) => request<ViewerSinglePageConfig>('/api/viewer/single-pages', {
+    method: 'PUT',
+    body: JSON.stringify({ activeKey }),
+  }),
   updateViewerSiteSettings: (settings: Pick<ViewerSiteSettings, 'siteName' | 'registrationEnabled' | 'inviteRequired'>) =>
     request<{ settings: ViewerSiteSettings }>('/api/viewer/site-settings', {
       method: 'PUT',

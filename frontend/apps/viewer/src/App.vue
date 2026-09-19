@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
-import { APIError, api, type SiteSettings, type ViewerUser } from './api'
+import { APIError, api, type SiteSettings, type ViewerSinglePage, type ViewerUser } from './api'
 import loadingLogo from './assets/loading_logo.png'
 import AppDownloadPage from './components/AppDownloadPage.vue'
 import AuthScreen from './components/AuthScreen.vue'
@@ -17,6 +17,7 @@ const message = ref('')
 const siteName = ref(defaultSiteName)
 const registrationEnabled = ref(true)
 const inviteRequired = ref(false)
+const singlePage = ref<ViewerSinglePage | null>(null)
 const currentPath = window.location.pathname.replace(/\/+$/, '') || '/'
 const isAppDownloadPage = currentPath === '/app/download'
 const { isNightMode, setTheme } = useViewerTheme(isAppDownloadPage)
@@ -48,6 +49,7 @@ function applySiteSettings(settings: SiteSettings) {
   siteName.value = settings.siteName || defaultSiteName
   registrationEnabled.value = settings.registrationEnabled
   inviteRequired.value = settings.inviteRequired
+  singlePage.value = settings.singlePage
   document.title = siteName.value
   const existing = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
   if (!settings.hasFavicon) {
@@ -114,6 +116,7 @@ async function logout() {
     :site-name="siteName"
     :loading="loading"
     :is-night-mode="isNightMode"
+    :single-page="singlePage"
     @select-theme="setTheme"
     @logout="logout"
   />

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 
-import { api, type ViewerAnimeCard, type ViewerFollowedAnime, type ViewerHome, type ViewerUser, type ViewerWatchHistoryItem } from '../api'
+import { api, type ViewerAnimeCard, type ViewerFollowedAnime, type ViewerHome, type ViewerSinglePage, type ViewerUser, type ViewerWatchHistoryItem } from '../api'
 import defaultAvatar from '../assets/avatar.png'
 import type { ViewerTheme } from '../theme'
 import AnimeDetailScreen from './AnimeDetailScreen.vue'
@@ -18,15 +18,17 @@ interface Props {
   siteName: string
   loading: boolean
   isNightMode: boolean
+  singlePage: ViewerSinglePage | null
 }
 
-defineProps<Props>()
+const props = defineProps<Props>()
+const SeasonPreview202610 = defineAsyncComponent(() => import('./SeasonPreview202610.vue'))
 const emit = defineEmits<{
   (e: 'logout'): void
   (e: 'select-theme', theme: ViewerTheme): void
 }>()
 
-type MainView = 'home' | 'schedule' | 'library' | 'history' | 'follows' | 'settings'
+type MainView = 'home' | 'schedule' | 'single-page' | 'library' | 'history' | 'follows' | 'settings'
 
 const hotPageSize = 8
 const maxHotPages = 4
@@ -265,14 +267,13 @@ function showView(view: MainView) {
     detailMediaId.value = 0
     detailPosition.value = 0
   }
-  if (view === 'settings') {
-    if (window.location.pathname !== '/settings') {
-      window.history.pushState({ bpView: 'settings' }, '', '/settings')
+  const targetPath = view === 'settings' ? '/settings' : view === 'single-page' ? props.singlePage?.path || '/' : '/'
+  if (window.location.pathname !== targetPath) {
+    if (hadDetail) {
+      window.history.replaceState({ bpView: view }, '', targetPath)
+    } else {
+      window.history.pushState({ bpView: view }, '', targetPath)
     }
-  } else if (window.location.pathname === '/settings') {
-    window.history.pushState({ bpView: view }, '', '/')
-  } else if (hadDetail) {
-    window.history.replaceState({}, '', '/')
   }
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
@@ -313,6 +314,18 @@ function closeAnimeDetail() {
 
 function syncDetailFromLocation() {
   const pathname = window.location.pathname.replace(/\/+$/, '') || '/'
+  if (props.singlePage && pathname === props.singlePage.path) {
+    activeView.value = 'single-page'
+    detailAnimeId.value = null
+    detailMediaId.value = 0
+    detailPosition.value = 0
+    window.scrollTo({ top: 0 })
+    return
+  }
+  if (pathname.startsWith('/special/')) {
+    window.history.replaceState({}, '', '/')
+    activeView.value = 'home'
+  }
   if (pathname === '/settings') {
     activeView.value = 'settings'
     detailAnimeId.value = null
@@ -340,6 +353,7 @@ function syncDetailFromLocation() {
 function isMainView(value: unknown): value is MainView {
   return value === 'home'
     || value === 'schedule'
+    || value === 'single-page'
     || value === 'library'
     || value === 'history'
     || value === 'follows'
@@ -373,6 +387,15 @@ function isMainView(value: unknown): value is MainView {
           @click="showView('schedule')"
         >
           番剧时间表
+        </button>
+        <button
+          v-if="singlePage"
+          class="nav-item single-page-nav"
+          :class="{ active: activeView === 'single-page' }"
+          type="button"
+          @click="showView('single-page')"
+        >
+          {{ singlePage.title }}<span class="nav-new-tag" aria-label="新上线">new</span>
         </button>
         <button
           class="nav-item"
@@ -495,6 +518,7 @@ function isMainView(value: unknown): value is MainView {
       @follow-changed="loadHome"
     />
     <ScheduleScreen v-else-if="activeView === 'schedule'" @open-anime="openAnime" />
+    <SeasonPreview202610 v-else-if="activeView === 'single-page' && singlePage?.key === '202610-preview'" />
     <LibraryScreen
       v-else-if="activeView === 'library'"
       :initial-query="libraryQuery"
@@ -829,7 +853,8 @@ function isMainView(value: unknown): value is MainView {
 /* 主导航：清透浅粉激活态（替代原纯粉渐变） */
 .main-nav {
   display: grid;
-  grid-template-columns: repeat(3, auto);
+  grid-auto-flow: column;
+  grid-auto-columns: auto;
   gap: 4px;
   padding: 5px;
   background: rgba(255, 255, 255, 0.7);
@@ -855,6 +880,23 @@ function isMainView(value: unknown): value is MainView {
 
 .nav-item.active {
   color: var(--pink-600);
+}
+
+.single-page-nav { padding-right: 38px; }
+.nav-new-tag {
+  position: absolute;
+  top: 3px;
+  right: 8px;
+  padding: 2px 4px;
+  color: #fff;
+  background: var(--pink-500);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  pointer-events: none;
 }
 
 /* 激活态底部指示条：横向、无倾斜、纯粉色 */
