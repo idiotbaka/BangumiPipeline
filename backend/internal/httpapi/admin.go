@@ -900,7 +900,8 @@ func (a *AdminAPI) updateAnimeSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		SubscriptionEpisodeOffset int `json:"subscriptionEpisodeOffset"`
+		SubscriptionEpisodeOffset int    `json:"subscriptionEpisodeOffset"`
+		AnimeType                 string `json:"animeType"`
 	}
 	if err := decodeJSON(w, r, &input); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -908,13 +909,17 @@ func (a *AdminAPI) updateAnimeSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	settings, err := a.catalog.UpdateSettings(r.Context(), id, bangumi.AnimeSettings{
 		SubscriptionEpisodeOffset: input.SubscriptionEpisodeOffset,
+		AnimeType:                 input.AnimeType,
 	})
 	if err != nil {
-		if errors.Is(err, bangumi.ErrAnimeNotFound) {
+		switch {
+		case errors.Is(err, bangumi.ErrAnimeNotFound):
 			writeError(w, http.StatusNotFound, "anime_not_found", "番剧不存在")
-			return
+		case errors.Is(err, bangumi.ErrInvalidAnimeType):
+			writeError(w, http.StatusBadRequest, "invalid_anime_type", "番剧类型必须是多话连载或动画电影")
+		default:
+			a.internalError(w, err)
 		}
-		a.internalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings})

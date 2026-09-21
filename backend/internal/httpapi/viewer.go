@@ -249,6 +249,7 @@ func (a *ViewerAPI) home(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"home": map[string]any{
 		"hotRecommendations": home.HotRecommendations,
 		"recentUpdates":      home.RecentUpdates,
+		"animeMovies":        home.AnimeMovies,
 		"carouselSlides":     slides,
 		"myFollows":          follows,
 	}})
@@ -297,6 +298,14 @@ func (a *ViewerAPI) animeLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_pagination", "分页参数无效")
 		return
 	}
+	animeType := strings.TrimSpace(r.URL.Query().Get("anime_type"))
+	if animeType == "" {
+		animeType = bangumi.AnimeTypeSeries
+	}
+	if !bangumi.IsValidAnimeType(animeType) {
+		writeError(w, http.StatusBadRequest, "invalid_anime_type", "番剧类型参数无效")
+		return
+	}
 	selections := make(map[int64][]string)
 	rawFilters := r.URL.Query()["filter"]
 	if len(rawFilters) > 1000 {
@@ -325,7 +334,12 @@ func (a *ViewerAPI) animeLibrary(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, err)
 		return
 	}
-	library, err := a.catalog.ViewerLibraryPage(r.Context(), query, groups, page, pageSize)
+	var library bangumi.ViewerLibrary
+	if animeType == bangumi.AnimeTypeMovie {
+		library, err = a.catalog.ViewerMovieLibraryPage(r.Context(), query, groups, page, pageSize)
+	} else {
+		library, err = a.catalog.ViewerLibraryPage(r.Context(), query, groups, page, pageSize)
+	}
 	if err != nil {
 		a.internalError(w, err)
 		return

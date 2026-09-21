@@ -12,6 +12,7 @@ import ParticleField from './ParticleField.vue'
 interface Props {
   initialQuery: string
   searchKey: number
+  animeType: 'series' | 'movie'
 }
 
 const props = defineProps<Props>()
@@ -29,6 +30,7 @@ const failedCovers = ref<Set<number>>(new Set())
 const currentPage = ref(1)
 let requestID = 0
 const libraryPageSize = 16
+const isMovieLibrary = computed(() => props.animeType === 'movie')
 
 const selectedTagCount = computed(() =>
   Object.values(selectedFilters.value).reduce((total, tags) => total + tags.length, 0),
@@ -63,6 +65,17 @@ watch(
   },
 )
 
+watch(
+  () => props.animeType,
+  () => {
+    selectedFilters.value = {}
+    searchDraft.value = ''
+    appliedQuery.value = ''
+    currentPage.value = 1
+    void loadLibrary()
+  },
+)
+
 async function loadFilters() {
   filtersLoading.value = true
   filtersError.value = ''
@@ -81,7 +94,13 @@ async function loadLibrary() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const result = await api.animeLibrary(appliedQuery.value, selectedFilters.value, currentPage.value, libraryPageSize)
+    const result = await api.animeLibrary(
+      appliedQuery.value,
+      selectedFilters.value,
+      currentPage.value,
+      libraryPageSize,
+      props.animeType,
+    )
     if (currentRequest === requestID) {
       const lastPage = Math.max(1, Math.ceil(result.library.total / libraryPageSize))
       if (currentPage.value > lastPage) {
@@ -94,7 +113,7 @@ async function loadLibrary() {
     }
   } catch (error) {
     if (currentRequest === requestID) {
-      errorMessage.value = error instanceof Error ? error.message : '番剧图书馆加载失败'
+      errorMessage.value = error instanceof Error ? error.message : `${isMovieLibrary.value ? '动画电影' : '番剧图书馆'}加载失败`
     }
   } finally {
     if (currentRequest === requestID) loading.value = false
@@ -177,13 +196,17 @@ function progressText(item: ViewerScheduleCard) {
   return !Number.isNaN(premiere.getTime()) && premiere > today ? '尚未开播' : '尚未放流'
 }
 
+function ratingText(score: number | null) {
+  return score === null ? '--' : score.toFixed(1)
+}
+
 function stagger(index: number) {
   return `${0.03 + (index % 16) * 0.035}s`
 }
 </script>
 
 <template>
-  <section class="library-stage" aria-label="番剧图书馆">
+  <section class="library-stage" :aria-label="isMovieLibrary ? '动画电影' : '番剧图书馆'">
     <ParticleField :count="18" palette="pink" :max-size="34" />
     <div class="library-grid" aria-hidden="true" />
     <div class="library-halo pink" aria-hidden="true" />
@@ -192,9 +215,9 @@ function stagger(index: number) {
     <div class="library-wrap">
       <header class="library-hero">
         <div>
-          <p class="eyebrow"><span>ANIME ARCHIVE</span><i /></p>
-          <h1>番剧图书馆</h1>
-          <p class="hero-note">アニメーション・コレクション</p>
+          <p class="eyebrow"><span>{{ isMovieLibrary ? 'ANIME MOVIES' : 'ANIME ARCHIVE' }}</span><i /></p>
+          <h1>{{ isMovieLibrary ? '动画电影' : '番剧图书馆' }}</h1>
+          <p class="hero-note">{{ isMovieLibrary ? '劇場版・アニメーション映画' : 'アニメーション・コレクション' }}</p>
         </div>
       </header>
 
@@ -248,7 +271,7 @@ function stagger(index: number) {
         <div>
           <span class="result-index">{{ String(library.total).padStart(2, '0') }}</span>
           <p>ARCHIVE RESULTS</p>
-          <h2>{{ appliedQuery ? `「${appliedQuery}」的搜索结果` : '全部收录番剧' }}</h2>
+          <h2>{{ appliedQuery ? `「${appliedQuery}」的搜索结果` : isMovieLibrary ? '全部动画电影' : '全部收录番剧' }}</h2>
         </div>
         <span class="result-count">共 {{ library.total }} 部 · 第 {{ currentPage }} / {{ totalPages }} 页</span>
       </div>
@@ -286,7 +309,7 @@ function stagger(index: number) {
             @keydown.enter="emit('open-anime', item.bangumiId)"
           >
             <div class="card-cover">
-              <span v-if="item.isCompleted" class="completed-tag">完结</span>
+              <span v-if="!isMovieLibrary && item.isCompleted" class="completed-tag">完结</span>
               <img
                 v-if="hasCover(item)"
                 :src="coverURL(item)"
@@ -295,17 +318,18 @@ function stagger(index: number) {
                 @error="markCoverFailed(item)"
               />
               <div v-else class="cover-fallback"><span>{{ item.title.slice(0, 2) }}</span></div>
-              <span class="episode-total">{{ totalEpisodesText(item.totalEpisodes) }}</span>
-              <div class="progress-shade">
+              <span v-if="!isMovieLibrary" class="episode-total">{{ totalEpisodesText(item.totalEpisodes) }}</span>
+              <div v-if="!isMovieLibrary" class="progress-shade">
                 <i aria-hidden="true" />
                 <span>{{ progressText(item) }}</span>
               </div>
+              <span v-else class="movie-score-overlay">{{ ratingText(item.ratingScore) }}</span>
             </div>
             <h3 :title="item.title">{{ item.title }}</h3>
             <p class="air-date"><i aria-hidden="true" />{{ formatAirDate(item.airDate) }}</p>
           </article>
         </div>
-        <nav v-if="totalPages > 1" class="library-pagination" aria-label="番剧图书馆分页">
+        <nav v-if="totalPages > 1" class="library-pagination" :aria-label="isMovieLibrary ? '动画电影分页' : '番剧图书馆分页'">
           <button type="button" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
           <div class="page-numbers">
             <template v-for="(page, index) in visiblePages" :key="page === 'ellipsis' ? `ellipsis-${index}` : page">
@@ -394,6 +418,7 @@ function stagger(index: number) {
 .episode-total { position: absolute; top: 9px; right: 8px; z-index: 2; height: 23px; padding: 0 9px; display: inline-flex; align-items: center; color: var(--ink-700); font-size: 10px; white-space: nowrap; background: rgba(255,255,255,.88); box-shadow: 0 5px 13px rgba(32,40,62,.12); backdrop-filter: blur(8px); clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px)); }
 .progress-shade { position: absolute; right: 0; bottom: 0; left: 0; z-index: 2; min-height: 66px; display: flex; align-items: flex-end; gap: 7px; padding: 24px 10px 9px; color: #fff; font-size: 12px; background: linear-gradient(to top, rgba(25,32,53,.84), rgba(25,32,53,0)); text-shadow: 0 2px 5px rgba(0,0,0,.65); }
 .progress-shade i { width: 6px; height: 6px; margin-bottom: 5px; flex: 0 0 auto; background: var(--cyan-300); transform: rotate(45deg); box-shadow: 0 0 10px rgba(142,232,242,.8); }
+.movie-score-overlay { position: absolute; right: 0; bottom: 0; left: 0; z-index: 2; min-height: 58px; display: flex; align-items: flex-end; justify-content: flex-end; padding: 20px 10px 8px; color: #fff; font-size: 23px; font-style: italic; line-height: 1; background: linear-gradient(to top, rgba(32,40,62,.76), rgba(32,40,62,0)); text-shadow: 0 2px 7px rgba(20,25,40,.85); }
 .library-card h3 { margin-top: 11px; overflow: hidden; color: var(--ink-900); font-size: 14px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .air-date { display: flex; align-items: center; gap: 7px; margin-top: 5px; overflow: hidden; color: var(--ink-400); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .air-date i { width: 13px; height: 1px; flex: 0 0 auto; background: linear-gradient(90deg, var(--pink-400), var(--cyan-400)); }

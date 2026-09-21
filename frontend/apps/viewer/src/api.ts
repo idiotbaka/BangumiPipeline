@@ -61,6 +61,7 @@ export interface ViewerAnimeCard {
   nameCN: string
   title: string
   airDate: string
+  animeType: 'series' | 'movie'
   isCompleted: boolean
   hasCover: boolean
   imageStatus: string
@@ -85,6 +86,7 @@ export interface ViewerCarouselSlide {
 export interface ViewerHome {
   hotRecommendations: ViewerAnimeCard[]
   recentUpdates: ViewerAnimeCard[]
+  animeMovies: ViewerAnimeCard[]
   carouselSlides: ViewerCarouselSlide[]
   myFollows: ViewerFollowedAnime[]
 }
@@ -94,6 +96,7 @@ export interface ViewerScheduleCard {
   title: string
   airDate: string
   airWeekday: number
+  animeType: 'series' | 'movie'
   totalEpisodes: number
   isCompleted: boolean
   hasCover: boolean
@@ -101,6 +104,7 @@ export interface ViewerScheduleCard {
   latestEpisode: string
   latestEpisodeLabel: string
   latestEpisodeUpdatedAt: number | null
+  ratingScore: number | null
 }
 
 export interface ViewerSchedule {
@@ -190,6 +194,7 @@ export interface ViewerAnimeDetail {
   airDate: string
   airWeekday: number
   platform: string
+  animeType: 'series' | 'movie'
   summary: string
   totalEpisodes: number
   isCompleted: boolean
@@ -357,11 +362,18 @@ export const api = {
   animeSchedule: (season: string) =>
     request<{ schedule: ViewerSchedule }>(`/api/anime-schedule?season=${encodeURIComponent(season)}`),
   libraryFilters: () => request<{ items: ViewerFilterDimension[] }>('/api/library/filters'),
-  animeLibrary: (query: string, filters: Record<number, string[]>, page?: number, pageSize?: number) => {
+  animeLibrary: (
+    query: string,
+    filters: Record<number, string[]>,
+    page?: number,
+    pageSize?: number,
+    animeType: 'series' | 'movie' = 'series',
+  ) => {
     const params = new URLSearchParams()
     if (query.trim()) params.set('q', query.trim())
     if (page !== undefined) params.set('page', String(page))
     if (pageSize !== undefined) params.set('page_size', String(pageSize))
+    params.set('anime_type', animeType)
     for (const [dimensionID, tags] of Object.entries(filters)) {
       for (const tag of tags) params.append('filter', `${dimensionID}:${tag}`)
     }

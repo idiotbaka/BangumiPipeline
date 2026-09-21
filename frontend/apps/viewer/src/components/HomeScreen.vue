@@ -28,7 +28,7 @@ const emit = defineEmits<{
   (e: 'select-theme', theme: ViewerTheme): void
 }>()
 
-type MainView = 'home' | 'schedule' | 'single-page' | 'library' | 'history' | 'follows' | 'settings'
+type MainView = 'home' | 'schedule' | 'single-page' | 'library' | 'movies' | 'history' | 'follows' | 'settings'
 
 const hotPageSize = 8
 const maxHotPages = 4
@@ -56,6 +56,7 @@ const failedCovers = ref<Set<number>>(new Set())
 const home = ref<ViewerHome>({
   hotRecommendations: [],
   recentUpdates: [],
+  animeMovies: [],
   carouselSlides: [],
   myFollows: [],
 })
@@ -78,6 +79,7 @@ const hotPages = computed(() => {
 const currentHotItems = computed(() => hotPages.value[hotPage.value] ?? [])
 const canTurnHot = computed(() => hotPages.value.length > 1)
 const recentItems = computed(() => home.value.recentUpdates.slice(0, maxRecentCount))
+const movieItems = computed(() => home.value.animeMovies.slice(0, hotPageSize))
 const pageIndicator = computed(() => {
   const total = Math.max(hotPages.value.length, 1)
   return `${Math.min(hotPage.value + 1, total)} / ${total}`
@@ -355,6 +357,7 @@ function isMainView(value: unknown): value is MainView {
     || value === 'schedule'
     || value === 'single-page'
     || value === 'library'
+    || value === 'movies'
     || value === 'history'
     || value === 'follows'
     || value === 'settings'
@@ -404,6 +407,14 @@ function isMainView(value: unknown): value is MainView {
           @click="showView('library')"
         >
           番剧图书馆
+        </button>
+        <button
+          class="nav-item"
+          :class="{ active: activeView === 'movies' }"
+          type="button"
+          @click="showView('movies')"
+        >
+          动画电影
         </button>
       </nav>
 
@@ -520,9 +531,11 @@ function isMainView(value: unknown): value is MainView {
     <ScheduleScreen v-else-if="activeView === 'schedule'" @open-anime="openAnime" />
     <SeasonPreview202610 v-else-if="activeView === 'single-page' && singlePage?.key === '202610-preview'" />
     <LibraryScreen
-      v-else-if="activeView === 'library'"
-      :initial-query="libraryQuery"
+      v-else-if="activeView === 'library' || activeView === 'movies'"
+      :key="activeView"
+      :initial-query="activeView === 'library' ? libraryQuery : ''"
       :search-key="librarySearchKey"
+      :anime-type="activeView === 'movies' ? 'movie' : 'series'"
       @open-anime="openAnime"
     />
     <HistoryScreen v-else-if="activeView === 'history'" @open-history="openHistoryItem" />
@@ -715,6 +728,55 @@ function isMainView(value: unknown): value is MainView {
               <p class="episode-title" :title="item.latestEpisodeTitle || '暂无分集标题'">
                 {{ item.latestEpisodeTitle || '暂无分集标题' }}
               </p>
+            </article>
+          </div>
+        </section>
+
+        <!-- ===== 动画电影和剧场版 ===== -->
+        <section class="anime-section movie-section">
+          <div class="section-head">
+            <div class="section-title">
+              <p class="section-kicker">ANIME MOVIES</p>
+              <h2>动画电影和剧场版</h2>
+              <i class="section-bar" aria-hidden="true" />
+            </div>
+          </div>
+
+          <div v-if="homeLoading" class="poster-grid">
+            <article v-for="n in hotSkeletonCount" :key="n" class="poster-card">
+              <div class="skeleton-poster skeleton-block" />
+              <div class="skeleton-title skeleton-block" />
+            </article>
+          </div>
+          <div v-else-if="!homeError && movieItems.length === 0" class="state-panel compact">
+            <strong>暂无动画电影或剧场版</strong>
+          </div>
+          <div v-else-if="!homeError" class="poster-grid">
+            <article
+              v-for="(item, index) in movieItems"
+              :key="item.bangumiId"
+              class="poster-card movie-card"
+              :style="{ '--stagger': stagger(index) }"
+              role="link"
+              tabindex="0"
+              @click="openAnime(item.bangumiId)"
+              @keydown.enter="openAnime(item.bangumiId)"
+            >
+              <div class="poster-frame">
+                <img
+                  v-if="hasCover(item)"
+                  :src="coverURL(item)"
+                  :alt="item.title"
+                  loading="lazy"
+                  @error="markCoverFailed(item)"
+                />
+                <div v-else class="cover-fallback">
+                  <span>{{ item.title.slice(0, 2) }}</span>
+                </div>
+                <span class="score-overlay">{{ ratingText(item.ratingScore) }}</span>
+              </div>
+              <h3 class="poster-title">{{ item.title }}</h3>
+              <p class="poster-sub">{{ formatPremiereDate(item.airDate) }}</p>
             </article>
           </div>
         </section>

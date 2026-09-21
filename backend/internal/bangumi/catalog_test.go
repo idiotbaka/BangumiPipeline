@@ -276,6 +276,53 @@ INSERT INTO media_jobs(
 	}
 }
 
+func TestViewerHomeSeparatesMoviesFromSeriesSections(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openDatabase(t, ctx)
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO anime_metadata(bangumi_id, url, name, anime_type, rating_json, created_at)
+VALUES
+    (9301, 'https://bgm.tv/subject/9301', 'Series', 'series', '{"score":7.1}', 1),
+    (9302, 'https://bgm.tv/subject/9302', 'Movie', 'movie', '{"score":8.9}', 2);
+INSERT INTO subscription_items(id, item_key, title, bangumi_id, created_at, updated_at)
+VALUES
+    (9301, 'home-series', 'Series 1', 9301, 1, 1),
+    (9302, 'home-movie', 'Movie 1', 9302, 1, 1);
+INSERT INTO download_jobs(id, subscription_item_id, status, created_at, updated_at)
+VALUES
+    (9301, 9301, 'completed', 1, 1),
+    (9302, 9302, 'completed', 1, 1);
+INSERT INTO media_jobs(
+    id, download_job_id, subscription_item_id, bangumi_id, anime_name,
+    season_number, episode_type, episode_number, status, output_path,
+    created_at, updated_at, completed_at
+) VALUES
+    (9301, 9301, 9301, 9301, 'Series', 1, 'episode', '1', 'completed', '/media/series.mp4', 1, 100, 100),
+    (9302, 9302, 9302, 9302, 'Movie', 1, 'episode', '1', 'completed', '/media/movie.mp4', 1, 200, 200);`); err != nil {
+		t.Fatal(err)
+	}
+
+	home, err := bangumi.NewCatalog(db).ViewerHome(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(home.RecentUpdates) != 1 || home.RecentUpdates[0].BangumiID != 9301 {
+		t.Fatalf("recent updates should contain only series: %+v", home.RecentUpdates)
+	}
+	if len(home.AnimeMovies) != 1 || home.AnimeMovies[0].BangumiID != 9302 {
+		t.Fatalf("movie section should contain only movies: %+v", home.AnimeMovies)
+	}
+	if home.AnimeMovies[0].RatingScore == nil || *home.AnimeMovies[0].RatingScore != 8.9 {
+		t.Fatalf("movie score missing from home card: %+v", home.AnimeMovies[0])
+	}
+	for _, item := range home.HotRecommendations {
+		if item.BangumiID == 9302 {
+			t.Fatalf("movie leaked into hot recommendations: %+v", item)
+		}
+	}
+}
+
 func TestViewerAnimeDetailIncludesDetectedOPSkipSegment(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

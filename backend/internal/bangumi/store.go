@@ -247,6 +247,7 @@ func saveSubjectDetail(ctx context.Context, db database.Executor, bangumiID int6
 	ratingJSON := normalizedRawJSON(detail.Rating, "{}")
 	collectionJSON := normalizedRawJSON(detail.Collection, "{}")
 	aliases := extractAliases(detail.Infobox)
+	animeType := subjectAnimeType(detail)
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -264,6 +265,7 @@ SET detail_date = ?,
     name_cn = CASE WHEN ? != '' THEN ? ELSE name_cn END,
     eps = ?, total_episodes = ?, volumes = ?, series = ?, locked = ?, nsfw = ?,
     infobox_json = ?, rating_json = ?, collection_json = ?, meta_tags_json = ?,
+    anime_type = CASE WHEN anime_type_manual = 1 THEN anime_type ELSE ? END,
     image_large_url = CASE WHEN ? != '' THEN ? ELSE image_large_url END,
     detail_status = 'completed', detail_error = '', detail_fetched_at = ?
 WHERE bangumi_id = ?`,
@@ -272,6 +274,7 @@ WHERE bangumi_id = ?`,
 		detail.Name, detail.Name, detail.NameCN, detail.NameCN,
 		detail.Eps, detail.TotalEpisodes, detail.Volumes, detail.Series, detail.Locked, detail.NSFW,
 		string(infoboxJSON), ratingJSON, collectionJSON, string(metaTagsJSON),
+		animeType,
 		detail.Images.Large, detail.Images.Large, fetchedAt, bangumiID,
 	)
 	if err != nil {
@@ -307,6 +310,29 @@ VALUES (?, ?, ?)`, bangumiID, alias, index); err != nil {
 		}
 	}
 	return tx.Commit()
+}
+
+func subjectAnimeType(detail subjectDetail) string {
+	for _, tag := range detail.Tags {
+		if movieTag(tag.Name) {
+			return AnimeTypeMovie
+		}
+	}
+	for _, tag := range detail.MetaTags {
+		if movieTag(tag) {
+			return AnimeTypeMovie
+		}
+	}
+	return AnimeTypeSeries
+}
+
+func movieTag(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "剧场版", "動畫電影", "动画电影":
+		return true
+	default:
+		return false
+	}
 }
 
 func saveCharacters(ctx context.Context, db database.Executor, bangumiID int64, characters []storedCharacter, now time.Time) error {

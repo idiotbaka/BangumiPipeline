@@ -53,6 +53,7 @@ const selectedCommentCount = computed(() =>
   episodeComments.value?.commentCount ?? selectedEpisode.value?.commentCount ?? 0,
 )
 const playableEpisodes = computed(() => anime.value?.episodes.filter((episode) => episode.hasMedia) ?? [])
+const isSingleMovie = computed(() => anime.value?.animeType === 'movie' && playableEpisodes.value.length === 1)
 const playerEpisodes = computed(() =>
   playableEpisodes.value.map((episode) => ({
     key: episode.key,
@@ -75,9 +76,12 @@ const metadataItems = computed(() => {
     { key: '放送开始', value: formatAirDate(detail.airDate) },
     { key: '放送周期', value: weekdays[detail.airWeekday] || '未定' },
     { key: '播放平台', value: detail.platform || '未定' },
-    { key: '总话数', value: detail.totalEpisodes > 0 ? `${detail.totalEpisodes} 话` : '未定' },
+    { key: '作品类型', value: detail.animeType === 'movie' ? '动画电影' : '多话连载' },
     { key: 'Bangumi 评分', value: detail.ratingScore === null ? '暂无评分' : detail.ratingScore.toFixed(1) },
   ]
+  if (detail.animeType !== 'movie') {
+    items.splice(4, 0, { key: '总话数', value: detail.totalEpisodes > 0 ? `${detail.totalEpisodes} 话` : '未定' })
+  }
   for (const entry of detail.infobox.slice(0, 16)) {
     const key = String(entry.key ?? '').trim()
     const value = formatInfoValue(entry.value)
@@ -141,6 +145,7 @@ async function loadDetail() {
       resumePosition.value = 0
     }
     failedImages.value = new Set()
+    if (isSingleMovie.value) void loadEpisodeComments()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '番剧详情加载失败'
   } finally {
@@ -354,8 +359,9 @@ function formatInfoValue(value: unknown): string {
             <i />
             <span>{{ weekdays[anime.airWeekday] || '放送日未定' }}</span>
             <i />
-            <span>{{ anime.totalEpisodes > 0 ? `全 ${anime.totalEpisodes} 话` : '话数未定' }}</span>
-            <template v-if="anime.isCompleted">
+            <span v-if="anime.animeType === 'movie'">动画电影</span>
+            <span v-else>{{ anime.totalEpisodes > 0 ? `全 ${anime.totalEpisodes} 话` : '话数未定' }}</span>
+            <template v-if="anime.animeType !== 'movie' && anime.isCompleted">
               <i />
               <span class="completion-status">已完结</span>
             </template>
@@ -387,7 +393,21 @@ function formatInfoValue(value: unknown): string {
           </div>
         </div>
 
-        <aside class="episode-panel">
+        <aside class="episode-panel" :class="{ 'movie-story-panel': isSingleMovie }">
+          <template v-if="isSingleMovie">
+            <header class="movie-story-heading">
+              <p>STORY</p>
+              <h2>剧情简介</h2>
+            </header>
+            <div class="movie-story-content">
+              <p>{{ anime.summary || '该动画电影暂无剧情简介。' }}</p>
+              <div class="anime-tags movie-story-tags">
+                <span v-for="tag in displayMetaTags" :key="`movie-meta-${tag}`" class="meta-tag">{{ tag }}</span>
+                <span v-for="tag in displayTags" :key="`movie-${tag.name}`">{{ tag.name }}</span>
+              </div>
+            </div>
+          </template>
+          <template v-else>
           <header class="panel-tabs" role="tablist" aria-label="选集与评论">
             <button
               class="panel-tab"
@@ -478,17 +498,51 @@ function formatInfoValue(value: unknown): string {
               <span v-else>本话暂时没有评论</span>
             </div>
           </div>
+          </template>
         </aside>
       </section>
 
       <section class="information-layout">
-        <article class="summary-panel info-panel">
-          <header><p>STORY</p><h2>剧情简介</h2></header>
-          <p class="anime-summary">{{ anime.summary || '该番剧暂无剧情简介。' }}</p>
-          <div class="anime-tags">
-            <span v-for="tag in displayMetaTags" :key="`meta-${tag}`" class="meta-tag">{{ tag }}</span>
-            <span v-for="tag in displayTags" :key="tag.name">{{ tag.name }}</span>
-          </div>
+        <article class="summary-panel info-panel" :class="{ 'movie-comments-panel': isSingleMovie }">
+          <template v-if="isSingleMovie">
+            <header class="movie-comments-heading">
+              <div><p>COMMENTS</p><h2>观众评论</h2></div>
+              <span>{{ selectedCommentCount }} 条</span>
+            </header>
+            <div class="comment-list movie-comment-list" aria-label="本片评论">
+              <div v-if="commentsLoading" class="comment-state comment-loading">
+                <i aria-hidden="true" />
+                <span>正在读取本片评论...</span>
+              </div>
+              <div v-else-if="commentsError" class="comment-state comment-error-state">
+                <span>{{ commentsError }}</span>
+                <button type="button" @click="loadEpisodeComments">重新加载</button>
+              </div>
+              <template v-else-if="episodeComments?.comments.length">
+                <EpisodeCommentItem
+                  v-for="comment in episodeComments.comments"
+                  :key="comment.commentId"
+                  :comment="comment"
+                  :smiles="commentSmiles"
+                />
+              </template>
+              <div v-else class="comment-state">
+                <span v-if="episodeComments?.syncStatus === 'not_started' || episodeComments?.syncStatus === 'pending'">
+                  本片评论正在等待首次同步
+                </span>
+                <span v-else-if="episodeComments?.syncStatus === 'not_found'">Bangumi 暂无本片评论数据</span>
+                <span v-else>本片暂时没有评论</span>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <header><p>STORY</p><h2>剧情简介</h2></header>
+            <p class="anime-summary">{{ anime.summary || '该番剧暂无剧情简介。' }}</p>
+            <div class="anime-tags">
+              <span v-for="tag in displayMetaTags" :key="`meta-${tag}`" class="meta-tag">{{ tag }}</span>
+              <span v-for="tag in displayTags" :key="tag.name">{{ tag.name }}</span>
+            </div>
+          </template>
         </article>
 
         <article class="metadata-panel info-panel">
@@ -597,6 +651,12 @@ function formatInfoValue(value: unknown): string {
 .player-empty span { color: rgba(255,255,255,.48); font-size: 13px; }
 
 .episode-panel { height: 100%; display: grid; grid-template-rows: 70px minmax(0, 1fr); overflow: hidden; background: rgba(255,255,255,.8); border: 1px solid rgba(85,119,217,.14); box-shadow: 0 18px 40px rgba(85,119,217,.09); backdrop-filter: blur(14px); clip-path: polygon(0 0, calc(100% - 17px) 0, 100% 17px, 100% 100%, 17px 100%, 0 calc(100% - 17px)); }
+.movie-story-heading { display: flex; flex-direction: column; justify-content: center; padding: 10px 18px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(90deg, rgba(255,244,248,.8), rgba(236,253,255,.36)); }
+.movie-story-heading p { color: var(--blue-500); font-family: var(--font-mono); font-size: 10px; letter-spacing: 1.5px; }
+.movie-story-heading h2 { margin-top: 2px; color: var(--ink-900); font-size: 18px; }
+.movie-story-content { min-height: 0; overflow-y: auto; padding: 22px 20px 28px; scrollbar-gutter: stable; }
+.movie-story-content > p { color: var(--ink-600); font-size: 14px; line-height: 1.95; white-space: pre-line; }
+.movie-story-tags { margin-top: 24px; }
 .panel-tabs { display: grid; grid-template-columns: 1fr 1fr; padding: 0; border-bottom: 1px solid var(--line-soft); background: linear-gradient(90deg, rgba(255,244,248,.8), rgba(236,253,255,.36)); }
 .panel-tab { position: relative; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 16px 9px; color: var(--ink-400); text-align: left; border-right: 1px solid rgba(85,119,217,.1); transition: color 150ms ease, background 150ms ease; }
 .panel-tab:last-child { border-right: 0; }
@@ -638,6 +698,10 @@ function formatInfoValue(value: unknown): string {
 
 .information-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(420px, .8fr); gap: 18px; margin-top: 42px; }
 .info-panel { padding: 24px 26px; background: rgba(255,255,255,.74); border: 1px solid rgba(85,119,217,.12); box-shadow: 0 16px 36px rgba(85,119,217,.06); clip-path: polygon(0 0, calc(100% - 17px) 0, 100% 17px, 100% 100%, 17px 100%, 0 calc(100% - 17px)); }
+.movie-comments-panel { max-height: 600px; display: flex; flex-direction: column; overflow: hidden; }
+.movie-comments-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex: 0 0 auto; }
+.movie-comments-heading > span { padding: 5px 10px; color: var(--pink-600); font-size: 11px; background: var(--pink-50); border-left: 2px solid var(--pink-400); }
+.movie-comment-list { min-height: 0; flex: 1 1 auto; margin: 16px -12px -12px; padding: 7px 12px 12px; border-top: 1px solid rgba(85,119,217,.1); }
 .info-panel header p, .section-heading p { color: var(--blue-500); font-family: var(--font-mono); font-size: 13px; letter-spacing: 1.5px; }
 .info-panel header h2, .section-heading h2 { margin-top: 2px; color: var(--ink-900); font-size: 20px; }
 .anime-summary { margin-top: 19px; color: var(--ink-600); font-size: 13px; line-height: 1.9; white-space: pre-line; }

@@ -160,6 +160,62 @@ SELECT ep_number, sort_number, type FROM anime_episodes WHERE bangumi_id = 101 A
 	}
 }
 
+func TestAddSubjectDetectsMovieTypeAndPreservesManualOverride(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openDatabase(t, ctx)
+	settings := system.NewService(db)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v0/subjects/818":
+			writeJSON(w, `{
+                    "id":818,"type":2,"name":"Movie","name_cn":"动画电影",
+                    "date":"2026-08-18","tags":[{"name":"剧场版","count":20,"total_cont":1}],
+                    "meta_tags":["动画"],"infobox":[],"images":{}
+                }`)
+		case "/v0/subjects/818/characters":
+			writeJSON(w, `[]`)
+		case "/v0/episodes":
+			writeJSON(w, `{"data":[],"total":0,"limit":0,"offset":0}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	syncer := newTestSyncer(db, settings, logger, server.URL, "test/movie-type", filepath.Join(t.TempDir(), "covers"))
+	if err := syncer.AddSubject(ctx, 818); err != nil {
+		t.Fatal(err)
+	}
+	var animeType string
+	var manual bool
+	if err := db.QueryRowContext(ctx, `SELECT anime_type, anime_type_manual FROM anime_metadata WHERE bangumi_id = 818`).Scan(&animeType, &manual); err != nil {
+		t.Fatal(err)
+	}
+	if animeType != bangumi.AnimeTypeMovie || manual {
+		t.Fatalf("movie tag was not classified automatically: type=%q manual=%v", animeType, manual)
+	}
+
+	catalog := bangumi.NewCatalog(db)
+	if _, err := catalog.UpdateSettings(ctx, 818, bangumi.AnimeSettings{
+		SubscriptionEpisodeOffset: 0,
+		AnimeType:                 bangumi.AnimeTypeSeries,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncer.RefreshSubject(ctx, 818); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT anime_type, anime_type_manual FROM anime_metadata WHERE bangumi_id = 818`).Scan(&animeType, &manual); err != nil {
+		t.Fatal(err)
+	}
+	if animeType != bangumi.AnimeTypeSeries || !manual {
+		t.Fatalf("manual anime type was overwritten by metadata refresh: type=%q manual=%v", animeType, manual)
+	}
+}
+
 func TestCustomSearchTagsDiscoverSubjects(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -165,6 +165,8 @@ CREATE TABLE IF NOT EXISTS anime_metadata (
     last_media_refresh_at INTEGER,
     media_storage_root TEXT NOT NULL DEFAULT '',
     subscription_episode_offset INTEGER NOT NULL DEFAULT 0,
+    anime_type       TEXT NOT NULL DEFAULT 'series' CHECK (anime_type IN ('series', 'movie')),
+    anime_type_manual INTEGER NOT NULL DEFAULT 0 CHECK (anime_type_manual IN (0, 1)),
     deleted_at       INTEGER,
     created_at       INTEGER NOT NULL
 );
@@ -1418,6 +1420,24 @@ VALUES (36, unixepoch());`); err != nil {
 		}
 		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (37, unixepoch())`); err != nil {
 			return fmt.Errorf("finish version 37 migration: %w", err)
+		}
+	}
+	applied, err = migrationApplied(ctx, db, 38)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		if err := ensureColumn(ctx, db, "anime_metadata", "anime_type", "TEXT NOT NULL DEFAULT 'series' CHECK (anime_type IN ('series', 'movie'))"); err != nil {
+			return err
+		}
+		if err := ensureColumn(ctx, db, "anime_metadata", "anime_type_manual", "INTEGER NOT NULL DEFAULT 0 CHECK (anime_type_manual IN (0, 1))"); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS idx_anime_type_active
+ON anime_metadata(anime_type, deleted_at, air_date DESC, id DESC);
+INSERT INTO schema_migrations(version, applied_at) VALUES (38, unixepoch());`); err != nil {
+			return fmt.Errorf("finish version 38 migration: %w", err)
 		}
 	}
 	return nil

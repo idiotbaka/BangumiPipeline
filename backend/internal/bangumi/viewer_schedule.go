@@ -13,17 +13,19 @@ type ViewerSchedule struct {
 }
 
 type ViewerScheduleCard struct {
-	BangumiID              int64  `json:"bangumiId"`
-	Title                  string `json:"title"`
-	AirDate                string `json:"airDate"`
-	AirWeekday             int    `json:"airWeekday"`
-	TotalEpisodes          int    `json:"totalEpisodes"`
-	IsCompleted            bool   `json:"isCompleted"`
-	HasCover               bool   `json:"hasCover"`
-	ImageStatus            string `json:"imageStatus"`
-	LatestEpisode          string `json:"latestEpisode"`
-	LatestEpisodeLabel     string `json:"latestEpisodeLabel"`
-	LatestEpisodeUpdatedAt *int64 `json:"latestEpisodeUpdatedAt"`
+	BangumiID              int64    `json:"bangumiId"`
+	Title                  string   `json:"title"`
+	AirDate                string   `json:"airDate"`
+	AirWeekday             int      `json:"airWeekday"`
+	AnimeType              string   `json:"animeType"`
+	TotalEpisodes          int      `json:"totalEpisodes"`
+	IsCompleted            bool     `json:"isCompleted"`
+	HasCover               bool     `json:"hasCover"`
+	ImageStatus            string   `json:"imageStatus"`
+	LatestEpisode          string   `json:"latestEpisode"`
+	LatestEpisodeLabel     string   `json:"latestEpisodeLabel"`
+	LatestEpisodeUpdatedAt *int64   `json:"latestEpisodeUpdatedAt"`
+	RatingScore            *float64 `json:"ratingScore"`
 }
 
 // ViewerSchedule returns every active anime carrying the exact Bangumi season
@@ -41,6 +43,7 @@ SELECT am.bangumi_id,
        COALESCE(NULLIF(am.name_cn, ''), am.name),
        am.air_date,
        am.air_weekday,
+       am.anime_type,
        CASE WHEN am.eps > 0 THEN am.eps ELSE (
            SELECT COUNT(*)
            FROM anime_episodes regular_episode
@@ -48,7 +51,8 @@ SELECT am.bangumi_id,
              AND regular_episode.type = 0
        ) END,
        am.image_local_path != '',
-       am.image_status
+       am.image_status,
+       am.rating_json
 FROM anime_metadata am
 WHERE am.deleted_at IS NULL
   AND EXISTS (
@@ -67,13 +71,15 @@ ORDER BY CASE WHEN am.air_weekday BETWEEN 1 AND 7 THEN am.air_weekday ELSE 8 END
 	}
 	for rows.Next() {
 		var item ViewerScheduleCard
+		var ratingJSON string
 		if err := rows.Scan(
 			&item.BangumiID, &item.Title, &item.AirDate, &item.AirWeekday,
-			&item.TotalEpisodes, &item.HasCover, &item.ImageStatus,
+			&item.AnimeType, &item.TotalEpisodes, &item.HasCover, &item.ImageStatus, &ratingJSON,
 		); err != nil {
 			rows.Close()
 			return ViewerSchedule{}, err
 		}
+		item.RatingScore = ratingScore(ratingJSON)
 		season.Items = append(season.Items, item)
 	}
 	if err := rows.Err(); err != nil {

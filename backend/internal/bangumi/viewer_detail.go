@@ -20,6 +20,7 @@ type ViewerAnimeDetail struct {
 	AirDate       string                `json:"airDate"`
 	AirWeekday    int                   `json:"airWeekday"`
 	Platform      string                `json:"platform"`
+	AnimeType     string                `json:"animeType"`
 	Summary       string                `json:"summary"`
 	TotalEpisodes int                   `json:"totalEpisodes"`
 	IsCompleted   bool                  `json:"isCompleted"`
@@ -99,6 +100,7 @@ func (c *Catalog) ViewerAnimeDetail(ctx context.Context, bangumiID int64) (Viewe
 		AirDate:       detail.AirDate,
 		AirWeekday:    detail.AirWeekday,
 		Platform:      detail.Platform,
+		AnimeType:     detail.AnimeType,
 		Summary:       detail.Summary,
 		TotalEpisodes: viewerRegularEpisodeTotal(detail.Eps, detail.Episodes),
 		HasCover:      detail.HasCover,

@@ -68,15 +68,21 @@ WHERE task_key = 'bangumi-season-metadata'`).Scan(&enabled, &interval, &status);
 	if !enabled || interval != 15 || status != "idle" {
 		t.Fatalf("legacy task was not upgraded correctly: enabled=%v interval=%d status=%q", enabled, interval, status)
 	}
-	var detailStatus, charactersStatus, episodesStatus, infobox string
+	var detailStatus, charactersStatus, episodesStatus, infobox, animeType string
+	var animeTypeManual bool
 	if err := db.QueryRowContext(ctx, `
-SELECT detail_status, characters_status, episodes_status, infobox_json
-FROM anime_metadata WHERE bangumi_id = 101`).Scan(&detailStatus, &charactersStatus, &episodesStatus, &infobox); err != nil {
+SELECT detail_status, characters_status, episodes_status, infobox_json, anime_type, anime_type_manual
+FROM anime_metadata WHERE bangumi_id = 101`).Scan(
+		&detailStatus, &charactersStatus, &episodesStatus, &infobox, &animeType, &animeTypeManual,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if detailStatus != "pending" || charactersStatus != "pending" || episodesStatus != "pending" || infobox != "[]" {
 		t.Fatalf("legacy anime was not prepared for metadata synchronization: detail=%q characters=%q episodes=%q infobox=%q",
 			detailStatus, charactersStatus, episodesStatus, infobox)
+	}
+	if animeType != "series" || animeTypeManual {
+		t.Fatalf("legacy anime type migration mismatch: type=%q manual=%v", animeType, animeTypeManual)
 	}
 	assertTableExists(t, db, "anime_episodes")
 }

@@ -15,14 +15,25 @@ type ViewerLibrary struct {
 // between groups. Completed media is used only for ordering and progress; no
 // filesystem path is exposed to the viewer client.
 func (c *Catalog) ViewerLibrary(ctx context.Context, query string, filterGroups [][]string) (ViewerLibrary, error) {
-	return c.ViewerLibraryPage(ctx, query, filterGroups, 0, 0)
+	return c.viewerLibraryPage(ctx, query, filterGroups, 0, 0, AnimeTypeSeries)
 }
 
 // ViewerLibraryPage returns a page when pageSize is positive. Passing a zero
 // pageSize preserves the legacy unpaginated behavior for existing clients.
 func (c *Catalog) ViewerLibraryPage(ctx context.Context, query string, filterGroups [][]string, page, pageSize int) (ViewerLibrary, error) {
-	where := []string{"am.deleted_at IS NULL"}
-	args := make([]any, 0)
+	return c.viewerLibraryPage(ctx, query, filterGroups, page, pageSize, AnimeTypeSeries)
+}
+
+func (c *Catalog) ViewerMovieLibraryPage(ctx context.Context, query string, filterGroups [][]string, page, pageSize int) (ViewerLibrary, error) {
+	return c.viewerLibraryPage(ctx, query, filterGroups, page, pageSize, AnimeTypeMovie)
+}
+
+func (c *Catalog) viewerLibraryPage(ctx context.Context, query string, filterGroups [][]string, page, pageSize int, animeType string) (ViewerLibrary, error) {
+	if !IsValidAnimeType(animeType) {
+		return ViewerLibrary{}, ErrInvalidAnimeType
+	}
+	where := []string{"am.deleted_at IS NULL", "am.anime_type = ?"}
+	args := []any{animeType}
 	query = strings.TrimSpace(query)
 	if query != "" {
 		like := "%" + query + "%"
@@ -67,6 +78,7 @@ SELECT am.bangumi_id,
        COALESCE(NULLIF(am.name_cn, ''), am.name),
        am.air_date,
        am.air_weekday,
+       am.anime_type,
        CASE WHEN am.eps > 0 THEN am.eps ELSE (
            SELECT COUNT(*)
            FROM anime_episodes regular_episode
@@ -74,7 +86,8 @@ SELECT am.bangumi_id,
              AND regular_episode.type = 0
        ) END,
        am.image_local_path != '',
-       am.image_status
+       am.image_status,
+       am.rating_json
 FROM anime_metadata am
 WHERE ` + whereSQL + `
 ORDER BY EXISTS (
@@ -101,13 +114,15 @@ ORDER BY EXISTS (
 	items := make([]ViewerScheduleCard, 0)
 	for rows.Next() {
 		var item ViewerScheduleCard
+		var ratingJSON string
 		if err := rows.Scan(
 			&item.BangumiID, &item.Title, &item.AirDate, &item.AirWeekday,
-			&item.TotalEpisodes, &item.HasCover, &item.ImageStatus,
+			&item.AnimeType, &item.TotalEpisodes, &item.HasCover, &item.ImageStatus, &ratingJSON,
 		); err != nil {
 			rows.Close()
 			return ViewerLibrary{}, err
 		}
+		item.RatingScore = ratingScore(ratingJSON)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

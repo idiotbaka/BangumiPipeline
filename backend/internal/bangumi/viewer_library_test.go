@@ -62,3 +62,35 @@ VALUES
 		t.Fatalf("legacy request should remain unpaginated: %+v", legacy)
 	}
 }
+
+func TestViewerLibrariesSeparateSeriesAndMovies(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openDatabase(t, ctx)
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO anime_metadata(bangumi_id, url, name, anime_type, rating_json, created_at)
+VALUES
+    (901, 'https://bgm.tv/subject/901', 'Series', 'series', '{"score":7.5}', 1),
+    (902, 'https://bgm.tv/subject/902', 'Movie', 'movie', '{"score":8.8}', 2);`); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := bangumi.NewCatalog(db)
+	series, err := catalog.ViewerLibraryPage(ctx, "", nil, 1, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if series.Total != 1 || len(series.Items) != 1 || series.Items[0].BangumiID != 901 {
+		t.Fatalf("series library contains the wrong titles: %+v", series)
+	}
+	movies, err := catalog.ViewerMovieLibraryPage(ctx, "", nil, 1, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if movies.Total != 1 || len(movies.Items) != 1 || movies.Items[0].BangumiID != 902 {
+		t.Fatalf("movie library contains the wrong titles: %+v", movies)
+	}
+	if movies.Items[0].RatingScore == nil || *movies.Items[0].RatingScore != 8.8 {
+		t.Fatalf("movie rating was not returned: %+v", movies.Items[0])
+	}
+}

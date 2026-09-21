@@ -342,6 +342,8 @@ export interface AnimeMatchedEpisode {
   status: 'matched' | 'completed'
 }
 
+export type AnimeType = 'series' | 'movie'
+
 export interface AnimeListItem {
   bangumiId: number
   name: string
@@ -356,6 +358,7 @@ export interface AnimeListItem {
   storageRoot: string
   storagePath: string
   subscriptionEpisodeOffset: number
+  animeType: AnimeType
   matchedEpisodes: AnimeMatchedEpisode[]
   createdAt: number
 }
@@ -363,6 +366,7 @@ export interface AnimeListItem {
 export interface AnimeSettings {
   bangumiId: number
   subscriptionEpisodeOffset: number
+  animeType: AnimeType
 }
 
 export type AnimeListSort = 'created' | 'airDate'
@@ -553,6 +557,7 @@ export interface AnimeDetail {
   detailStatus: string
   characterStatus: string
   episodesStatus: string
+  animeType: AnimeType
   storageRoot: string
   storagePath: string
   infobox: Array<{ key?: string; value?: unknown }>
@@ -838,7 +843,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ storageRoot }),
     }),
-  updateAnimeSettings: (bangumiId: number, settings: Pick<AnimeSettings, 'subscriptionEpisodeOffset'>) =>
+  updateAnimeSettings: (bangumiId: number, settings: Pick<AnimeSettings, 'subscriptionEpisodeOffset' | 'animeType'>) =>
     request<{ settings: AnimeSettings }>(`/api/anime/${bangumiId}/settings`, {
       method: 'PATCH',
       body: JSON.stringify(settings),

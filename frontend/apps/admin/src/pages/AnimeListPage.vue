@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Delete, EditPen, FolderOpened, Link, Plus, Refresh, Search, Setting, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api, type AnimeListItem, type AnimeListSort, type EpisodeBindingIdentity, type HistorySyncMode, type MediaStorageSettings } from '../api'
+import { api, type AnimeListItem, type AnimeListSort, type AnimeType, type EpisodeBindingIdentity, type HistorySyncMode, type MediaStorageSettings } from '../api'
 import AnimeDetailPanel from '../components/AnimeDetailPanel.vue'
 
 const items = ref<AnimeListItem[]>([])
@@ -21,7 +21,10 @@ const savingAnimeSettingsId = ref<number | null>(null)
 const storageSettings = ref<MediaStorageSettings | null>(null)
 const animeSettingsVisible = ref(false)
 const animeSettingsTarget = ref<AnimeListItem | null>(null)
-const animeSettingsForm = reactive({ subscriptionEpisodeOffset: 0 })
+const animeSettingsForm = reactive<{ subscriptionEpisodeOffset: number; animeType: AnimeType }>({
+  subscriptionEpisodeOffset: 0,
+  animeType: 'series',
+})
 const storageMoveVisible = ref(false)
 const storageMoveTarget = ref<AnimeListItem | null>(null)
 const storageMoveRoot = ref('')
@@ -321,12 +324,14 @@ function openStorageMoveDialog(anime: AnimeListItem) {
 function openAnimeSettingsDialog(anime: AnimeListItem) {
   animeSettingsTarget.value = anime
   animeSettingsForm.subscriptionEpisodeOffset = anime.subscriptionEpisodeOffset || 0
+  animeSettingsForm.animeType = anime.animeType
   animeSettingsVisible.value = true
 }
 
 function clearAnimeSettingsDialog() {
   animeSettingsTarget.value = null
   animeSettingsForm.subscriptionEpisodeOffset = 0
+  animeSettingsForm.animeType = 'series'
 }
 
 async function saveAnimeSettings() {
@@ -339,10 +344,12 @@ async function saveAnimeSettings() {
   try {
     const { settings } = await api.updateAnimeSettings(anime.bangumiId, {
       subscriptionEpisodeOffset: offset,
+      animeType: animeSettingsForm.animeType,
     })
     const current = items.value.find((item) => item.bangumiId === anime.bangumiId)
     if (current) {
       current.subscriptionEpisodeOffset = settings.subscriptionEpisodeOffset
+      current.animeType = settings.animeType
     }
     ElMessage.success('番剧设置已保存')
     animeSettingsVisible.value = false
@@ -751,6 +758,13 @@ onBeforeUnmount(stopFilterLoading)
       @closed="clearAnimeSettingsDialog"
     >
       <el-form class="anime-settings-dialog" label-position="top" @submit.prevent>
+        <el-form-item label="番剧类型">
+          <el-radio-group v-model="animeSettingsForm.animeType">
+            <el-radio-button label="series">多话连载</el-radio-button>
+            <el-radio-button label="movie">动画电影</el-radio-button>
+          </el-radio-group>
+          <div class="form-help">动画电影会在观看端进入独立分类；单集成品会使用电影详情布局。</div>
+        </el-form-item>
         <el-form-item label="番剧索引偏移">
           <el-input-number
             v-model="animeSettingsForm.subscriptionEpisodeOffset"

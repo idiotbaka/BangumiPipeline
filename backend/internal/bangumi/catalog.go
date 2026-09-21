@@ -21,13 +21,20 @@ var (
 	ErrAnimeAlreadyExists = errors.New("anime already exists")
 	ErrInvalidSubjectType = errors.New("invalid subject type")
 	ErrInvalidSearchTags  = errors.New("invalid bangumi search tags")
+	ErrInvalidAnimeType   = errors.New("invalid anime type")
 )
 
 const (
 	opSkipStatusNoMedia     = "no_media"
 	opSkipStatusPending     = "pending"
 	opSkipStatusUnsupported = "unsupported"
+	AnimeTypeSeries         = "series"
+	AnimeTypeMovie          = "movie"
 )
+
+func IsValidAnimeType(value string) bool {
+	return value == AnimeTypeSeries || value == AnimeTypeMovie
+}
 
 type Catalog struct {
 	db               database.Executor
@@ -79,6 +86,7 @@ type AnimeListItem struct {
 	StorageRoot               string                `json:"storageRoot"`
 	StoragePath               string                `json:"storagePath"`
 	SubscriptionEpisodeOffset int                   `json:"subscriptionEpisodeOffset"`
+	AnimeType                 string                `json:"animeType"`
 	MatchedEpisodes           []AnimeMatchedEpisode `json:"matchedEpisodes"`
 	CreatedAt                 int64                 `json:"createdAt"`
 }
@@ -91,8 +99,9 @@ type AnimePage struct {
 }
 
 type AnimeSettings struct {
-	BangumiID                 int64 `json:"bangumiId"`
-	SubscriptionEpisodeOffset int   `json:"subscriptionEpisodeOffset"`
+	BangumiID                 int64  `json:"bangumiId"`
+	SubscriptionEpisodeOffset int    `json:"subscriptionEpisodeOffset"`
+	AnimeType                 string `json:"animeType"`
 }
 
 type AnimeListSort string
@@ -123,6 +132,7 @@ type AnimeSearchItem struct {
 type ViewerHome struct {
 	HotRecommendations []ViewerAnimeCard `json:"hotRecommendations"`
 	RecentUpdates      []ViewerAnimeCard `json:"recentUpdates"`
+	AnimeMovies        []ViewerAnimeCard `json:"animeMovies"`
 }
 
 type ViewerAnimeCard struct {
@@ -131,6 +141,7 @@ type ViewerAnimeCard struct {
 	NameCN             string   `json:"nameCN"`
 	Title              string   `json:"title"`
 	AirDate            string   `json:"airDate"`
+	AnimeType          string   `json:"animeType"`
 	IsCompleted        bool     `json:"isCompleted"`
 	HasCover           bool     `json:"hasCover"`
 	ImageStatus        string   `json:"imageStatus"`
@@ -227,6 +238,7 @@ type AnimeDetail struct {
 	DetailStatus   string           `json:"detailStatus"`
 	CharacterState string           `json:"characterStatus"`
 	EpisodesStatus string           `json:"episodesStatus"`
+	AnimeType      string           `json:"animeType"`
 	StorageRoot    string           `json:"storageRoot"`
 	StoragePath    string           `json:"storagePath"`
 	Infobox        []map[string]any `json:"infobox"`
@@ -265,7 +277,7 @@ WHERE %s`, where), args...).Scan(&result.Total); err != nil {
 SELECT bangumi_id, name, name_cn, air_date, air_weekday,
        CASE WHEN total_episodes > 0 THEN total_episodes ELSE eps END,
        platform, image_status, image_local_path != '', detail_status, media_storage_root,
-       subscription_episode_offset, created_at
+       subscription_episode_offset, anime_type, created_at
 FROM anime_metadata am
 WHERE `+where+`
 ORDER BY `+animeListOrderBy(option.Sort)+`
@@ -278,7 +290,7 @@ LIMIT ? OFFSET ?`, queryArgs...)
 		if err := rows.Scan(
 			&item.BangumiID, &item.Name, &item.NameCN, &item.AirDate, &item.AirWeekday,
 			&item.Episodes, &item.Platform, &item.ImageStatus, &item.HasCover,
-			&item.DetailStatus, &item.StorageRoot, &item.SubscriptionEpisodeOffset, &item.CreatedAt,
+			&item.DetailStatus, &item.StorageRoot, &item.SubscriptionEpisodeOffset, &item.AnimeType, &item.CreatedAt,
 		); err != nil {
 			rows.Close()
 			return result, err
@@ -413,6 +425,7 @@ LIMIT ?`, where), args...)
 func (c *Catalog) ViewerHome(ctx context.Context) (ViewerHome, error) {
 	const hotLimit = 32
 	const recentLimit = 24
+	const movieLimit = 8
 
 	aggregates, err := c.viewerAnimeAggregates(ctx)
 	if err != nil {
@@ -423,7 +436,16 @@ func (c *Catalog) ViewerHome(ctx context.Context) (ViewerHome, error) {
 	cutoff := now.AddDate(0, -6, 0)
 	hot := make([]ViewerAnimeCard, 0, len(aggregates))
 	recent := make([]ViewerAnimeCard, 0, len(aggregates))
+	movies := make([]ViewerAnimeCard, 0, len(aggregates))
 	for _, aggregate := range aggregates {
+		if aggregate.card.AnimeType == AnimeTypeMovie {
+			card := aggregate.card
+			if aggregate.hasRecent {
+				card.UpdatedAt = ptrInt64(aggregate.recentEpisode.updatedAt)
+			}
+			movies = append(movies, card)
+			continue
+		}
 		if aggregate.hasProgress && airDateWithinRange(aggregate.card.AirDate, cutoff, now) {
 			card := aggregate.card
 			card.LatestEpisode = aggregate.progressEpisode.episodeNumber
@@ -478,12 +500,35 @@ func (c *Catalog) ViewerHome(ctx context.Context) (ViewerHome, error) {
 		recent = recent[:recentLimit]
 	}
 
-	return ViewerHome{HotRecommendations: hot, RecentUpdates: recent}, nil
+	sort.SliceStable(movies, func(i, j int) bool {
+		left := movies[i]
+		right := movies[j]
+		if nullableInt64Value(left.UpdatedAt) != nullableInt64Value(right.UpdatedAt) {
+			return nullableInt64Value(left.UpdatedAt) > nullableInt64Value(right.UpdatedAt)
+		}
+		switch {
+		case left.RatingScore != nil && right.RatingScore != nil && *left.RatingScore != *right.RatingScore:
+			return *left.RatingScore > *right.RatingScore
+		case left.RatingScore != nil && right.RatingScore == nil:
+			return true
+		case left.RatingScore == nil && right.RatingScore != nil:
+			return false
+		case left.AirDate != right.AirDate:
+			return left.AirDate > right.AirDate
+		default:
+			return left.BangumiID > right.BangumiID
+		}
+	})
+	if len(movies) > movieLimit {
+		movies = movies[:movieLimit]
+	}
+
+	return ViewerHome{HotRecommendations: hot, RecentUpdates: recent, AnimeMovies: movies}, nil
 }
 
 func (c *Catalog) viewerAnimeAggregates(ctx context.Context) ([]viewerAnimeAggregate, error) {
 	rows, err := c.db.QueryContext(ctx, `
-SELECT am.bangumi_id, am.name, am.name_cn, am.air_date,
+SELECT am.bangumi_id, am.name, am.name_cn, am.air_date, am.anime_type,
        am.image_local_path != '', am.image_status, am.rating_json,
        CASE WHEN am.eps > 0 THEN am.eps ELSE (
            SELECT COUNT(*)
@@ -527,7 +572,7 @@ ORDER BY am.bangumi_id, media_updated_at DESC, mj.id DESC`)
 		var totalEpisodes int
 		var episode viewerEpisodeRef
 		if err := rows.Scan(
-			&card.BangumiID, &card.Name, &card.NameCN, &card.AirDate,
+			&card.BangumiID, &card.Name, &card.NameCN, &card.AirDate, &card.AnimeType,
 			&card.HasCover, &card.ImageStatus, &ratingJSON, &totalEpisodes,
 			&episode.season, &episode.episodeType, &episode.episodeNumber, &episode.title, &episode.updatedAt,
 		); err != nil {
@@ -567,14 +612,14 @@ func (c *Catalog) Detail(ctx context.Context, bangumiID int64) (AnimeDetail, err
 SELECT bangumi_id, url, name, name_cn, air_date, air_weekday, detail_date,
        platform, COALESCE(NULLIF(summary_cn, ''), summary), eps, total_episodes, volumes, series, locked, nsfw,
        image_local_path != '', image_status, detail_status, characters_status, episodes_status,
-       media_storage_root, infobox_json, rating_json, collection_json, meta_tags_json, created_at
+       anime_type, media_storage_root, infobox_json, rating_json, collection_json, meta_tags_json, created_at
 FROM anime_metadata WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(
 		&detail.BangumiID, &detail.URL, &detail.Name, &detail.NameCN, &detail.AirDate,
 		&detail.AirWeekday, &detail.DetailDate, &detail.Platform, &detail.Summary,
 		&detail.Eps, &detail.TotalEpisodes, &detail.Volumes, &detail.Series,
 		&detail.Locked, &detail.NSFW, &detail.HasCover, &detail.ImageStatus,
 		&detail.DetailStatus, &detail.CharacterState, &detail.EpisodesStatus,
-		&detail.StorageRoot, &infoboxJSON, &ratingJSON, &collectionJSON, &metaTagsJSON, &detail.CreatedAt,
+		&detail.AnimeType, &detail.StorageRoot, &infoboxJSON, &ratingJSON, &collectionJSON, &metaTagsJSON, &detail.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AnimeDetail{}, ErrAnimeNotFound
@@ -633,10 +678,13 @@ func (c *Catalog) UpdateSettings(ctx context.Context, bangumiID int64, settings 
 	if bangumiID < 1 {
 		return AnimeSettings{}, ErrAnimeNotFound
 	}
+	if !IsValidAnimeType(settings.AnimeType) {
+		return AnimeSettings{}, ErrInvalidAnimeType
+	}
 	result, err := c.db.ExecContext(ctx, `
 UPDATE anime_metadata
-SET subscription_episode_offset = ?
-WHERE bangumi_id = ? AND deleted_at IS NULL`, settings.SubscriptionEpisodeOffset, bangumiID)
+SET subscription_episode_offset = ?, anime_type = ?, anime_type_manual = 1
+WHERE bangumi_id = ? AND deleted_at IS NULL`, settings.SubscriptionEpisodeOffset, settings.AnimeType, bangumiID)
 	if err != nil {
 		return AnimeSettings{}, err
 	}
@@ -650,6 +698,7 @@ WHERE bangumi_id = ? AND deleted_at IS NULL`, settings.SubscriptionEpisodeOffset
 	return AnimeSettings{
 		BangumiID:                 bangumiID,
 		SubscriptionEpisodeOffset: settings.SubscriptionEpisodeOffset,
+		AnimeType:                 settings.AnimeType,
 	}, nil
 }
 
