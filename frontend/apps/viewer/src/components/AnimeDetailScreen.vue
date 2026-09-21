@@ -114,7 +114,9 @@ watch(() => props.bangumiId, loadDetail)
 watch(() => selectedEpisode.value?.mediaId ?? 0, (mediaID, previousMediaID) => {
   if (mediaID === previousMediaID) return
   resetEpisodeComments()
-  if (sidePanelTab.value === 'comments' && mediaID > 0) void loadEpisodeComments()
+  if (mediaID > 0 && (isSingleMovie.value || sidePanelTab.value === 'comments')) {
+    void loadEpisodeComments()
+  }
 })
 onBeforeUnmount(() => commentsController?.abort())
 
@@ -145,7 +147,6 @@ async function loadDetail() {
       resumePosition.value = 0
     }
     failedImages.value = new Set()
-    if (isSingleMovie.value) void loadEpisodeComments()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '番剧详情加载失败'
   } finally {
