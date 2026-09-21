@@ -41,6 +41,7 @@ const (
 
 	HistorySyncModeRSS   = "rss"
 	HistorySyncModeLocal = "local"
+	animeTypeMovie       = "movie"
 
 	defaultRequestTimeout = 20 * time.Second
 	rssResponseLimit      = 10 << 20
@@ -339,6 +340,10 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 		return HistorySyncResult{}, err
 	}
 	titleFilter := newHistoryTitleFilter(options)
+	isMovie, err := animeIsMovieByDB(ctx, s.db, bangumiID)
+	if err != nil {
+		return HistorySyncResult{}, err
+	}
 
 	network, err := s.settings.GetNetworkSettings(ctx)
 	if err != nil {
@@ -364,15 +369,24 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 	if err != nil {
 		return result, err
 	}
+	filteredItems := make([]rawItem, 0, len(items))
 	for _, item := range items {
 		if !titleFilter.Match(item.Title) {
 			result.SkippedUnmatched++
 			continue
 		}
-		identity, ok := historyEpisodeIdentity(item.Title)
-		if !ok {
-			result.SkippedUnmatched++
-			continue
+		filteredItems = append(filteredItems, item)
+	}
+	singleMovieItem := isMovie && len(filteredItems) == 1
+	for _, item := range filteredItems {
+		identity := singleMovieEpisodeIdentity()
+		if !singleMovieItem {
+			var ok bool
+			identity, ok = historyEpisodeIdentity(item.Title)
+			if !ok {
+				result.SkippedUnmatched++
+				continue
+			}
 		}
 		if source.ItemID > 0 && (identity.SeasonNumber != source.SeasonNumber || identity.EpisodeType != source.EpisodeType) {
 			result.SkippedUnmatched++
@@ -382,9 +396,11 @@ func (s *Service) SyncHistory(ctx context.Context, bangumiID int64, options Hist
 			result.SkippedUnmatched++
 			continue
 		}
-		identity, err = s.applyEpisodeOffsetToIdentity(ctx, bangumiID, identity)
-		if err != nil {
-			return result, err
+		if !singleMovieItem {
+			identity, err = s.applyEpisodeOffsetToIdentity(ctx, bangumiID, identity)
+			if err != nil {
+				return result, err
+			}
 		}
 		identityKey := episodeIdentityKey(identity)
 		if _, ok := existing[identityKey]; ok {
@@ -425,6 +441,10 @@ func (s *Service) syncLocalMediaHistory(ctx context.Context, bangumiID int64, op
 	if err != nil {
 		return HistorySyncResult{}, err
 	}
+	isMovie, err := animeIsMovieByDB(ctx, s.db, bangumiID)
+	if err != nil {
+		return HistorySyncResult{}, err
+	}
 	offset, err := s.subscriptionEpisodeOffset(ctx, bangumiID)
 	if err != nil {
 		return HistorySyncResult{}, err
@@ -436,7 +456,7 @@ func (s *Service) syncLocalMediaHistory(ctx context.Context, bangumiID int64, op
 		SourceTitle: filepath.Base(localDir),
 	}
 	candidates, fetched, skippedUnmatched, skippedDuplicate, err := scanLocalHistoryMedia(
-		localDir, newHistoryTitleFilter(options), offset,
+		localDir, newHistoryTitleFilter(options), offset, isMovie,
 	)
 	if err != nil {
 		return HistorySyncResult{}, err
@@ -525,7 +545,7 @@ func normalizeHistoryLocalDir(value string) (string, error) {
 	return value, nil
 }
 
-func scanLocalHistoryMedia(localDir string, filter historyTitleFilter, episodeOffset int) ([]localHistoryMedia, int, int, int, error) {
+func scanLocalHistoryMedia(localDir string, filter historyTitleFilter, episodeOffset int, isMovie bool) ([]localHistoryMedia, int, int, int, error) {
 	files := make([]localHistoryMedia, 0)
 	err := filepath.WalkDir(localDir, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -565,22 +585,32 @@ func scanLocalHistoryMedia(localDir string, filter historyTitleFilter, episodeOf
 	fetched := len(files)
 	skippedUnmatched := 0
 	skippedDuplicate := 0
-	candidates := make([]localHistoryMedia, 0, len(files))
-	seen := make(map[episodeIdentity]struct{}, len(files))
+	filteredFiles := make([]localHistoryMedia, 0, len(files))
 	for _, file := range files {
 		if !filter.Match(file.FileName) {
 			skippedUnmatched++
 			continue
 		}
-		title := strings.TrimSuffix(file.FileName, filepath.Ext(file.FileName))
-		identity, ok := historyEpisodeIdentity(title)
-		if !ok {
-			skippedUnmatched++
-			continue
-		}
-		if normalizeEpisodeType(identity.EpisodeType) == "episode" && episodeOffset != 0 {
-			if adjusted, ok := offsetEpisodeNumber(identity.EpisodeNumber, episodeOffset); ok {
-				identity.EpisodeNumber = adjusted
+		filteredFiles = append(filteredFiles, file)
+	}
+
+	candidates := make([]localHistoryMedia, 0, len(filteredFiles))
+	seen := make(map[episodeIdentity]struct{}, len(filteredFiles))
+	singleMovieFile := isMovie && len(filteredFiles) == 1
+	for _, file := range filteredFiles {
+		identity := singleMovieEpisodeIdentity()
+		if !singleMovieFile {
+			title := strings.TrimSuffix(file.FileName, filepath.Ext(file.FileName))
+			var ok bool
+			identity, ok = historyEpisodeIdentity(title)
+			if !ok {
+				skippedUnmatched++
+				continue
+			}
+			if normalizeEpisodeType(identity.EpisodeType) == "episode" && episodeOffset != 0 {
+				if adjusted, ok := offsetEpisodeNumber(identity.EpisodeNumber, episodeOffset); ok {
+					identity.EpisodeNumber = adjusted
+				}
 			}
 		}
 		identityKey := episodeIdentityKey(identity)
@@ -1126,6 +1156,29 @@ WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(&name, &nameCN)
 		return nameCN, nil
 	}
 	return name, nil
+}
+
+func animeIsMovieByDB(ctx context.Context, db database.Executor, bangumiID int64) (bool, error) {
+	var animeType string
+	err := db.QueryRowContext(ctx, `
+SELECT COALESCE(NULLIF(anime_type, ''), 'series')
+FROM anime_metadata
+WHERE bangumi_id = ? AND deleted_at IS NULL`, bangumiID).Scan(&animeType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrInvalidBinding
+	}
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(strings.TrimSpace(animeType), animeTypeMovie), nil
+}
+
+func singleMovieEpisodeIdentity() episodeIdentity {
+	return episodeIdentity{
+		SeasonNumber:  1,
+		EpisodeType:   "episode",
+		EpisodeNumber: "01",
+	}
 }
 
 func episodeIdentityFromBinding(input EpisodeBindingIdentity) episodeIdentity {

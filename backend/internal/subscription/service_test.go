@@ -226,6 +226,81 @@ WHERE item_key = 'ep01' AND binding_status = 'bound'`,
 	assertItemMissing(t, ctx, db, "credit")
 }
 
+func TestSyncHistoryMovieSingleRSSItemWithoutEpisodeUsesEpisodeOne(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	insertAnime(t, ctx, db, 1001, now)
+	setAnimeType(t, ctx, db, 1001, animeTypeMovie)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<item><guid isPermaLink="false">movie</guid><title>[字幕组] 原作标题 剧场版 [HEVC]</title><link>https://mikanani.me/Home/Episode/movie</link><enclosure type="application/x-bittorrent" length="100" url="https://mikanani.me/Download/movie.torrent"/></item>
+</channel></rss>`)
+	}))
+	t.Cleanup(server.Close)
+
+	service := NewService(db, testSettingsProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.now = func() time.Time { return now }
+	result, err := service.SyncHistory(ctx, 1001, HistorySyncOptions{RSSURL: server.URL + "/rss.xml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Fetched != 1 || result.Inserted != 1 || result.Bound != 1 || result.SkippedUnmatched != 0 {
+		t.Fatalf("unexpected movie RSS sync result: %+v", result)
+	}
+
+	var seasonNumber int
+	var episodeType, episodeNumber string
+	if err := db.QueryRowContext(ctx, `
+SELECT bound_season_number, bound_episode_type, bound_episode_number
+FROM subscription_items
+WHERE item_key = 'movie' AND binding_status = ?`, BindingStatusBound,
+	).Scan(&seasonNumber, &episodeType, &episodeNumber); err != nil {
+		t.Fatal(err)
+	}
+	if seasonNumber != 1 || episodeType != "episode" || episodeNumber != "01" {
+		t.Fatalf("unexpected movie episode identity: season=%d type=%q episode=%q", seasonNumber, episodeType, episodeNumber)
+	}
+}
+
+func TestSyncHistorySeriesSingleRSSItemWithoutEpisodeRemainsUnmatched(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	insertAnime(t, ctx, db, 1001, now)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<item><guid isPermaLink="false">series</guid><title>[字幕组] 原作标题 [HEVC]</title><link>https://mikanani.me/Home/Episode/series</link></item>
+</channel></rss>`)
+	}))
+	t.Cleanup(server.Close)
+
+	service := NewService(db, testSettingsProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	result, err := service.SyncHistory(ctx, 1001, HistorySyncOptions{RSSURL: server.URL + "/rss.xml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Bound != 0 || result.SkippedUnmatched != 1 {
+		t.Fatalf("series should keep requiring an episode index: %+v", result)
+	}
+	assertItemMissing(t, ctx, db, "series")
+}
+
 func TestSyncHistoryLocalMediaQueuesRecognizedFiles(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
@@ -342,6 +417,76 @@ ORDER BY si.bound_episode_number`, 1001)
 	}
 }
 
+func TestSyncHistoryLocalMovieSingleFileWithoutEpisodeUsesEpisodeOne(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Unix(1_700_000_000, 0)
+	insertAnime(t, ctx, db, 1001, now)
+	setAnimeType(t, ctx, db, 1001, animeTypeMovie)
+	setAnimeEpisodeOffset(t, ctx, db, 1001, 12)
+	localDir := filepath.Join(t.TempDir(), "movie")
+	if err := os.MkdirAll(localDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	moviePath := filepath.Join(localDir, "原作标题 剧场版.mkv")
+	if err := os.WriteFile(moviePath, []byte("movie"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewService(db, testSettingsProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.now = func() time.Time { return now }
+	result, err := service.SyncHistory(ctx, 1001, HistorySyncOptions{
+		Mode:     HistorySyncModeLocal,
+		LocalDir: localDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Fetched != 1 || result.Inserted != 1 || result.Bound != 1 || result.Queued != 1 || result.SkippedUnmatched != 0 {
+		t.Fatalf("unexpected local movie sync result: %+v", result)
+	}
+
+	var episodeNumber, savePath, sourceType, downloadStatus, mediaStatus string
+	if err := db.QueryRowContext(ctx, `
+SELECT si.bound_episode_number, dj.save_path, dj.source_type, dj.status, mj.status
+FROM subscription_items si
+JOIN download_jobs dj ON dj.subscription_item_id = si.id
+JOIN media_jobs mj ON mj.download_job_id = dj.id
+WHERE si.bound_bangumi_id = ?`, 1001,
+	).Scan(&episodeNumber, &savePath, &sourceType, &downloadStatus, &mediaStatus); err != nil {
+		t.Fatal(err)
+	}
+	if episodeNumber != "01" || savePath != moviePath || sourceType != "local" || downloadStatus != "completed" || mediaStatus != "pending" {
+		t.Fatalf("unexpected queued movie: episode=%q path=%q source=%q download=%q media=%q",
+			episodeNumber, savePath, sourceType, downloadStatus, mediaStatus)
+	}
+}
+
+func TestScanLocalHistoryMovieMultipleFilesStillRequiresEpisodeIndexes(t *testing.T) {
+	localDir := t.TempDir()
+	for _, name := range []string{"原作标题 剧场版 Part A.mkv", "原作标题 剧场版 Part B.mp4"} {
+		if err := os.WriteFile(filepath.Join(localDir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	candidates, fetched, skippedUnmatched, skippedDuplicate, err := scanLocalHistoryMedia(
+		localDir, historyTitleFilter{}, 0, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 0 || fetched != 2 || skippedUnmatched != 2 || skippedDuplicate != 0 {
+		t.Fatalf("multiple movie files should keep the original parsing rules: candidates=%d fetched=%d unmatched=%d duplicate=%d",
+			len(candidates), fetched, skippedUnmatched, skippedDuplicate)
+	}
+}
+
 func TestSyncHistoryLocalMediaRequiresAbsoluteDirectory(t *testing.T) {
 	service := NewService(nil, testSettingsProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	_, err := service.SyncHistory(context.Background(), 1001, HistorySyncOptions{
@@ -415,6 +560,16 @@ func insertAnime(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64,
 INSERT INTO anime_metadata(bangumi_id, url, name, name_cn, created_at)
 VALUES (?, ?, ?, ?, ?)`, bangumiID, "https://bgm.tv/subject/1001", "Original Anime", "原作标题", now.Unix())
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setAnimeType(t *testing.T, ctx context.Context, db *sql.DB, bangumiID int64, animeType string) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `
+UPDATE anime_metadata
+SET anime_type = ?, anime_type_manual = 1
+WHERE bangumi_id = ?`, animeType, bangumiID); err != nil {
 		t.Fatal(err)
 	}
 }
