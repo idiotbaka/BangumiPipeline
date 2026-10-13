@@ -8,17 +8,19 @@ import {
   type ViewerScheduleCard,
 } from '../api'
 import ParticleField from './ParticleField.vue'
+import { libraryTypeOptions, toggleLibraryType, type LibraryAnimeType } from '../../../../shared/animeLibrary'
 
 interface Props {
   initialQuery: string
   searchKey: number
-  animeType: 'series' | 'movie'
+  animeType: LibraryAnimeType
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{ (event: 'open-anime', bangumiId: number): void }>()
 const dimensions = ref<ViewerFilterDimension[]>([])
 const selectedFilters = ref<Record<number, string[]>>({})
+const selectedType = ref<LibraryAnimeType>(props.animeType)
 const searchDraft = ref(props.initialQuery)
 const appliedQuery = ref(props.initialQuery.trim())
 const library = ref<ViewerLibrary>({ items: [], total: 0 })
@@ -30,10 +32,10 @@ const failedCovers = ref<Set<number>>(new Set())
 const currentPage = ref(1)
 let requestID = 0
 const libraryPageSize = 16
-const isMovieLibrary = computed(() => props.animeType === 'movie')
+const isMovieLibrary = computed(() => selectedType.value === 'movie')
 
 const selectedTagCount = computed(() =>
-  Object.values(selectedFilters.value).reduce((total, tags) => total + tags.length, 0),
+  Object.values(selectedFilters.value).reduce((total, tags) => total + tags.length, 0) + (selectedType.value === 'all' ? 0 : 1),
 )
 const totalPages = computed(() => Math.max(1, Math.ceil(library.value.total / libraryPageSize)))
 const visiblePages = computed<(number | 'ellipsis')[]>(() => {
@@ -55,22 +57,13 @@ onMounted(async () => {
 })
 
 watch(
-  () => props.searchKey,
-  () => {
-    const query = props.initialQuery.trim()
-    searchDraft.value = props.initialQuery
-    appliedQuery.value = query
-    currentPage.value = 1
-    void loadLibrary()
-  },
-)
-
-watch(
-  () => props.animeType,
-  () => {
+  () => [props.searchKey, props.animeType] as const,
+  ([searchKey], [previousSearchKey]) => {
+    const globalSearch = searchKey !== previousSearchKey
+    selectedType.value = globalSearch ? 'all' : props.animeType
     selectedFilters.value = {}
-    searchDraft.value = ''
-    appliedQuery.value = ''
+    searchDraft.value = globalSearch ? props.initialQuery : ''
+    appliedQuery.value = searchDraft.value.trim()
     currentPage.value = 1
     void loadLibrary()
   },
@@ -99,7 +92,7 @@ async function loadLibrary() {
       selectedFilters.value,
       currentPage.value,
       libraryPageSize,
-      props.animeType,
+      selectedType.value,
     )
     if (currentRequest === requestID) {
       const lastPage = Math.max(1, Math.ceil(result.library.total / libraryPageSize))
@@ -140,6 +133,13 @@ function toggleTag(dimensionID: number, tag: string) {
 function resetFilters() {
   if (selectedTagCount.value === 0) return
   selectedFilters.value = {}
+  selectedType.value = 'all'
+  currentPage.value = 1
+  void loadLibrary()
+}
+
+function selectType(value: 'series' | 'movie') {
+  selectedType.value = toggleLibraryType(selectedType.value, value)
   currentPage.value = 1
   void loadLibrary()
 }
@@ -232,6 +232,24 @@ function stagger(index: number) {
           </button>
         </div>
 
+        <div class="filter-dimensions">
+          <div class="filter-row">
+            <div class="dimension-name"><span>01</span><strong>类型</strong></div>
+            <div class="filter-tags">
+              <button
+                v-for="option in libraryTypeOptions"
+                :key="option.value"
+                type="button"
+                :class="{ active: selectedType === option.value }"
+                :aria-pressed="selectedType === option.value"
+                :disabled="loading"
+                @click="selectType(option.value)"
+              >
+                <i aria-hidden="true" />{{ option.label }}
+              </button>
+            </div>
+          </div>
+        </div>
         <div v-if="filtersLoading" class="filter-loading">正在读取筛选配置...</div>
         <div v-else-if="filtersError" class="filter-error">
           <span>{{ filtersError }}</span>
@@ -241,7 +259,7 @@ function stagger(index: number) {
         <div v-else class="filter-dimensions">
           <div v-for="(dimension, index) in dimensions" :key="dimension.id" class="filter-row">
             <div class="dimension-name">
-              <span>{{ String(index + 1).padStart(2, '0') }}</span>
+              <span>{{ String(index + 2).padStart(2, '0') }}</span>
               <strong>{{ dimension.name }}</strong>
             </div>
             <div class="filter-tags">
@@ -309,7 +327,7 @@ function stagger(index: number) {
             @keydown.enter="emit('open-anime', item.bangumiId)"
           >
             <div class="card-cover">
-              <span v-if="!isMovieLibrary && item.isCompleted" class="completed-tag">完结</span>
+              <span v-if="item.animeType !== 'movie' && item.isCompleted" class="completed-tag">完结</span>
               <img
                 v-if="hasCover(item)"
                 :src="coverURL(item)"
@@ -318,8 +336,8 @@ function stagger(index: number) {
                 @error="markCoverFailed(item)"
               />
               <div v-else class="cover-fallback"><span>{{ item.title.slice(0, 2) }}</span></div>
-              <span v-if="!isMovieLibrary" class="episode-total">{{ totalEpisodesText(item.totalEpisodes) }}</span>
-              <div v-if="!isMovieLibrary" class="progress-shade">
+              <span class="episode-total">{{ item.animeType === 'movie' ? '动画电影' : totalEpisodesText(item.totalEpisodes) }}</span>
+              <div v-if="item.animeType !== 'movie'" class="progress-shade">
                 <i aria-hidden="true" />
                 <span>{{ progressText(item) }}</span>
               </div>

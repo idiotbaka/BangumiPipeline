@@ -535,7 +535,7 @@ function isMainView(value: unknown): value is MainView {
       :key="activeView"
       :initial-query="activeView === 'library' ? libraryQuery : ''"
       :search-key="librarySearchKey"
-      :anime-type="activeView === 'movies' ? 'movie' : 'series'"
+      :anime-type="activeView === 'movies' ? 'movie' : 'all'"
       @open-anime="openAnime"
     />
     <HistoryScreen v-else-if="activeView === 'history'" @open-history="openHistoryItem" />

@@ -28,12 +28,21 @@ func (c *Catalog) ViewerMovieLibraryPage(ctx context.Context, query string, filt
 	return c.viewerLibraryPage(ctx, query, filterGroups, page, pageSize, AnimeTypeMovie)
 }
 
+// ViewerLibraryPageByType also accepts "all" to search both series and movies.
+func (c *Catalog) ViewerLibraryPageByType(ctx context.Context, query string, filterGroups [][]string, page, pageSize int, animeType string) (ViewerLibrary, error) {
+	return c.viewerLibraryPage(ctx, query, filterGroups, page, pageSize, animeType)
+}
+
 func (c *Catalog) viewerLibraryPage(ctx context.Context, query string, filterGroups [][]string, page, pageSize int, animeType string) (ViewerLibrary, error) {
-	if !IsValidAnimeType(animeType) {
+	if animeType != "all" && !IsValidAnimeType(animeType) {
 		return ViewerLibrary{}, ErrInvalidAnimeType
 	}
-	where := []string{"am.deleted_at IS NULL", "am.anime_type = ?"}
-	args := []any{animeType}
+	where := []string{"am.deleted_at IS NULL"}
+	args := []any{}
+	if animeType != "all" {
+		where = append(where, "am.anime_type = ?")
+		args = append(args, animeType)
+	}
 	query = strings.TrimSpace(query)
 	if query != "" {
 		like := "%" + query + "%"

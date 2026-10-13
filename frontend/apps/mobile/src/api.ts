@@ -1,4 +1,5 @@
 import { normalizeAPIBaseURL } from './config'
+import type { LibraryAnimeType } from '../../../shared/animeLibrary'
 
 export interface ViewerUser {
   id: number
@@ -50,6 +51,7 @@ export interface AppRelease {
 
 export interface ViewerAnimeCard {
   bangumiId: number
+  animeType: 'series' | 'movie'
   name: string
   nameCN: string
   title: string
@@ -67,6 +69,7 @@ export interface ViewerAnimeCard {
 export interface ViewerHome {
   hotRecommendations: ViewerAnimeCard[]
   recentUpdates: ViewerAnimeCard[]
+  animeMovies: ViewerAnimeCard[]
   carouselSlides: unknown[]
   myFollows: ViewerFollowedAnime[]
 }
@@ -77,6 +80,7 @@ export interface ViewerScheduleCard {
   airDate: string
   airWeekday: number
   animeType: 'series' | 'movie'
+  ratingScore: number | null
   totalEpisodes: number
   isCompleted: boolean
   hasCover: boolean
@@ -186,6 +190,7 @@ export interface ViewerWatchProgress {
 
 export interface ViewerWatchHistoryItem {
   bangumiId: number
+  animeType: 'series' | 'movie'
   mediaId: number
   animeTitle: string
   episodeLabel: string
@@ -383,8 +388,9 @@ export const api = {
   animeSchedule: (season: string) =>
     request<{ schedule: ViewerSchedule }>(`/api/anime-schedule?season=${encodeURIComponent(season)}`),
   libraryFilters: () => request<{ items: ViewerFilterDimension[] }>('/api/library/filters'),
-  animeLibrary: (query: string, filters: Record<number, string[]> = {}) => {
+  animeLibrary: (query: string, filters: Record<number, string[]> = {}, animeType: LibraryAnimeType = 'all') => {
     const params = new URLSearchParams()
+    params.set('anime_type', animeType)
     if (query.trim()) {
       params.set('q', query.trim())
     }

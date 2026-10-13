@@ -218,6 +218,7 @@ export interface ViewerWatchProgress {
 
 export interface ViewerWatchHistoryItem {
   bangumiId: number
+  animeType: 'series' | 'movie'
   mediaId: number
   animeTitle: string
   episodeLabel: string
@@ -367,7 +368,7 @@ export const api = {
     filters: Record<number, string[]>,
     page?: number,
     pageSize?: number,
-    animeType: 'series' | 'movie' = 'series',
+    animeType: 'all' | 'series' | 'movie' = 'all',
   ) => {
     const params = new URLSearchParams()
     if (query.trim()) params.set('q', query.trim())

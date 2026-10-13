@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { api, type ViewerWatchHistoryItem } from '../api'
 import ParticleField from './ParticleField.vue'
+import { historyProgressText, historyTotalText } from '../../../../shared/animeLibrary'
 
 const emit = defineEmits<{
   (event: 'open-history', item: ViewerWatchHistoryItem): void
@@ -54,15 +55,11 @@ function markCoverFailed(item: ViewerWatchHistoryItem) {
 }
 
 function progressText(item: ViewerWatchHistoryItem) {
-  return item.completed
-    ? `已看完 ${item.episodeLabel}`
-    : `看到 ${item.episodeLabel} ${item.progressPercent}%`
+  return historyProgressText(item)
 }
 
 function totalText(item: ViewerWatchHistoryItem) {
-  const total = item.totalEpisodes > 0 ? `全 ${item.totalEpisodes} 话` : '话数未定'
-  const latest = item.latestEpisodeLabel ? `更新至 ${item.latestEpisodeLabel}` : '更新话数未知'
-  return `${total} / ${latest}`
+  return historyTotalText(item)
 }
 
 function formatLastWatched(value: number) {
@@ -132,18 +129,18 @@ function formatLastWatched(value: number) {
             <img
               v-if="hasCover(item)"
               :src="coverURL(item)"
-              :alt="`${item.animeTitle} ${item.episodeLabel}`"
+              :alt="item.animeType === 'movie' ? item.animeTitle : `${item.animeTitle} ${item.episodeLabel}`"
               loading="lazy"
               @error="markCoverFailed(item)"
             />
-            <div v-else class="cover-fallback"><span>{{ item.episodeLabel }}</span></div>
+            <div v-else class="cover-fallback"><span>{{ item.animeType === 'movie' ? '动画电影' : item.episodeLabel }}</span></div>
             <div class="watch-overlay">
               <span>{{ progressText(item) }}</span>
               <div><i :style="{ width: `${item.progressPercent}%` }" /></div>
             </div>
           </div>
           <h3 :title="item.animeTitle">{{ item.animeTitle }}</h3>
-          <p class="episode-title" :title="item.episodeTitle || item.episodeLabel">
+          <p v-if="item.animeType !== 'movie'" class="episode-title" :title="item.episodeTitle || item.episodeLabel">
             {{ item.episodeTitle || item.episodeLabel }}
           </p>
           <div class="history-meta"><span>{{ totalText(item) }}</span><time>{{ formatLastWatched(item.lastWatchedAt) }}</time></div>

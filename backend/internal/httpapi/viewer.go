@@ -302,7 +302,7 @@ func (a *ViewerAPI) animeLibrary(w http.ResponseWriter, r *http.Request) {
 	if animeType == "" {
 		animeType = bangumi.AnimeTypeSeries
 	}
-	if !bangumi.IsValidAnimeType(animeType) {
+	if animeType != "all" && !bangumi.IsValidAnimeType(animeType) {
 		writeError(w, http.StatusBadRequest, "invalid_anime_type", "番剧类型参数无效")
 		return
 	}
@@ -334,12 +334,7 @@ func (a *ViewerAPI) animeLibrary(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, err)
 		return
 	}
-	var library bangumi.ViewerLibrary
-	if animeType == bangumi.AnimeTypeMovie {
-		library, err = a.catalog.ViewerMovieLibraryPage(r.Context(), query, groups, page, pageSize)
-	} else {
-		library, err = a.catalog.ViewerLibraryPage(r.Context(), query, groups, page, pageSize)
-	}
+	library, err := a.catalog.ViewerLibraryPageByType(r.Context(), query, groups, page, pageSize, animeType)
 	if err != nil {
 		a.internalError(w, err)
 		return

@@ -18,6 +18,7 @@ import {
 import { normalizeAPIBaseURL, parseAPIBaseURL } from '../config'
 import { isTVApp } from '../platform'
 import { scheduleTabs, scheduleTabValue } from '../../../../shared/animeSchedule'
+import { historyProgressText, libraryTypeOptions, toggleLibraryType, type LibraryAnimeType } from '../../../../shared/animeLibrary'
 import { focusTVInitial } from '../tvFocus'
 import appIcon from '../../../../../src-tauri/icons/icon.png'
 import tauriConfig from '../../../../../src-tauri/tauri.conf.json'
@@ -109,6 +110,7 @@ const serverAddressSaving = ref(false)
 const home = ref<ViewerHome>({
   hotRecommendations: [],
   recentUpdates: [],
+  animeMovies: [],
   carouselSlides: [],
   myFollows: [],
 })
@@ -131,6 +133,7 @@ const scheduleError = ref('')
 
 const libraryDimensions = ref<ViewerFilterDimension[]>([])
 const selectedLibraryFilters = ref<Record<number, string[]>>({})
+const selectedLibraryType = ref<LibraryAnimeType>('all')
 const library = ref<ViewerLibrary>({ items: [], total: 0 })
 const libraryVisibleCount = ref(libraryPageSize)
 const libraryFiltersLoading = ref(false)
@@ -204,8 +207,9 @@ const scheduleItems = computed(() =>
 const homeFollows = computed(() => home.value.myFollows.filter((item) => !item.caughtUp).slice(0, isTVApp ? 12 : 10))
 const recentItems = computed(() => home.value.recentUpdates.slice(0, isTVApp ? 12 : 9))
 const hotItems = computed(() => home.value.hotRecommendations.slice(0, isTVApp ? 12 : 9))
+const movieItems = computed(() => home.value.animeMovies)
 const selectedLibraryTagCount = computed(() =>
-  Object.values(selectedLibraryFilters.value).reduce((total, tags) => total + tags.length, 0),
+  Object.values(selectedLibraryFilters.value).reduce((total, tags) => total + tags.length, 0) + (selectedLibraryType.value === 'all' ? 0 : 1),
 )
 const visibleLibraryItems = computed(() => library.value.items.slice(0, libraryVisibleCount.value))
 const hasMoreLibraryItems = computed(() => libraryVisibleCount.value < library.value.items.length)
@@ -798,7 +802,7 @@ async function loadLibrary() {
   libraryLoading.value = true
   libraryError.value = ''
   try {
-    const result = await api.animeLibrary('', selectedLibraryFilters.value)
+    const result = await api.animeLibrary('', selectedLibraryFilters.value, selectedLibraryType.value)
     if (currentRequest === libraryRequestID) {
       library.value = result.library
       libraryVisibleCount.value = libraryPageSize
@@ -841,6 +845,12 @@ function resetLibraryFilters() {
     return
   }
   selectedLibraryFilters.value = {}
+  selectedLibraryType.value = 'all'
+  void loadLibrary()
+}
+
+function selectLibraryType(value: 'series' | 'movie') {
+  selectedLibraryType.value = toggleLibraryType(selectedLibraryType.value, value)
   void loadLibrary()
 }
 
@@ -1302,6 +1312,10 @@ function formatAirDate(value: string) {
   return value ? value.replaceAll('-', '.') : '日期未定'
 }
 
+function formatPremiereDate(value: string) {
+  return value ? `于 ${formatAirDate(value)} 首播` : '首播日期未定'
+}
+
 function scheduleProgress(item: ViewerScheduleCard) {
   if (item.latestEpisodeLabel) {
     return `更新至 ${item.latestEpisodeLabel}`
@@ -1374,10 +1388,12 @@ function followSubtitle(item: ViewerFollowedAnime) {
 }
 
 function historyListOverlayText(item: ViewerWatchHistoryItem) {
+  if (item.animeType === 'movie') return historyProgressText(item)
   return item.episodeLabel ? `看到 ${item.episodeLabel}` : '继续观看'
 }
 
 function historyUpdateText(item: ViewerWatchHistoryItem) {
+  if (item.animeType === 'movie') return '动画电影'
   const total = item.totalEpisodes > 0 ? `全 ${item.totalEpisodes} 话` : '话数未定'
   const latest = item.latestEpisodeLabel ? `更新至 ${item.latestEpisodeLabel}` : '尚无成品'
   return `${total} / ${latest}`
@@ -1505,8 +1521,8 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             <div v-else class="poster-fallback small">{{ item.title.slice(0, 2) }}</div>
             <div>
               <p class="item-title">{{ item.title }}</p>
-              <p>{{ formatAirDate(item.airDate) }} / {{ scheduleProgress(item) }}</p>
-              <small>{{ totalEpisodesText(item.totalEpisodes) }}</small>
+              <p>{{ item.animeType === 'movie' ? formatPremiereDate(item.airDate) : `${formatAirDate(item.airDate)} / ${scheduleProgress(item)}` }}</p>
+              <small>{{ item.animeType === 'movie' ? '动画电影' : totalEpisodesText(item.totalEpisodes) }}</small>
             </div>
           </article>
         </div>
@@ -1692,10 +1708,10 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
               <img
                 v-if="imageAvailable(`history-${item.mediaId}`, item.hasCover)"
                 :src="mediaCoverURL(item)"
-                :alt="`${item.animeTitle} ${item.episodeLabel}`"
+                :alt="item.animeType === 'movie' ? item.animeTitle : `${item.animeTitle} ${item.episodeLabel}`"
                 @error="markImageFailed(`history-${item.mediaId}`)"
               />
-              <div v-else class="media-fallback">{{ item.episodeLabel }}</div>
+              <div v-else class="media-fallback">{{ item.animeType === 'movie' ? '动画电影' : item.episodeLabel }}</div>
               <span class="progress-caption">{{ historyListOverlayText(item) }}</span>
               <div class="list-progress">
                 <i :style="{ width: progressWidth(item.completed ? 100 : item.progressPercent) }" />
@@ -1703,7 +1719,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             </div>
             <div>
               <p class="item-title">{{ item.animeTitle }}</p>
-              <p>{{ item.episodeTitle || item.episodeLabel }}</p>
+              <p v-if="item.animeType !== 'movie'">{{ item.episodeTitle || item.episodeLabel }}</p>
               <small>{{ historyUpdateText(item) }}</small>
             </div>
           </article>
@@ -1804,6 +1820,51 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
               </div>
               <p class="item-title">{{ item.title }}</p>
               <p>{{ updateText(item) }}</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="content-section">
+          <div class="section-head">
+            <p class="section-title">动画电影和剧场版</p>
+          </div>
+          <div v-if="homeLoading && pullRefreshingTab !== 'home'" class="poster-grid" aria-label="正在加载动画电影和剧场版">
+            <article v-for="index in 6" :key="index" class="poster-card skeleton-card">
+              <div class="poster-cover skeleton-block" />
+              <div class="skeleton-line skeleton-block" />
+              <div class="skeleton-line short skeleton-block" />
+            </article>
+          </div>
+          <div v-else-if="homeError" class="state-card error">{{ homeError }}</div>
+          <div v-else-if="movieItems.length === 0" class="state-card">暂无动画电影或剧场版</div>
+          <div v-else class="poster-grid">
+            <article
+              v-for="item in movieItems"
+              :key="item.bangumiId"
+              class="poster-card"
+              role="button"
+              tabindex="0"
+              data-anime-card="true"
+              :data-anime-id="item.bangumiId"
+              :data-anime-title="item.title"
+              :aria-label="`${item.title}，按住可查看番剧信息与追番操作`"
+              @click="openAnimeCard(item.bangumiId)"
+              @keydown.enter.prevent="openAnimeDetail(item.bangumiId)"
+              @keydown.space.prevent="openAnimeDetail(item.bangumiId)"
+            >
+              <div class="poster-cover">
+                <img
+                  v-if="imageAvailable(`movie-${item.bangumiId}`, item.hasCover)"
+                  :src="animeCoverURL(item.bangumiId)"
+                  :alt="item.title"
+                  loading="lazy"
+                  @error="markImageFailed(`movie-${item.bangumiId}`)"
+                />
+                <div v-else class="poster-fallback">{{ item.title.slice(0, 2) }}</div>
+                <span class="score-overlay">{{ ratingText(item.ratingScore) }}</span>
+              </div>
+              <p class="item-title">{{ item.title }}</p>
+              <p>{{ formatPremiereDate(item.airDate) }}</p>
             </article>
           </div>
         </section>
@@ -1940,6 +2001,24 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             </button>
           </div>
 
+          <div class="library-filter-list">
+            <section class="library-filter-row">
+              <p class="filter-title">类型</p>
+              <div class="tag-rail">
+                <button
+                  v-for="option in libraryTypeOptions"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: selectedLibraryType === option.value }"
+                  :aria-pressed="selectedLibraryType === option.value"
+                  :disabled="libraryLoading"
+                  @click="selectLibraryType(option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </section>
+          </div>
           <div v-if="libraryFiltersLoading && pullRefreshingTab !== 'library'" class="library-filter-list skeleton-filter-list" aria-label="正在加载筛选标签">
             <section v-for="index in 3" :key="index" class="library-filter-row">
               <div class="skeleton-filter-title skeleton-block" />
@@ -2014,10 +2093,11 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
                   />
                   <div v-else class="poster-fallback">{{ item.title.slice(0, 2) }}</div>
                   <div class="card-top-tags">
-                    <span class="card-top-tag">{{ totalEpisodesText(item.totalEpisodes) }}</span>
-                    <span v-if="item.isCompleted" class="card-top-tag">完结</span>
+                    <span class="card-top-tag">{{ item.animeType === 'movie' ? '动画电影' : totalEpisodesText(item.totalEpisodes) }}</span>
+                    <span v-if="item.animeType !== 'movie' && item.isCompleted" class="card-top-tag">完结</span>
                   </div>
-                  <span class="library-progress">{{ scheduleProgress(item) }}</span>
+                  <span v-if="item.animeType === 'movie'" class="score-overlay">{{ ratingText(item.ratingScore) }}</span>
+                  <span v-else class="library-progress">{{ scheduleProgress(item) }}</span>
                 </div>
                 <p class="item-title">{{ item.title }}</p>
                 <p>{{ formatAirDate(item.airDate) }}</p>

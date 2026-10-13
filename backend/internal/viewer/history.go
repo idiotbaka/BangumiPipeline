@@ -32,6 +32,7 @@ type WatchHistoryItem struct {
 	BangumiID          int64   `json:"bangumiId"`
 	MediaID            int64   `json:"mediaId"`
 	AnimeTitle         string  `json:"animeTitle"`
+	AnimeType          string  `json:"animeType"`
 	EpisodeLabel       string  `json:"episodeLabel"`
 	EpisodeTitle       string  `json:"episodeTitle"`
 	LatestEpisodeLabel string  `json:"latestEpisodeLabel"`
@@ -124,6 +125,7 @@ func (s *Service) WatchHistory(ctx context.Context, userID int64, limit int) ([]
 SELECT history.bangumi_id,
        history.media_job_id,
        COALESCE(NULLIF(anime.name_cn, ''), anime.name),
+       anime.anime_type,
        media.season_number,
        COALESCE(NULLIF(media.episode_type, ''), 'episode'),
        media.episode_number,
@@ -169,7 +171,7 @@ LIMIT ?`, userID, limit)
 		var season int
 		var episodeType, episodeNumber string
 		if err := rows.Scan(
-			&item.BangumiID, &item.MediaID, &item.AnimeTitle,
+			&item.BangumiID, &item.MediaID, &item.AnimeTitle, &item.AnimeType,
 			&season, &episodeType, &episodeNumber, &item.EpisodeTitle,
 			&item.TotalEpisodes, &item.PositionSeconds, &item.DurationSeconds,
 			&item.Completed, &item.HasCover, &item.LastWatchedAt,
