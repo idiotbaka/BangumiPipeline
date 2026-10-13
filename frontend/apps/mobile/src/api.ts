@@ -162,6 +162,7 @@ export interface ViewerDetailEpisode {
 
 export interface ViewerAnimeDetail {
   bangumiId: number
+  animeType: 'series' | 'movie'
   title: string
   originalTitle: string
   airDate: string

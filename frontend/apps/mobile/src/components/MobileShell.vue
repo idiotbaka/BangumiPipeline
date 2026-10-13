@@ -164,6 +164,7 @@ interface AnimeCardActionData {
 
 const animeActionItem = ref<AnimeCardActionItem | null>(null)
 const animeActionDetail = ref<ViewerAnimeDetail | null>(null)
+const animeActionCanFollow = computed(() => animeActionDetail.value?.animeType === 'series')
 const animeActionFollowed = ref<boolean | null>(null)
 const animeActionLoading = ref(false)
 const animeActionSaving = ref(false)
@@ -1216,7 +1217,7 @@ function closeAnimeActionsDirect() {
 async function toggleSelectedAnimeFollow() {
   const item = animeActionItem.value
   const followed = animeActionFollowed.value
-  if (!item || followed === null || animeActionSaving.value) return
+  if (!item || !animeActionCanFollow.value || followed === null || animeActionSaving.value) return
   const nextFollowed = !followed
   animeActionSaving.value = true
   animeActionError.value = ''
@@ -2213,8 +2214,8 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
                   {{ animeActionDetail.originalTitle }}
                 </p>
                 <div v-if="animeActionDetail" class="anime-actions-metadata">
-                  <span>{{ formatAirDate(animeActionDetail.airDate) }} · {{ animeActionWeekday(animeActionDetail.airWeekday) }}</span>
-                  <span>{{ totalEpisodesText(animeActionDetail.totalEpisodes) }}</span>
+                  <span>{{ animeActionDetail.animeType === 'movie' ? formatPremiereDate(animeActionDetail.airDate) : `${formatAirDate(animeActionDetail.airDate)} · ${animeActionWeekday(animeActionDetail.airWeekday)}` }}</span>
+                  <span>{{ animeActionDetail.animeType === 'movie' ? '动画电影' : totalEpisodesText(animeActionDetail.totalEpisodes) }}</span>
                   <span v-if="animeActionDetail.platform">{{ animeActionDetail.platform }}</span>
                   <span v-if="animeActionDetail.ratingScore !== null">评分 {{ ratingText(animeActionDetail.ratingScore) }}</span>
                 </div>
@@ -2244,8 +2245,9 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
               </button>
             </div>
 
-            <div class="anime-actions-buttons">
+            <div class="anime-actions-buttons" :class="{ 'single-action': !animeActionCanFollow }">
               <button
+                v-if="animeActionCanFollow"
                 :class="animeActionFollowed ? 'anime-action-danger' : 'anime-action-primary'"
                 type="button"
                 :disabled="animeActionLoading || animeActionSaving || animeActionFollowed === null"
@@ -2573,6 +2575,10 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
   border: 1px solid rgba(32, 40, 62, 0.07);
   border-radius: 10px;
   box-shadow: 0 6px 16px rgba(32, 40, 62, 0.05);
+}
+
+.anime-actions-buttons.single-action {
+  grid-template-columns: 1fr;
 }
 
 .anime-actions-buttons .anime-action-primary,

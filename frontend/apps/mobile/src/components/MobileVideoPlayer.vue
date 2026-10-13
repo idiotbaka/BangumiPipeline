@@ -27,9 +27,10 @@ interface Props {
   opSkip: ViewerOPSkipSegment | null
   episodes: SelectableEpisode[]
   selectedEpisodeKey: string
+  showEpisodePicker?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { showEpisodePicker: true })
 const emit = defineEmits<{
   (event: 'progress', value: { mediaId: number; positionSeconds: number; durationSeconds: number }): void
   (event: 'open-episode-sheet'): void
@@ -104,7 +105,7 @@ const boostMoveTolerance = 10
 
 const playerLoading = computed(() => Boolean(props.src) && !mediaReady.value && !errorMessage.value)
 const canControlPlayback = computed(() => Boolean(props.src) && mediaReady.value && !errorMessage.value)
-const hasEpisodes = computed(() => props.episodes.length > 0)
+const hasEpisodes = computed(() => props.showEpisodePicker && props.episodes.length > 0)
 const activeOPSkip = computed(() => normalizeOPSkip(props.opSkip))
 const progressStyle = computed(() => {
   const progress = duration.value > 0 ? (displayedTime.value / duration.value) * 100 : 0
@@ -1058,6 +1059,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
         </button>
         <span>{{ formatTime(displayedTime) }} / {{ formatTime(duration) }}</span>
         <button
+          v-if="showEpisodePicker"
           type="button"
           class="episode-picker-button"
           :class="{ active: episodePickerOpen }"
@@ -1077,7 +1079,7 @@ function normalizeOPSkip(segment: ViewerOPSkipSegment | null) {
 
     <Transition name="fullscreen-episode-picker" :duration="210">
       <div
-        v-if="nativeFullscreen && episodePickerOpen"
+        v-if="showEpisodePicker && nativeFullscreen && episodePickerOpen"
         class="fullscreen-episode-picker"
         role="presentation"
         @click.self="closeFullscreenEpisodePicker()"

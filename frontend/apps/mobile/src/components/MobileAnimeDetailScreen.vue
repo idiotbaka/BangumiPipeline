@@ -93,6 +93,8 @@ const tabTransitioning = computed(() => tabDragging.value || tabSettling.value)
 const renderInfoPanel = computed(() => detailTab.value === 'info' || tabGestureActive.value)
 const renderCommentsPanel = computed(() => detailTab.value === 'comments' || tabGestureActive.value)
 const playableEpisodes = computed(() => anime.value?.episodes.filter((episode) => episode.hasMedia) ?? [])
+const isMovie = computed(() => anime.value?.animeType === 'movie')
+const isSingleMovie = computed(() => isMovie.value && anime.value?.episodes.length === 1)
 const playerEpisodes = computed(() =>
   playableEpisodes.value.map((episode) => ({
     key: episode.key,
@@ -117,11 +119,13 @@ const playerPoster = computed(() => {
 const playerTitle = computed(() => {
   const episode = selectedEpisode.value
   if (!episode) return anime.value?.title ?? '番剧播放'
+  if (isMovie.value) return episode.title || episode.originalTitle || anime.value?.title || '动画电影'
   return `${episode.label} · ${episode.title || anime.value?.title || '番剧播放'}`
 })
 const basicFacts = computed(() => {
   const detail = anime.value
   if (!detail) return []
+  if (isMovie.value) return [formatAirDate(detail.airDate), '动画电影']
   const facts = [
     formatAirDate(detail.airDate),
     weekdays[detail.airWeekday] || '播出日未定',
@@ -134,12 +138,15 @@ const metadataItems = computed(() => {
   const detail = anime.value
   if (!detail) return []
   const items = [
-    { key: '开播日期', value: formatAirDate(detail.airDate) },
-    { key: '播出星期', value: weekdays[detail.airWeekday] || '未定' },
+    { key: isMovie.value ? '首播日期' : '开播日期', value: formatAirDate(detail.airDate) },
+    { key: '作品类型', value: isMovie.value ? '动画电影' : '多话连载' },
     { key: '播放平台', value: detail.platform || '未定' },
-    { key: '总话数', value: detail.totalEpisodes > 0 ? `${detail.totalEpisodes} 话` : '未定' },
     { key: 'Bangumi 评分', value: detail.ratingScore === null ? '暂无评分' : detail.ratingScore.toFixed(1) },
   ]
+  if (!isMovie.value) {
+    items.splice(1, 0, { key: '播出星期', value: weekdays[detail.airWeekday] || '未定' })
+    items.splice(4, 0, { key: '总话数', value: detail.totalEpisodes > 0 ? `${detail.totalEpisodes} 话` : '未定' })
+  }
   for (const entry of detail.infobox.slice(0, 14)) {
     const key = String(entry.key ?? '').trim()
     const value = formatInfoValue(entry.value)
@@ -226,7 +233,7 @@ async function loadDetail() {
 }
 
 async function toggleFollow() {
-  if (followSaving.value) return
+  if (isMovie.value || followSaving.value) return
   followSaving.value = true
   followError.value = ''
   try {
@@ -566,7 +573,7 @@ function resetTabGestureDOM() {
 }
 
 async function openEpisodeSheet() {
-  if (!anime.value?.episodes.length) return
+  if (isSingleMovie.value || !anime.value?.episodes.length) return
   episodeSheetOpen.value = true
   if (!episodeSheetHistoryPushed) {
     const currentState = window.history.state
@@ -856,6 +863,7 @@ function formatInfoValue(value: unknown): string {
           :start-time="resumePosition"
           :op-skip="selectedEpisode.opSkip"
           :episodes="playerEpisodes"
+          :show-episode-picker="!isSingleMovie"
           :selected-episode-key="selectedEpisodeKey"
           @progress="saveProgress"
           @open-episode-sheet="openEpisodeSheet"
@@ -900,7 +908,7 @@ function formatInfoValue(value: unknown): string {
           aria-controls="mobile-detail-comments-panel"
           @click="selectDetailTab('comments')"
         >
-          <span>该集吐槽</span>
+          <span>{{ isMovie ? '该剧吐槽' : '该集吐槽' }}</span>
           <em v-if="selectedCommentCount > 0">{{ selectedCommentCount }}</em>
           <i v-else-if="commentsLoading" aria-label="正在加载评论" />
         </button>
@@ -938,12 +946,27 @@ function formatInfoValue(value: unknown): string {
           :aria-hidden="detailTab !== 'info'"
           :inert="detailTab !== 'info'"
         >
-      <section class="title-section">
+      <section class="title-section" :class="{ 'movie-title-section': isMovie }">
+        <div v-if="isMovie" class="movie-cover">
+          <img
+            v-if="imageAvailable('anime-cover', anime.hasCover)"
+            :src="animeCoverURL()"
+            :alt="anime.title"
+            decoding="async"
+            @error="markImageFailed('anime-cover')"
+          />
+          <span v-else>{{ anime.title.slice(0, 2) }}</span>
+        </div>
         <div class="title-copy">
           <p class="detail-title">{{ anime.title }}</p>
           <span v-if="anime.originalTitle && anime.originalTitle !== anime.title">{{ anime.originalTitle }}</span>
+          <template v-if="isMovie">
+            <p class="movie-rating"><strong>{{ anime.ratingScore === null ? '--' : anime.ratingScore.toFixed(1) }}</strong><span>Bangumi 评分</span></p>
+            <p class="movie-premiere">{{ anime.airDate ? `于 ${formatAirDate(anime.airDate)} 首播` : '首播日期未定' }}</p>
+          </template>
         </div>
         <button
+          v-if="!isMovie"
           class="follow-button"
           :class="{ followed }"
           type="button"
@@ -953,9 +976,9 @@ function formatInfoValue(value: unknown): string {
           {{ followed ? '已追番' : '追番' }}
         </button>
       </section>
-      <p v-if="followError" class="follow-error">{{ followError }}</p>
+      <p v-if="!isMovie && followError" class="follow-error">{{ followError }}</p>
 
-      <div class="fact-row">
+      <div v-if="!isMovie" class="fact-row">
         <span v-for="fact in basicFacts" :key="fact">{{ fact }}</span>
       </div>
 
@@ -976,7 +999,7 @@ function formatInfoValue(value: unknown): string {
         />
       </section>
 
-      <section class="detail-block">
+      <section v-if="!isSingleMovie" class="detail-block">
         <div class="block-head">
           <div class="block-title">选集</div>
           <button
@@ -1135,7 +1158,7 @@ function formatInfoValue(value: unknown): string {
         >
           <header class="comments-heading">
             <div>
-              <span>{{ selectedEpisode?.label || '当前选集' }}</span>
+              <span>{{ isMovie ? '该剧吐槽' : selectedEpisode?.label || '当前选集' }}</span>
               <h2>{{ selectedEpisode?.title || selectedEpisode?.originalTitle || anime.title }}</h2>
             </div>
             <small v-if="episodeComments">共 {{ episodeComments.totalCount }} 条内容</small>
@@ -1849,6 +1872,50 @@ function formatInfoValue(value: unknown): string {
 
 .title-copy {
   min-width: 0;
+}
+
+.movie-title-section {
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.movie-cover {
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--pink-600);
+  background: linear-gradient(145deg, var(--pink-50), var(--cyan-50));
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+
+.movie-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.movie-rating {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-top: 10px;
+  color: var(--ink-400);
+  font-size: 10px;
+}
+
+.movie-rating strong {
+  color: var(--pink-600);
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.movie-premiere {
+  margin-top: 5px;
+  color: var(--ink-600);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .detail-title {
@@ -2696,6 +2763,23 @@ function formatInfoValue(value: unknown): string {
 
 .tv-detail .title-section {
   padding: 26px 18px 0;
+}
+
+.tv-detail .movie-title-section {
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.tv-detail .movie-rating {
+  font-size: 14px;
+}
+
+.tv-detail .movie-rating strong {
+  font-size: 30px;
+}
+
+.tv-detail .movie-premiere {
+  font-size: 15px;
 }
 
 .tv-detail .detail-title {
