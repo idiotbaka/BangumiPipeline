@@ -76,6 +76,7 @@ export interface ViewerScheduleCard {
   title: string
   airDate: string
   airWeekday: number
+  animeType: 'series' | 'movie'
   totalEpisodes: number
   isCompleted: boolean
   hasCover: boolean

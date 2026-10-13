@@ -17,6 +17,7 @@ import {
 } from '../api'
 import { normalizeAPIBaseURL, parseAPIBaseURL } from '../config'
 import { isTVApp } from '../platform'
+import { scheduleTabs, scheduleTabValue } from '../../../../shared/animeSchedule'
 import { focusTVInitial } from '../tvFocus'
 import appIcon from '../../../../../src-tauri/icons/icon.png'
 import tauriConfig from '../../../../../src-tauri/tauri.conf.json'
@@ -87,16 +88,7 @@ const pullRefreshMaximum = 96
 const pullRefreshMinimumDuration = 480
 const animeCardLongPressDelay = 520
 const animeCardLongPressTolerance = 12
-const weekdays = [
-  { value: 1, label: '周一' },
-  { value: 2, label: '周二' },
-  { value: 3, label: '周三' },
-  { value: 4, label: '周四' },
-  { value: 5, label: '周五' },
-  { value: 6, label: '周六' },
-  { value: 7, label: '周日' },
-  { value: 8, label: '其他' },
-]
+const weekdays = scheduleTabs
 
 const activeTab = ref<MainTab>('home')
 const routePage = ref<RoutePage>(null)
@@ -207,7 +199,7 @@ const tabScrollPositions: Record<MainTab, number> = {
 const seasonKey = computed(() => `${seasonYear.value}-${String(seasonMonth.value).padStart(2, '0')}`)
 const selectedDay = computed(() => weekdays.find((day) => day.value === selectedWeekday.value) ?? weekdays[0])
 const scheduleItems = computed(() =>
-  (schedule.value?.items ?? []).filter((item) => normalizedWeekday(item.airWeekday) === selectedWeekday.value),
+  (schedule.value?.items ?? []).filter((item) => scheduleTabValue(item) === selectedWeekday.value),
 )
 const homeFollows = computed(() => home.value.myFollows.filter((item) => !item.caughtUp).slice(0, isTVApp ? 12 : 10))
 const recentItems = computed(() => home.value.recentUpdates.slice(0, isTVApp ? 12 : 9))
@@ -1875,7 +1867,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             </div>
           </div>
 
-          <div class="weekday-scroll" role="tablist" aria-label="按星期筛选">
+          <div class="weekday-scroll" role="tablist" aria-label="按星期或类型筛选">
             <button
               v-for="day in weekdays"
               :key="day.value"
@@ -1901,7 +1893,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
           </article>
         </div>
         <div v-else-if="scheduleError" class="state-card error">{{ scheduleError }}</div>
-        <div v-else-if="scheduleItems.length === 0" class="state-card">这一天暂时没有番剧</div>
+        <div v-else-if="scheduleItems.length === 0" class="state-card">该分类暂时没有收录番剧</div>
         <div v-else class="result-list schedule-list">
           <article
             v-for="item in scheduleItems"

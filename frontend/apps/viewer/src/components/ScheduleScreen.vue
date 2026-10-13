@@ -2,20 +2,12 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { api, type ViewerSchedule, type ViewerScheduleCard } from '../api'
+import { scheduleTabs, scheduleTabValue } from '../../../../shared/animeSchedule'
 import ParticleField from './ParticleField.vue'
 
 const emit = defineEmits<{ (event: 'open-anime', bangumiId: number): void }>()
 
-const weekdays = [
-  { value: 1, label: '周一', kana: 'MON' },
-  { value: 2, label: '周二', kana: 'TUE' },
-  { value: 3, label: '周三', kana: 'WED' },
-  { value: 4, label: '周四', kana: 'THU' },
-  { value: 5, label: '周五', kana: 'FRI' },
-  { value: 6, label: '周六', kana: 'SAT' },
-  { value: 7, label: '周日', kana: 'SUN' },
-  { value: 8, label: '其他', kana: 'ETC' },
-]
+const weekdays = scheduleTabs
 
 const now = new Date()
 const initialMonth = Math.floor(now.getMonth() / 3) * 3 + 1
@@ -46,13 +38,9 @@ onBeforeUnmount(() => {
   if (relativeTimeTimer !== null) clearInterval(relativeTimeTimer)
 })
 
-function normalizedWeekday(value: number) {
-  return value >= 1 && value <= 7 ? value : 8
-}
-
 function itemsForDay(weekday: number) {
   return (schedule.value?.items ?? [])
-    .filter((item) => normalizedWeekday(item.airWeekday) === weekday)
+    .filter((item) => scheduleTabValue(item) === weekday)
     .sort((left, right) => Number(isUnavailable(left)) - Number(isUnavailable(right)))
 }
 
@@ -184,7 +172,7 @@ function stagger(index: number) {
         </div>
       </header>
 
-      <nav class="weekday-tabs" aria-label="按星期筛选" role="tablist">
+      <nav class="weekday-tabs" aria-label="按星期或类型筛选" role="tablist">
         <button
           v-for="day in weekdays"
           :key="day.value"
@@ -205,7 +193,7 @@ function stagger(index: number) {
         <div>
           <span class="day-index">{{ String(selectedDay.value).padStart(2, '0') }}</span>
           <p>{{ selectedDay.kana }} LINEUP</p>
-          <h2>{{ selectedDay.label }}放送</h2>
+          <h2>{{ selectedDay.label }}{{ selectedDay.value <= 7 ? '放送' : '' }}</h2>
         </div>
         <span class="lineup-count">共 {{ selectedItems.length }} 部</span>
       </div>
@@ -342,7 +330,7 @@ function stagger(index: number) {
 
 .weekday-tabs {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr)) repeat(2, minmax(0, 1.5fr));
   gap: 7px;
   margin-top: 28px;
   padding: 7px;
