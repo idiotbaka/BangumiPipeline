@@ -18,7 +18,7 @@ import {
 import { normalizeAPIBaseURL, parseAPIBaseURL } from '../config'
 import { isTVApp } from '../platform'
 import { scheduleTabs, scheduleTabValue } from '../../../../shared/animeSchedule'
-import { historyProgressText, libraryTypeOptions, toggleLibraryType, type LibraryAnimeType } from '../../../../shared/animeLibrary'
+import { historyProgressText, historyTotalText, libraryTypeOptions, toggleLibraryType, type LibraryAnimeType } from '../../../../shared/animeLibrary'
 import { focusTVInitial } from '../tvFocus'
 import appIcon from '../../../../../src-tauri/icons/icon.png'
 import tauriConfig from '../../../../../src-tauri/tauri.conf.json'
@@ -1393,7 +1393,7 @@ function historyListOverlayText(item: ViewerWatchHistoryItem) {
 }
 
 function historyUpdateText(item: ViewerWatchHistoryItem) {
-  if (item.animeType === 'movie') return '动画电影'
+  if (item.animeType === 'movie') return historyTotalText(item)
   const total = item.totalEpisodes > 0 ? `全 ${item.totalEpisodes} 话` : '话数未定'
   const latest = item.latestEpisodeLabel ? `更新至 ${item.latestEpisodeLabel}` : '尚无成品'
   return `${total} / ${latest}`
@@ -1719,7 +1719,7 @@ function historyUpdateText(item: ViewerWatchHistoryItem) {
             </div>
             <div>
               <p class="item-title">{{ item.animeTitle }}</p>
-              <p v-if="item.animeType !== 'movie'">{{ item.episodeTitle || item.episodeLabel }}</p>
+              <p>{{ item.animeType === 'movie' ? '动画电影' : item.episodeTitle || item.episodeLabel }}</p>
               <small>{{ historyUpdateText(item) }}</small>
             </div>
           </article>

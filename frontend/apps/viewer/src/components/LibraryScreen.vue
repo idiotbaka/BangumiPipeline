@@ -249,32 +249,32 @@ function stagger(index: number) {
               </button>
             </div>
           </div>
-        </div>
-        <div v-if="filtersLoading" class="filter-loading">正在读取筛选配置...</div>
-        <div v-else-if="filtersError" class="filter-error">
-          <span>{{ filtersError }}</span>
-          <button type="button" @click="loadFilters">重试</button>
-        </div>
-        <div v-else-if="dimensions.length === 0" class="filter-empty">管理员尚未配置筛选维度</div>
-        <div v-else class="filter-dimensions">
-          <div v-for="(dimension, index) in dimensions" :key="dimension.id" class="filter-row">
-            <div class="dimension-name">
-              <span>{{ String(index + 2).padStart(2, '0') }}</span>
-              <strong>{{ dimension.name }}</strong>
-            </div>
-            <div class="filter-tags">
-              <button
-                v-for="tag in dimension.tags"
-                :key="tag"
-                type="button"
-                :class="{ active: isSelected(dimension.id, tag) }"
-                :disabled="loading"
-                @click="toggleTag(dimension.id, tag)"
-              >
-                <i aria-hidden="true" />{{ tag }}
-              </button>
-            </div>
+          <div v-if="filtersLoading" class="filter-loading">正在读取筛选配置...</div>
+          <div v-else-if="filtersError" class="filter-error">
+            <span>{{ filtersError }}</span>
+            <button type="button" @click="loadFilters">重试</button>
           </div>
+          <div v-else-if="dimensions.length === 0" class="filter-empty">管理员尚未配置筛选维度</div>
+          <template v-else>
+            <div v-for="(dimension, index) in dimensions" :key="dimension.id" class="filter-row">
+              <div class="dimension-name">
+                <span>{{ String(index + 2).padStart(2, '0') }}</span>
+                <strong>{{ dimension.name }}</strong>
+              </div>
+              <div class="filter-tags">
+                <button
+                  v-for="tag in dimension.tags"
+                  :key="tag"
+                  type="button"
+                  :class="{ active: isSelected(dimension.id, tag) }"
+                  :disabled="loading"
+                  @click="toggleTag(dimension.id, tag)"
+                >
+                  <i aria-hidden="true" />{{ tag }}
+                </button>
+              </div>
+            </div>
+          </template>
         </div>
       </section>
 

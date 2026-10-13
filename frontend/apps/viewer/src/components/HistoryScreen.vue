@@ -140,8 +140,8 @@ function formatLastWatched(value: number) {
             </div>
           </div>
           <h3 :title="item.animeTitle">{{ item.animeTitle }}</h3>
-          <p v-if="item.animeType !== 'movie'" class="episode-title" :title="item.episodeTitle || item.episodeLabel">
-            {{ item.episodeTitle || item.episodeLabel }}
+          <p class="episode-title" :title="item.animeType === 'movie' ? '动画电影' : item.episodeTitle || item.episodeLabel">
+            {{ item.animeType === 'movie' ? '动画电影' : item.episodeTitle || item.episodeLabel }}
           </p>
           <div class="history-meta"><span>{{ totalText(item) }}</span><time>{{ formatLastWatched(item.lastWatchedAt) }}</time></div>
         </article>

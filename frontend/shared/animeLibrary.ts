@@ -12,6 +12,7 @@ export function toggleLibraryType(current: LibraryAnimeType, selected: 'series' 
 
 interface HistoryItem {
   animeType: 'series' | 'movie'
+  airDate: string
   completed: boolean
   episodeLabel: string
   progressPercent: number
@@ -25,7 +26,7 @@ export function historyProgressText(item: HistoryItem): string {
 }
 
 export function historyTotalText(item: HistoryItem): string {
-  if (item.animeType === 'movie') return '动画电影'
+  if (item.animeType === 'movie') return item.airDate ? `于 ${item.airDate.replaceAll('-', '.')} 首播` : '首播日期未定'
   const total = item.totalEpisodes > 0 ? `全 ${item.totalEpisodes} 话` : '话数未定'
   const latest = item.latestEpisodeLabel ? `更新至 ${item.latestEpisodeLabel}` : '更新话数未知'
   return `${total} / ${latest}`

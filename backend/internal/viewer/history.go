@@ -33,6 +33,7 @@ type WatchHistoryItem struct {
 	MediaID            int64   `json:"mediaId"`
 	AnimeTitle         string  `json:"animeTitle"`
 	AnimeType          string  `json:"animeType"`
+	AirDate            string  `json:"airDate"`
 	EpisodeLabel       string  `json:"episodeLabel"`
 	EpisodeTitle       string  `json:"episodeTitle"`
 	LatestEpisodeLabel string  `json:"latestEpisodeLabel"`
@@ -126,6 +127,7 @@ SELECT history.bangumi_id,
        history.media_job_id,
        COALESCE(NULLIF(anime.name_cn, ''), anime.name),
        anime.anime_type,
+       anime.air_date,
        media.season_number,
        COALESCE(NULLIF(media.episode_type, ''), 'episode'),
        media.episode_number,
@@ -171,7 +173,7 @@ LIMIT ?`, userID, limit)
 		var season int
 		var episodeType, episodeNumber string
 		if err := rows.Scan(
-			&item.BangumiID, &item.MediaID, &item.AnimeTitle, &item.AnimeType,
+			&item.BangumiID, &item.MediaID, &item.AnimeTitle, &item.AnimeType, &item.AirDate,
 			&season, &episodeType, &episodeNumber, &item.EpisodeTitle,
 			&item.TotalEpisodes, &item.PositionSeconds, &item.DurationSeconds,
 			&item.Completed, &item.HasCover, &item.LastWatchedAt,

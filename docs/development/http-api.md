@@ -57,4 +57,4 @@
 Viewer 契约变更同时检查 Web 和 APP 的 `src/api.ts`；调用端分别见 [viewer.md](viewer.md)、[mobile.md](mobile.md)。
 
 - `GET /api/library` 的 `anime_type` 可为 `all`、`series`、`movie`，未传时默认 `series` 保持旧客户端兼容；`all` 仍应用标题/别名搜索、标签组合、软删除过滤、排序与分页。
-- `GET /api/watch-history` 每项包含 `animeType`，供客户端区分电影与连载文案；播放进度和媒体标识保持原契约。
+- `GET /api/watch-history` 每项包含 `animeType` 和首播日期 `airDate`，供客户端区分电影与连载文案、显示电影首播日期；播放进度和媒体标识保持原契约。

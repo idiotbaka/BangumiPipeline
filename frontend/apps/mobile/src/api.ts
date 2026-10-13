@@ -191,6 +191,7 @@ export interface ViewerWatchProgress {
 export interface ViewerWatchHistoryItem {
   bangumiId: number
   animeType: 'series' | 'movie'
+  airDate: string
   mediaId: number
   animeTitle: string
   episodeLabel: string
