@@ -346,6 +346,7 @@ function formatInfoValue(value: unknown): string {
         </div>
         <div class="heading-meta">
           <button
+            v-if="anime.animeType !== 'movie'"
             class="follow-button"
             :class="{ followed }"
             type="button"
@@ -354,7 +355,7 @@ function formatInfoValue(value: unknown): string {
           >
             <i aria-hidden="true" />{{ followed ? '已追番' : '追番' }}
           </button>
-          <small v-if="followError" class="follow-error">{{ followError }}</small>
+          <small v-if="anime.animeType !== 'movie' && followError" class="follow-error">{{ followError }}</small>
           <div class="heading-facts">
             <span>{{ formatAirDate(anime.airDate) }}</span>
             <i />
