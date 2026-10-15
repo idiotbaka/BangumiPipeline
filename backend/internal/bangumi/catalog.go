@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"bangumipipeline.local/server/internal/database"
+	"bangumipipeline.local/server/internal/imageutil"
 )
 
 var (
@@ -914,6 +915,17 @@ func normalizeEpisodeNumber(value string) string {
 
 func (c *Catalog) AnimeImagePath(ctx context.Context, bangumiID int64) (string, error) {
 	return c.imagePath(ctx, "SELECT image_local_path FROM anime_metadata WHERE bangumi_id = ? AND deleted_at IS NULL", bangumiID)
+}
+
+func (c *Catalog) ViewerAnimeImagePath(ctx context.Context, bangumiID int64) (string, error) {
+	original, err := c.AnimeImagePath(ctx, bangumiID)
+	if err != nil {
+		return "", err
+	}
+	if imageutil.ViewerCoverCurrent(original) {
+		return imageutil.ViewerCoverPath(original), nil
+	}
+	return original, nil
 }
 
 func (c *Catalog) CharacterImagePath(ctx context.Context, bangumiID, characterID int64) (string, error) {

@@ -5,6 +5,8 @@
 
 观看端使用 Vue 3、TypeScript，当前不适配移动端，页面最小宽度按 1200px 设计。
 
+番剧竖版封面沿用 Viewer `/api/anime/{bangumiID}/cover`，由后端优先提供 560px、至多 80,000 字节的 WebP 副本；缺失时回退原图，前端无需自行拼接格式后缀。APP 共用此接口，生成与存量补齐规则见 [bangumi.md](bangumi.md)。
+
 关键文件：
 
 - `frontend/apps/viewer/src/App.vue`：观看端入口、登录/注册门禁、站点设置应用和登录后首页壳。

@@ -413,7 +413,7 @@ func (a *ViewerAPI) animeCover(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a.serveCatalogImage(w, r, func() (string, error) { return a.catalog.AnimeImagePath(r.Context(), id) })
+	a.serveCatalogImage(w, r, func() (string, error) { return a.catalog.ViewerAnimeImagePath(r.Context(), id) })
 }
 
 func (a *ViewerAPI) animeDetail(w http.ResponseWriter, r *http.Request) {

@@ -44,6 +44,7 @@
 - 视频由 `http.ServeFile` 提供 Range 播放；图片/视频接口返回内容，不在 JSON 中返回服务器路径。
 - 评论用有效媒体在服务端映射 Bangumi episode ID，不允许客户端直接枚举上游剧集。
 - 表情、评论头像、角色和声优图片通过各自受控 ID 接口读取。
+- Viewer `GET /api/anime/{bangumiID}/cover` 优先返回有效且不早于原图的 `.viewer.webp` 副本（`image/webp`）；缺失、失效或转换失败时回退原图。接口 URL、Viewer 鉴权与私有缓存策略不变，Web/已发布 APP 共用副本，管理端仍读取原图。请求中不触发转码。
 - 进度写入由后端校验播放阈值和完播状态，规则见 [viewer.md](viewer.md)。
 
 | 功能 | 入口 |

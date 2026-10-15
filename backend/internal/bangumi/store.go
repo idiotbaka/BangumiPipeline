@@ -164,7 +164,8 @@ func listRetryableAnimeImages(ctx context.Context, db database.Executor) ([]pend
 	rows, err := db.QueryContext(ctx, `
 SELECT bangumi_id, image_large_url
 FROM anime_metadata
-WHERE deleted_at IS NULL AND image_large_url != '' AND image_status IN ('pending', 'failed')
+WHERE deleted_at IS NULL AND image_large_url != ''
+  AND (image_status IN ('pending', 'failed') OR (image_status = 'downloaded' AND image_error != ''))
 ORDER BY bangumi_id`)
 	if err != nil {
 		return nil, err

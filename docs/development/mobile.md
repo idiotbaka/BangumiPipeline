@@ -41,6 +41,7 @@
 - 移动端登录、注册、用户信息、首页、时间表、图书馆、详情、媒体、追番和历史都复用 Viewer API。
 - 移动端认证使用 Viewer token，不使用管理端 Session，不使用客户端传入用户 ID。
 - 受控媒体 URL 必须通过 `buildAuthenticatedMediaURL` 追加移动端 token；不得返回或暴露服务器本地路径。
+- 番剧竖版封面保持现有 Viewer URL，由后端提供与 Web 共用的 560px WebP 副本（至多 80,000 字节），缺失时回退原图；静态有损 WebP 兼容 Android WebView，不需要升级 APP 才能使用。
 - Web 观看端与移动端用户数据共享，后端接口改动必须同时考虑 `frontend/apps/viewer/src/api.ts` 和 `frontend/apps/mobile/src/api.ts` 的类型兼容。
 
 移动端交互和布局约定：

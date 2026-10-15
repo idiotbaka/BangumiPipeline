@@ -206,14 +206,14 @@ func (s *Syncer) syncSubjectMetadata(ctx context.Context, client *apiClient, ban
 	if detail.Type != 0 && detail.Type != 2 {
 		return fmt.Errorf("%w: Bangumi #%d type=%d", ErrInvalidSubjectType, bangumiID, detail.Type)
 	}
-	cover, downloadErr := client.downloadImage(ctx, detail.Images.Large, s.config.CoverDir, strconv.FormatInt(bangumiID, 10))
+	cover, downloadErr := client.downloadCover(ctx, detail.Images.Large, s.config.CoverDir, strconv.FormatInt(bangumiID, 10))
 	if err := upsertBaseMetadataFromDetail(ctx, s.db, bangumiID, detail, cover, downloadErr, s.now()); err != nil {
 		return fmt.Errorf("Bangumi #%d 基础数据入库失败: %w", bangumiID, err)
 	}
 
 	failures := make([]string, 0)
 	if downloadErr != nil {
-		failures = append(failures, fmt.Sprintf("Bangumi #%d 封面下载失败: %v", bangumiID, downloadErr))
+		failures = append(failures, fmt.Sprintf("Bangumi #%d 封面处理失败: %v", bangumiID, downloadErr))
 	}
 	if err := saveSubjectDetail(ctx, s.db, bangumiID, detail, s.now()); err != nil {
 		runErr := fmt.Errorf("Bangumi #%d 详情入库失败: %w", bangumiID, err)
@@ -252,14 +252,14 @@ func (s *Syncer) discoverCalendarAnime(ctx context.Context, client *apiClient, c
 				skipped++
 				continue
 			}
-			cover, downloadErr := client.downloadImage(ctx, item.Images.Large, s.config.CoverDir, strconv.FormatInt(item.ID, 10))
+			cover, downloadErr := client.downloadCover(ctx, item.Images.Large, s.config.CoverDir, strconv.FormatInt(item.ID, 10))
 			if err := insertBaseMetadata(ctx, s.db, item, cover, downloadErr, s.now()); err != nil {
 				failures = append(failures, fmt.Sprintf("Bangumi #%d 基础数据入库失败: %v", item.ID, err))
 				continue
 			}
 			inserted++
 			if downloadErr != nil {
-				failures = append(failures, fmt.Sprintf("Bangumi #%d 封面下载失败: %v", item.ID, downloadErr))
+				failures = append(failures, fmt.Sprintf("Bangumi #%d 封面处理失败: %v", item.ID, downloadErr))
 			}
 		}
 	}
@@ -324,14 +324,14 @@ func (s *Syncer) discoverSearchAnime(ctx context.Context, client *apiClient, sub
 			skipped++
 			continue
 		}
-		cover, downloadErr := client.downloadImage(ctx, subject.Images.Large, s.config.CoverDir, strconv.FormatInt(subject.ID, 10))
+		cover, downloadErr := client.downloadCover(ctx, subject.Images.Large, s.config.CoverDir, strconv.FormatInt(subject.ID, 10))
 		if err := upsertBaseMetadataFromDetail(ctx, s.db, subject.ID, subject, cover, downloadErr, s.now()); err != nil {
 			failures = append(failures, fmt.Sprintf("Bangumi #%d 自定义搜索基础数据入库失败: %v", subject.ID, err))
 			continue
 		}
 		inserted++
 		if downloadErr != nil {
-			failures = append(failures, fmt.Sprintf("Bangumi #%d 封面下载失败: %v", subject.ID, downloadErr))
+			failures = append(failures, fmt.Sprintf("Bangumi #%d 封面处理失败: %v", subject.ID, downloadErr))
 		}
 	}
 	return inserted, skipped, failures
@@ -344,7 +344,7 @@ func (s *Syncer) retryAnimeImages(ctx context.Context, client *apiClient) ([]str
 	}
 	failures := make([]string, 0)
 	for _, image := range images {
-		download, downloadErr := client.downloadImage(
+		download, downloadErr := client.downloadCover(
 			ctx, image.SourceURL, s.config.CoverDir, strconv.FormatInt(image.BangumiID, 10),
 		)
 		if err := updateAnimeImage(ctx, s.db, image.BangumiID, download, downloadErr); err != nil {

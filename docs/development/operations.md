@@ -7,6 +7,7 @@
 相关代码：
 
 - `scripts/fix-mp4-remux.sh`
+- `scripts/optimize-bangumi-covers.sh`
 - `scripts/prepare-mobile-android.mjs`
 - `scripts/build-android-apks.ps1`
 
@@ -18,6 +19,17 @@
 - 修复方式为同目录生成临时文件，执行 `ffmpeg -map 0 -c copy -movflags +faststart`，ffprobe 校验成功后替换原文件。
 - 默认不保留备份；`--keep-backup` 会保留隐藏 `.remux.bak` 文件。
 - 脚本保持成品视频路径不变，不需要同步修改 SQLite 中的 `media_jobs.output_path`。
+
+存量番剧封面转换：
+
+- `bash scripts/optimize-bangumi-covers.sh --root /实际数据目录/images/bangumi` 默认仅预览；添加 `--apply` 才生成副本。默认目录取 `BP_COVER_DIR`，未设置则为仓库 `data/images/bangumi`。
+- 需要 Go（版本见 `backend/go.mod`）及支持 `libwebp` 的 ffmpeg；`--ffmpeg /path/to/ffmpeg` 或 `BP_FFMPEG_PATH` 可指定程序。脚本用 `go run` 运行独立修复工具，不会构建或启动服务器。
+- 只扫描封面目录顶层、以正整数 Bangumi ID 命名的 JPG/JPEG/PNG/WebP；不递归角色、声优、表情和头像目录，不处理符号链接。
+- 转换逻辑与在线元数据抓取共用：最大宽度 560px，逐档降质量直到不超过 80,000 字节，完整解码校验后将同目录临时文件原子重命名为 `<原图完整路径>.viewer.webp`。原图与 SQLite 均不修改。
+- 可在更新服务器二进制前执行；原服务继续使用原图。用服务账号运行，确保服务能读取副本且今后能在该目录写入。执行完毕再编译、重启新后端即可切换 Web 与已发布 APP 的封面响应。
+- 重跑跳过有效且不早于原图的副本；`--force --apply` 强制重建。逐张串行，单张失败继续其他文件，汇总失败并以非零退出码结束。失败项可修复环境后重跑。
+- 也可从仓库根目录跨平台运行 `go run ./backend/cmd/optimize-bangumi-covers --root /实际目录 --apply`；没有 Go 的服务器可先构建该独立命令再拷贝执行。
+- 原接口图片缓存仍为私有 24 小时，已缓存原图的客户端会在缓存过期或主动刷新后使用新副本。
 
 移动端脚本：
 

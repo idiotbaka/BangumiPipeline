@@ -302,6 +302,24 @@ func (c *apiClient) downloadImage(ctx context.Context, sourceURL, destinationDir
 	return imageDownload{Path: destination, Status: imageStatusDownloaded}, nil
 }
 
+func (c *apiClient) downloadCover(ctx context.Context, sourceURL, destinationDir, baseName string) (imageDownload, error) {
+	image, err := c.downloadImage(ctx, sourceURL, destinationDir, baseName)
+	if err != nil || image.Status != imageStatusDownloaded {
+		return image, err
+	}
+	created, err := imageutil.OptimizeViewerCover(ctx, c.ffmpegPath, image.Path, false)
+	if err != nil {
+		c.logger.Warn("观看端封面优化失败，将重试并暂用原图", "source", "bangumi", "path", image.Path, "error", err)
+		// Keep the usable original and its downloaded status. image_error makes
+		// the next metadata task retry optimization without downloading again.
+		return image, err
+	}
+	if created {
+		c.logger.Info("观看端封面优化完成", "source", "bangumi", "path", imageutil.ViewerCoverPath(image.Path))
+	}
+	return image, nil
+}
+
 func (c *apiClient) compressImage(ctx context.Context, sourcePath, destinationPath string) (bool, error) {
 	encodeSource := sourcePath
 	scaledPath, err := c.scaleImage(ctx, sourcePath)
