@@ -19,6 +19,7 @@ import (
 	"bangumipipeline.local/server/internal/bangumi"
 	"bangumipipeline.local/server/internal/download"
 	"bangumipipeline.local/server/internal/media"
+	"bangumipipeline.local/server/internal/opskip"
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
 	"bangumipipeline.local/server/internal/translation"
@@ -40,15 +41,16 @@ type AdminAPI struct {
 	download     *download.Service
 	media        *media.Service
 	translation  *translation.Service
+	opskip       *opskip.Service
 	viewer       *viewer.Service
 	logger       *slog.Logger
 	cookieSecure bool
 }
 
-func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, downloadService *download.Service, mediaService *media.Service, translationService *translation.Service, viewerService *viewer.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
+func NewAdminHandler(authService *auth.Service, systemService *system.Service, scheduler *system.Scheduler, logs *applog.Service, catalog *bangumi.Catalog, syncer *bangumi.Syncer, subscriptionService *subscription.Service, downloadService *download.Service, mediaService *media.Service, translationService *translation.Service, opSkipService *opskip.Service, viewerService *viewer.Service, logger *slog.Logger, cookieSecure bool, webDir string) http.Handler {
 	api := &AdminAPI{
 		auth: authService, system: systemService, scheduler: scheduler, logs: logs,
-		catalog: catalog, syncer: syncer, subscription: subscriptionService, download: downloadService, media: mediaService, translation: translationService, viewer: viewerService, logger: logger, cookieSecure: cookieSecure,
+		catalog: catalog, syncer: syncer, subscription: subscriptionService, download: downloadService, media: mediaService, translation: translationService, opskip: opSkipService, viewer: viewerService, logger: logger, cookieSecure: cookieSecure,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
@@ -105,6 +107,10 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/system-logs", api.listSystemLogs)
 	mux.HandleFunc("GET /api/system-logs/stream", api.streamSystemLogs)
 	mux.HandleFunc("GET /api/anime", api.listAnime)
+	mux.HandleFunc("GET /api/translation/anime", api.listTranslationProgress)
+	mux.HandleFunc("GET /api/translation/anime/{bangumiID}", api.translationProgressDetails)
+	mux.HandleFunc("GET /api/opskip/anime", api.listOpeningProgress)
+	mux.HandleFunc("GET /api/opskip/anime/{bangumiID}", api.openingProgressDetails)
 	mux.HandleFunc("POST /api/anime", api.createAnime)
 	mux.HandleFunc("GET /api/anime/search", api.searchAnime)
 	mux.HandleFunc("GET /api/anime/{bangumiID}", api.animeDetail)

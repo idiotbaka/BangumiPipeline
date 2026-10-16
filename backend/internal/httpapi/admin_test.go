@@ -20,6 +20,7 @@ import (
 	"bangumipipeline.local/server/internal/download"
 	"bangumipipeline.local/server/internal/httpapi"
 	"bangumipipeline.local/server/internal/media"
+	"bangumipipeline.local/server/internal/opskip"
 	"bangumipipeline.local/server/internal/subscription"
 	"bangumipipeline.local/server/internal/system"
 	"bangumipipeline.local/server/internal/translation"
@@ -57,7 +58,7 @@ func TestAdministratorSetupAndLoginLifecycle(t *testing.T) {
 	})
 	handler := httpapi.NewAdminHandler(
 		auth.NewService(db, time.Hour), systemService, scheduler,
-		applog.NewService(db), bangumi.NewCatalog(db), metadataSyncer, subscriptionService, downloadService, mediaService, translationService, viewer.NewService(db, time.Hour), logger, false, t.TempDir(),
+		applog.NewService(db), bangumi.NewCatalog(db), metadataSyncer, subscriptionService, downloadService, mediaService, translationService, opskip.NewService(db, logger, opskip.Config{}), viewer.NewService(db, time.Hour), logger, false, t.TempDir(),
 	)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)

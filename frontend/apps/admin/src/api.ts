@@ -578,6 +578,71 @@ interface ErrorPayload {
   }
 }
 
+export type TranslationKind = 'anime_title' | 'anime_summary' | 'episode_title' | 'episode_summary' | 'character_summary' | 'actor_short_summary'
+export type TranslationProgressStatus = 'all' | 'pending' | 'metadata_pending' | 'completed' | 'no_content'
+
+export interface TranslationProgressCount {
+  kind: TranslationKind
+  total: number
+  completed: number
+  missingSource: number
+}
+
+export interface TranslationAnimeProgress {
+  bangumiId: number
+  name: string
+  nameCN: string
+  status: Exclude<TranslationProgressStatus, 'all'>
+  total: number
+  completed: number
+  counts: TranslationProgressCount[]
+  metadata: Array<{ kind: 'detail' | 'characters' | 'episodes'; status: string; errorMessage: string }>
+}
+
+export interface TranslationProgressTarget {
+  kind: TranslationKind
+  id: number
+  label: string
+  status: 'pending' | 'completed' | 'no_source'
+}
+
+export type OpeningProgressFilter = 'all' | 'completed' | 'pending' | 'failed' | 'waiting_episodes' | 'not_found'
+
+export interface OpeningAnimeProgress {
+  bangumiId: number
+  name: string
+  nameCN: string
+  status: 'completed' | 'pending' | 'failed' | 'waiting_episodes'
+  total: number
+  detected: number
+  notFound: number
+  pending: number
+  waitingEpisodes: number
+  failed: number
+  lastAnalyzedAt: number | null
+}
+
+export interface OpeningEpisodeProgress {
+  mediaId: number
+  seasonNumber: number
+  episodeNumber: string
+  status: 'pending' | 'detected' | 'not_found' | 'failed' | 'waiting_episodes'
+  groupSize: number
+  minimumGroupSize: number
+  analyzedGroupSize: number
+  startSeconds: number
+  endSeconds: number
+  errorMessage: string
+  updatedAt: number | null
+}
+
+export interface ProgressPage<T> {
+  items: T[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 export class APIError extends Error {
   constructor(
     message: string,
@@ -806,6 +871,18 @@ export const api = {
     if (options.query?.trim()) params.set('q', options.query.trim())
     return request<AnimePage>(`/api/anime?${params}`)
   },
+  translationProgress: (page: number, pageSize: number, q: string, status: TranslationProgressStatus) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), q, status })
+    return request<ProgressPage<TranslationAnimeProgress>>(`/api/translation/anime?${params}`)
+  },
+  translationProgressDetails: (bangumiId: number) =>
+    request<{ items: TranslationProgressTarget[] }>(`/api/translation/anime/${bangumiId}`),
+  openingProgress: (page: number, pageSize: number, q: string, status: OpeningProgressFilter) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), q, status })
+    return request<ProgressPage<OpeningAnimeProgress>>(`/api/opskip/anime?${params}`)
+  },
+  openingProgressDetails: (bangumiId: number) =>
+    request<{ items: OpeningEpisodeProgress[] }>(`/api/opskip/anime/${bangumiId}`),
   createAnime: (bangumiId: number) =>
     request<{ anime: AnimeDetail }>('/api/anime', {
       method: 'POST',

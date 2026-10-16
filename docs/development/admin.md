@@ -18,6 +18,8 @@
 - `frontend/apps/admin/src/pages/SubscriptionMatchesPage.vue`：订阅匹配。
 - `frontend/apps/admin/src/pages/DownloadManagementPage.vue`：下载管理。
 - `frontend/apps/admin/src/pages/TranscodeManagementPage.vue`：媒体处理管理。
+- `frontend/apps/admin/src/pages/TranslationManagementPage.vue`：按番剧展示六类元数据中文内容进度、元数据抓取提示与只读明细，规则见 [translation.md](translation.md)。
+- `frontend/apps/admin/src/pages/OpeningManagementPage.vue`：按番剧汇总 OP 检测结果，展开显示每季每话的等待原因、时间范围和错误，规则见 [opskip.md](opskip.md)。
 - `frontend/apps/admin/src/pages/SystemLogsPage.vue`：系统日志。
 - `frontend/apps/admin/src/pages/ViewerUserManagementPage.vue`：观看端用户启停与密码重置。
 - `frontend/apps/admin/src/pages/ViewerInviteManagementPage.vue`：观看端邀请码生成与使用状态。
@@ -36,6 +38,7 @@
 - 管理端系统设置、系统概览、番剧存储管理可以展示服务器路径。
 - 番剧卡片按钮区保持固定宽度和可读文本，避免话数 tag 或按钮遮挡。
 - “前端管理”下的观看端配置仍通过 Admin API 管理，必须使用管理员鉴权，不得复用观看端 Session。
+- 翻译与 OP 管理页支持搜索、进度筛选、分页与手动刷新；`ProgressTaskStatus.vue` 展示对应计划任务状态，明细按展开行加载。第一期只读，不提供编辑、跳过或手动执行操作。
 
 ## 后续功能入口
 

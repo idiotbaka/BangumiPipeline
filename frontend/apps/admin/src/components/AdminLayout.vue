@@ -55,6 +55,14 @@ async function logout() {
             <el-icon><Film /></el-icon>
             <span>转码管理</span>
           </el-menu-item>
+          <el-menu-item index="/translations">
+            <el-icon><Document /></el-icon>
+            <span>元数据翻译管理</span>
+          </el-menu-item>
+          <el-menu-item index="/openings">
+            <el-icon><VideoCamera /></el-icon>
+            <span>片头曲识别管理</span>
+          </el-menu-item>
           <el-menu-item index="/system-logs">
             <el-icon><Document /></el-icon>
             <span>系统日志</span>

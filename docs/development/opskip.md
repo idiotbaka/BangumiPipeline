@@ -12,3 +12,13 @@
 - Web `AnimeVideoPlayer.vue` 与 APP `MobileVideoPlayer.vue` 使用服务端时间范围，保持缺失/无效结果回退及手动跳过行为。
 - Web 用户是否显示 OP 按钮由 `playerPreferences.ts` 控制；不因关闭按钮删除服务端检测结果。
 - 数据库变更仍进入带版本迁移；播放与进度规则见 [viewer.md](viewer.md)，原生控制见 [mobile.md](mobile.md)。
+
+## 管理端进度
+
+- `/openings` 为片头曲识别管理页，查询在 `backend/internal/opskip/management.go`；番剧详情的原有逐话展示仍在 `bangumi/catalog.go`。
+- `GET /api/opskip/anime` 支持 `q` 标题/别名搜索、`status` 筛选、`page` 和 `pageSize`。只列有已完成、路径非空正片成品的未软删除番剧，按任务实际分析的视频记录计数；不将标称总话数、未完成产物或 SP 算入分母。
+- 统计 detected（已检测到）、not_found（已分析但未找到符合规则的 OP）、pending（待识别）、waiting_episodes（等待足够话数）、failed（失败）。无结果记录视为 pending；仅 pending 且同番剧同季不足任务最小分组数量时派生 waiting_episodes，已有结果保留原状态。
+- 总体状态优先显示失败、待识别、等待足够话数，其余为已完成。`status=completed` 表示全部为 detected/not_found；`pending` 筛选所有未完成番剧，包含失败与等待；`failed`、`waiting_episodes`、`not_found` 分别筛选含对应结果的番剧，可与未完成筛选范围重叠。先聚合与筛选，再分页。
+- 展开行按需调用 `GET /api/opskip/anime/{bangumiID}`，按季/话数展示成品 ID、状态、有效片头范围、最近分析时间、等待原因与错误。等待条件沿用任务的最小分组常量；错误中的当前成品绝对路径替换为占位文本。
+- 页面展示计划任务启用/运行情况、最近错误，采用手动刷新。现有任务每轮重新分析满足条件的分组并复用有效指纹；页面表示数据库保存的最近结果，不表示永久跳过、当前正在分析该番剧或文件已实时校验。单个视频失败也可能不使整个任务失败，以逐项结果为准。
+- 本期不修改检测策略、不新增 schema，不提供跳过、编辑或单项重试操作；列表与展开请求不执行音频分析或逐文件检查。

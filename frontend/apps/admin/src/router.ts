@@ -12,6 +12,8 @@ import AnimeDetailPage from './pages/AnimeDetailPage.vue'
 import SubscriptionMatchesPage from './pages/SubscriptionMatchesPage.vue'
 import DownloadManagementPage from './pages/DownloadManagementPage.vue'
 import TranscodeManagementPage from './pages/TranscodeManagementPage.vue'
+import TranslationManagementPage from './pages/TranslationManagementPage.vue'
+import OpeningManagementPage from './pages/OpeningManagementPage.vue'
 import ViewerUserManagementPage from './pages/ViewerUserManagementPage.vue'
 import ViewerSiteSettingsPage from './pages/ViewerSiteSettingsPage.vue'
 import ViewerSinglePageManagementPage from './pages/ViewerSinglePageManagementPage.vue'
@@ -39,6 +41,8 @@ const router = createRouter({
         { path: 'subscriptions', name: 'subscriptions', component: SubscriptionMatchesPage },
         { path: 'downloads', name: 'downloads', component: DownloadManagementPage },
         { path: 'transcodes', name: 'transcodes', component: TranscodeManagementPage },
+        { path: 'translations', name: 'translations', component: TranslationManagementPage },
+        { path: 'openings', name: 'openings', component: OpeningManagementPage },
         { path: 'system-logs', name: 'system-logs', component: SystemLogsPage },
         { path: 'settings', name: 'settings', component: SettingsPage },
         { path: 'viewer-users', name: 'viewer-users', component: ViewerUserManagementPage },

@@ -170,6 +170,22 @@ button, input { font: inherit; }
 .storage-current-box span { color: #98a2b3; font-size: 12px; }
 .storage-current-box strong { overflow-wrap: anywhere; color: #475467; font-size: 13px; line-height: 1.55; }
 .subscription-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.progress-task-card { margin-bottom: 22px; min-height: 92px; }
+.progress-task-line, .progress-detail-toolbar, .progress-stage-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.progress-task-line a, .progress-title-cell a { color: #3867ff; text-decoration: none; }
+.progress-title-cell a { font-weight: 600; overflow-wrap: anywhere; }
+.progress-task-line a:hover, .progress-title-cell a:hover { text-decoration: underline; }
+.progress-toolbar { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.progress-toolbar .el-radio-group { flex-wrap: wrap; row-gap: 8px; }
+.progress-search { display: flex; gap: 8px; width: 340px; max-width: 100%; }
+.progress-hint { color: #667085; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.progress-title-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.progress-details { padding: 18px 24px 24px; min-height: 130px; }
+.progress-detail-toolbar { margin-bottom: 14px; }
+.progress-metadata-warnings { margin: 18px 24px 0; font-size: 13px; overflow-wrap: anywhere; }
+.progress-metadata-warnings p { margin: 6px 0; }
+.progress-error-text { color: #d92d20; overflow-wrap: anywhere; white-space: pre-wrap; }
+.progress-list-error { margin-bottom: 16px; }
 .subscription-card .el-card__body { padding: 0; }
 .subscription-table { width: 100%; }
 .subscription-title-cell { min-width: 0; display: grid; gap: 5px; }
