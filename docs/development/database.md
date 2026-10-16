@@ -43,6 +43,7 @@ SQLite 是唯一事实源。Writer 打开和迁移在 `backend/internal/database
 - `media_jobs`：媒体处理状态、最终视频、封面图、转码信息，以及评论链路入队完成标记。
 - `media_storage_settings`：额外成品视频存储根目录。
 - `llm_settings`：OpenAI Chat 兼容 LLM 配置。
+- 迁移 40 为 `llm_settings` 增加 `timeout_seconds`，整数范围 1～3600，默认 60；已有配置与凭据保留，新增字段自动补为原有请求超时 60 秒。
 - `viewer_users`、`viewer_sessions`：观看端独立用户和 Session。
 - `viewer_site_settings`、`viewer_invitation_codes`：观看端站点配置、favicon、注册开关和邀请码。
 - `viewer_comment_username_filters`：观看端吐槽过滤名单；同时按 Bangumi `username` 或 `nickname` 全匹配。

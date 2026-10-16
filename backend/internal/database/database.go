@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS llm_settings (
     base_url   TEXT NOT NULL DEFAULT '',
     api_key    TEXT NOT NULL DEFAULT '',
     model      TEXT NOT NULL DEFAULT '',
+    timeout_seconds INTEGER NOT NULL DEFAULT 60 CHECK (timeout_seconds BETWEEN 1 AND 3600),
     updated_at INTEGER NOT NULL
 );
 
@@ -839,6 +840,7 @@ CREATE TABLE IF NOT EXISTS llm_settings (
     base_url   TEXT NOT NULL DEFAULT '',
     api_key    TEXT NOT NULL DEFAULT '',
     model      TEXT NOT NULL DEFAULT '',
+    timeout_seconds INTEGER NOT NULL DEFAULT 60 CHECK (timeout_seconds BETWEEN 1 AND 3600),
     updated_at INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO llm_settings(id, base_url, api_key, model, updated_at)
@@ -1450,6 +1452,18 @@ INSERT INTO schema_migrations(version, applied_at) VALUES (38, unixepoch());`); 
 		}
 		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (39, unixepoch())`); err != nil {
 			return fmt.Errorf("finish version 39 migration: %w", err)
+		}
+	}
+	applied, err = migrationApplied(ctx, db, 40)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		if err := ensureColumn(ctx, db, "llm_settings", "timeout_seconds", "INTEGER NOT NULL DEFAULT 60 CHECK (timeout_seconds BETWEEN 1 AND 3600)"); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (40, unixepoch())`); err != nil {
+			return fmt.Errorf("finish version 40 migration: %w", err)
 		}
 	}
 	return nil

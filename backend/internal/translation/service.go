@@ -426,6 +426,10 @@ func newChatClient(settings system.LLMSettings, network system.NetworkSettings) 
 	if strings.TrimSpace(settings.BaseURL) == "" || strings.TrimSpace(settings.Model) == "" {
 		return nil, errors.New("LLM Base URL 和模型名称不能为空")
 	}
+	timeout, err := settings.RequestTimeout()
+	if err != nil {
+		return nil, err
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	proxyURL := strings.TrimSpace(network.HTTPSProxy)
 	if proxyURL == "" {
@@ -440,7 +444,7 @@ func newChatClient(settings system.LLMSettings, network system.NetworkSettings) 
 	}
 	return &chatClient{
 		settings: settings,
-		client:   &http.Client{Transport: transport, Timeout: 60 * time.Second},
+		client:   &http.Client{Transport: transport, Timeout: timeout},
 	}, nil
 }
 

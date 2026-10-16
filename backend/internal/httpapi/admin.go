@@ -1555,6 +1555,10 @@ func (a *AdminAPI) updateLLMSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	settings, err := a.system.UpdateLLMSettings(r.Context(), input)
 	if err != nil {
+		if errors.Is(err, system.ErrInvalidLLMTimeout) {
+			writeError(w, http.StatusBadRequest, "invalid_llm_timeout", err.Error())
+			return
+		}
 		if errors.Is(err, system.ErrInvalidLLMSettings) {
 			writeError(w, http.StatusBadRequest, "invalid_llm_settings", "LLM 设置需要填写有效的 Base URL 和模型名称")
 			return
@@ -1576,6 +1580,10 @@ func (a *AdminAPI) testLLMSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := a.translation.TestConnection(r.Context(), input)
 	if err != nil {
+		if errors.Is(err, system.ErrInvalidLLMTimeout) {
+			writeError(w, http.StatusBadRequest, "invalid_llm_timeout", err.Error())
+			return
+		}
 		writeError(w, http.StatusBadGateway, "llm_connection_failed", err.Error())
 		return
 	}

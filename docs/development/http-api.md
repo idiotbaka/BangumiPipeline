@@ -29,6 +29,8 @@
 
 管理员 `POST /api/download/jobs/{jobID}/retry-magnet` 接受可选 `magnetUrl`。没有提供且无法从本地订阅信息提取时返回 `422 download_magnet_required`，用于打开填写弹窗；链接无效为 `400 invalid_magnet_url`，任务不允许重试为 `409 download_retry_not_allowed`。成功返回 `{ "result": { "job": ..., "action": "magnet_reset" } }`，任务状态为 `pending`，不会立即绕过调度器下载。
 
+管理员 `GET/PUT /api/settings/llm` 与 `POST /api/settings/llm/test` 使用 `timeoutSeconds`（单次请求总超时秒数，1～3600 的整数，默认 60）。旧请求省略字段或传 0 时使用默认值；越界返回 `400 invalid_llm_timeout`。翻译每轮开始读取已保存配置，连接测试使用请求中的设置。
+
 ## 观看端鉴权
 
 - 仅需确认登录用 `requireViewer`；需要当前用户 ID 用 `authenticatedViewer`。

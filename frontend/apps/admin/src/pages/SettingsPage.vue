@@ -25,7 +25,7 @@ const storageUpdatedAt = ref(0)
 const defaultMediaRoot = ref('')
 const serverDownloadDir = ref('')
 const form = reactive({ httpProxy: '', httpsProxy: '' })
-const llmForm = reactive({ baseUrl: '', apiKey: '', model: '' })
+const llmForm = reactive({ baseUrl: '', apiKey: '', model: '', timeoutSeconds: 60 })
 const subscriptionForm = reactive({ rssUrl: '' })
 const downloadForm = reactive({
   host: '127.0.0.1',
@@ -97,6 +97,7 @@ const subscriptionRules: FormRules<typeof subscriptionForm> = {
 
 const llmRules: FormRules<typeof llmForm> = {
   baseUrl: [{ validator: validateHTTPURL, trigger: 'blur' }],
+  timeoutSeconds: [{ required: true, type: 'integer', min: 1, max: 3600, message: '请求超时必须为 1 到 3600 秒的整数', trigger: ['change', 'blur'] }],
 }
 
 const downloadRules: FormRules<typeof downloadForm> = {
@@ -122,6 +123,7 @@ async function loadSettings() {
     llmForm.baseUrl = llm.settings.baseUrl
     llmForm.apiKey = llm.settings.apiKey
     llmForm.model = llm.settings.model
+    llmForm.timeoutSeconds = llm.settings.timeoutSeconds ?? 60
     llmUpdatedAt.value = llm.settings.updatedAt
     subscriptionForm.rssUrl = subscription.settings.rssUrl
     subscriptionUpdatedAt.value = subscription.settings.updatedAt
@@ -191,6 +193,7 @@ function llmPayload() {
     baseUrl: llmForm.baseUrl.trim(),
     apiKey: llmForm.apiKey.trim(),
     model: llmForm.model.trim(),
+    timeoutSeconds: llmForm.timeoutSeconds,
   }
 }
 
@@ -202,6 +205,7 @@ async function saveLLM() {
     llmForm.baseUrl = settings.baseUrl
     llmForm.apiKey = settings.apiKey
     llmForm.model = settings.model
+    llmForm.timeoutSeconds = settings.timeoutSeconds
     llmUpdatedAt.value = settings.updatedAt
     ElMessage.success('LLM 设置已保存')
   } catch (error) {
@@ -349,6 +353,10 @@ onMounted(loadSettings)
       <el-form-item label="模型名称">
         <el-input v-model.trim="llmForm.model" size="large" placeholder="gpt-4o-mini" clearable />
         <div class="form-help">计划任务需要 Base URL 和模型名称有效；API KEY 可按服务要求填写。</div>
+      </el-form-item>
+      <el-form-item label="请求超时（秒）" prop="timeoutSeconds">
+        <el-input-number v-model="llmForm.timeoutSeconds" :min="1" :max="3600" :precision="0" :step="30" size="large" />
+        <div class="form-help">默认 60 秒，范围 1～3600 秒，翻译请求和连接测试共用。长文本或模型响应较慢时可延长；保存后下一轮翻译任务生效。</div>
       </el-form-item>
       <div class="settings-actions">
         <span>最后更新：{{ formatTime(llmUpdatedAt) }}</span>

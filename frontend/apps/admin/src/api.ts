@@ -186,6 +186,7 @@ export interface LLMSettings {
   baseUrl: string
   apiKey: string
   model: string
+  timeoutSeconds: number
   updatedAt: number
 }
 

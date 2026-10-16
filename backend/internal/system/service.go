@@ -25,6 +25,9 @@ const (
 
 	MinConcurrentDownloads = 1
 	MaxConcurrentDownloads = 50
+
+	DefaultLLMTimeoutSeconds = 60
+	MaxLLMTimeoutSeconds     = 3600
 )
 
 var (
@@ -36,6 +39,7 @@ var (
 	ErrInvalidDownloadSettings = errors.New("invalid download settings")
 	ErrInvalidMediaStoragePath = errors.New("invalid media storage path")
 	ErrInvalidLLMSettings      = errors.New("invalid llm settings")
+	ErrInvalidLLMTimeout       = errors.New("LLM 请求超时必须为 1 到 3600 秒")
 )
 
 type ScheduledTask struct {
@@ -85,14 +89,27 @@ type MediaStorageSettings struct {
 }
 
 type LLMSettings struct {
-	BaseURL   string `json:"baseUrl"`
-	APIKey    string `json:"apiKey"`
-	Model     string `json:"model"`
-	UpdatedAt int64  `json:"updatedAt"`
+	BaseURL        string `json:"baseUrl"`
+	APIKey         string `json:"apiKey"`
+	Model          string `json:"model"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
+	UpdatedAt      int64  `json:"updatedAt"`
 }
 
 func (s LLMSettings) Configured() bool {
 	return strings.TrimSpace(s.BaseURL) != "" && strings.TrimSpace(s.Model) != ""
+}
+
+func (s LLMSettings) RequestTimeout() (time.Duration, error) {
+	seconds := s.TimeoutSeconds
+	// Older clients and callers omit the new setting; keep the original limit.
+	if seconds == 0 {
+		seconds = DefaultLLMTimeoutSeconds
+	}
+	if seconds < 1 || seconds > MaxLLMTimeoutSeconds {
+		return 0, ErrInvalidLLMTimeout
+	}
+	return time.Duration(seconds) * time.Second, nil
 }
 
 type Service struct {
@@ -382,9 +399,9 @@ WHERE id = 1`, string(rawJSON), s.now().UTC().Unix())
 func (s *Service) GetLLMSettings(ctx context.Context) (LLMSettings, error) {
 	var settings LLMSettings
 	err := s.db.QueryRowContext(ctx, `
-SELECT base_url, api_key, model, updated_at
+SELECT base_url, api_key, model, timeout_seconds, updated_at
 FROM llm_settings
-WHERE id = 1`).Scan(&settings.BaseURL, &settings.APIKey, &settings.Model, &settings.UpdatedAt)
+WHERE id = 1`).Scan(&settings.BaseURL, &settings.APIKey, &settings.Model, &settings.TimeoutSeconds, &settings.UpdatedAt)
 	return settings, err
 }
 
@@ -392,13 +409,16 @@ func (s *Service) UpdateLLMSettings(ctx context.Context, settings LLMSettings) (
 	settings.BaseURL = strings.TrimSpace(settings.BaseURL)
 	settings.APIKey = strings.TrimSpace(settings.APIKey)
 	settings.Model = strings.TrimSpace(settings.Model)
+	if settings.TimeoutSeconds == 0 {
+		settings.TimeoutSeconds = DefaultLLMTimeoutSeconds
+	}
 	if err := validateLLMSettings(settings); err != nil {
 		return LLMSettings{}, err
 	}
 	_, err := s.db.ExecContext(ctx, `
 UPDATE llm_settings
-SET base_url = ?, api_key = ?, model = ?, updated_at = ?
-WHERE id = 1`, settings.BaseURL, settings.APIKey, settings.Model, s.now().UTC().Unix())
+SET base_url = ?, api_key = ?, model = ?, timeout_seconds = ?, updated_at = ?
+WHERE id = 1`, settings.BaseURL, settings.APIKey, settings.Model, settings.TimeoutSeconds, s.now().UTC().Unix())
 	if err != nil {
 		return LLMSettings{}, err
 	}
@@ -458,6 +478,9 @@ func normalizeMediaStorageRoots(paths []string) ([]string, error) {
 }
 
 func validateLLMSettings(settings LLMSettings) error {
+	if _, err := settings.RequestTimeout(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(settings.BaseURL) == "" && strings.TrimSpace(settings.APIKey) == "" && strings.TrimSpace(settings.Model) == "" {
 		return nil
 	}
