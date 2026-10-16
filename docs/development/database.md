@@ -56,6 +56,7 @@ SQLite 是唯一事实源。Writer 打开和迁移在 `backend/internal/database
 ## 其他已实现的数据边界
 
 - `media_op_fingerprints`、`media_op_segments`：成品音频指纹缓存与片头识别结果。
+- 迁移 41 增加 `media_op_group_analysis`，按 `(bangumi_id, season_number)` 保存完整分组的输入签名、分析版本、成品数和完成时间；重新分析前移除旧记录，全部成功后才建立。`media_op_fingerprints.file_mtime_ns` 默认 0，旧指纹首次按原有条件命中后补记纳秒修改时间；保留已有指纹和 OP 结果，不在迁移中伪造历史分组完成记录。复用规则见 [opskip.md](opskip.md)。
 - `viewer_web_push_settings`、`viewer_web_push_subscriptions`、`viewer_web_push_deliveries`：VAPID 密钥、按用户订阅与待投递队列。
 - `viewer_invitation_codes.created_by_user_id` 记录用户自助邀请码来源，与管理员生成的码共用同一表。
 - `viewer_site_settings.active_single_page_key` 保存启用的内置专题页 key；专题内容随前端构建发布。

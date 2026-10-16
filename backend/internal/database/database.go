@@ -1061,6 +1061,7 @@ CREATE TABLE IF NOT EXISTS media_op_fingerprints (
     media_job_id            INTEGER NOT NULL UNIQUE REFERENCES media_jobs(id) ON DELETE CASCADE,
     file_size               INTEGER NOT NULL DEFAULT 0,
     file_mtime              INTEGER NOT NULL DEFAULT 0,
+    file_mtime_ns           INTEGER NOT NULL DEFAULT 0,
     duration_seconds        REAL NOT NULL DEFAULT 0,
     fingerprint_end_seconds REAL NOT NULL DEFAULT 0,
     fingerprint_points      BLOB NOT NULL,
@@ -1464,6 +1465,28 @@ INSERT INTO schema_migrations(version, applied_at) VALUES (38, unixepoch());`); 
 		}
 		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (40, unixepoch())`); err != nil {
 			return fmt.Errorf("finish version 40 migration: %w", err)
+		}
+	}
+	applied, err = migrationApplied(ctx, db, 41)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		if err := ensureColumn(ctx, db, "media_op_fingerprints", "file_mtime_ns", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS media_op_group_analysis (
+    bangumi_id       INTEGER NOT NULL REFERENCES anime_metadata(bangumi_id) ON DELETE CASCADE,
+    season_number    INTEGER NOT NULL,
+    input_signature  TEXT NOT NULL,
+    analysis_version TEXT NOT NULL,
+    episode_count    INTEGER NOT NULL,
+    completed_at     INTEGER NOT NULL,
+    PRIMARY KEY (bangumi_id, season_number)
+);
+INSERT INTO schema_migrations(version, applied_at) VALUES (41, unixepoch());`); err != nil {
+			return fmt.Errorf("finish version 41 migration: %w", err)
 		}
 	}
 	return nil

@@ -43,7 +43,7 @@ const columns: Array<{ label: string; prop: keyof OpeningAnimeProgress }> = [
     </form>
   </div>
 
-  <p class="progress-hint">仅展示有已完成正片成品的番剧，按视频记录计数。“已完成”包含未识别到 OP；“待完成”包含失败和等待足够话数。新一轮任务会重新分析符合条件的分组，页面展示已保存的最近结果。</p>
+  <p class="progress-hint">仅展示有已完成正片成品的番剧，按视频记录计数。“已完成”包含未识别到 OP；“待完成”包含失败和等待足够话数。任务按番剧与季复用未变化的完整结果，新增或变更成品时重新分析；页面展示已保存的最近结果。</p>
 
   <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="progress-list-error">
     <el-button link type="primary" @click="load">重试加载</el-button>

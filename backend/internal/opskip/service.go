@@ -63,16 +63,20 @@ type Service struct {
 }
 
 type mediaEpisode struct {
-	MediaJobID       int64
-	BangumiID        int64
-	AnimeName        string
-	SeasonNumber     int
-	EpisodeNumber    string
-	OutputPath       string
-	TotalDurationMS  int64
-	CompletedAt      int64
-	Fingerprint      []uint32
-	FingerprintError error
+	MediaJobID        int64
+	BangumiID         int64
+	AnimeName         string
+	SeasonNumber      int
+	EpisodeNumber     string
+	OutputPath        string
+	TotalDurationMS   int64
+	CompletedAt       int64
+	Fingerprint       []uint32
+	FingerprintError  error
+	SegmentStatus     string
+	SegmentStart      float64
+	SegmentEnd        float64
+	AnalyzedGroupSize int
 }
 
 type groupKey struct {
@@ -81,29 +85,41 @@ type groupKey struct {
 }
 
 type analysisGroup struct {
-	key      groupKey
-	anime    string
-	episodes []mediaEpisode
+	key       groupKey
+	anime     string
+	episodes  []mediaEpisode
+	signature string
+	version   string
+	reason    string
 }
 
 type taskSummary struct {
-	groups     int
-	episodes   int
-	detected   int
-	notFound   int
-	failed     int
-	cached     int
-	generated  int
-	silenceHit int
+	scanned        int
+	reused         int
+	reusedEpisodes int
+	waiting        int
+	retry          int
+	groups         int
+	episodes       int
+	detected       int
+	notFound       int
+	failed         int
+	cached         int
+	generated      int
+	silenceHit     int
+	silenceRuns    int
+	silenceFailed  int
 }
 
 type groupSummary struct {
-	detected   int
-	notFound   int
-	failed     int
-	cached     int
-	generated  int
-	silenceHit int
+	detected      int
+	notFound      int
+	failed        int
+	cached        int
+	generated     int
+	silenceHit    int
+	silenceRuns   int
+	silenceFailed int
 }
 
 type fingerprintResult struct {
@@ -164,29 +180,54 @@ func NewService(db database.Executor, logger *slog.Logger, config Config) *Servi
 
 func (s *Service) Execute(ctx context.Context) error {
 	s.logger.Info("片头识别任务开始", "source", "opskip")
-	if err := s.checkFFmpeg(ctx); err != nil {
-		return err
-	}
-	groups, err := s.completedEpisodeGroups(ctx)
+	groups, err := s.completedEpisodeGroups(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("读取待识别成品视频: %w", err)
 	}
-	if len(groups) == 0 {
-		s.logger.Info("片头识别任务完成：没有大于 2 集的正片成品视频", "source", "opskip")
-		return nil
-	}
-
-	summary := taskSummary{groups: len(groups)}
+	summary := taskSummary{scanned: len(groups)}
+	ffmpegChecked := false
 	for _, group := range groups {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
+		if len(group.episodes) < minimumGroupEpisodes {
+			summary.waiting++
+			continue
+		}
+		signature, snapshotErr := groupInputSignature(ctx, group)
+		if snapshotErr != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		group.reason = groupAnalysisReason(group, signature, snapshotErr)
+		if group.reason == "" {
+			summary.reused++
+			summary.reusedEpisodes += len(group.episodes)
+			continue
+		}
+		if !ffmpegChecked {
+			if err := s.checkFFmpeg(ctx); err != nil {
+				return err
+			}
+			ffmpegChecked = true
+		}
+		// A crash or partial reanalysis must never retain an earlier completion marker.
+		if err := s.invalidateGroupAnalysis(ctx, group.key); err != nil {
+			return err
+		}
 		result, err := s.analyzeGroup(ctx, group)
 		if err != nil {
 			return err
 		}
+		cached, err := s.completeGroupAnalysis(ctx, group, signature, result)
+		if err != nil {
+			return err
+		}
+		if !cached {
+			summary.retry++
+		}
+		summary.groups++
 		summary.episodes += len(group.episodes)
 		summary.detected += result.detected
 		summary.notFound += result.notFound
@@ -194,32 +235,48 @@ func (s *Service) Execute(ctx context.Context) error {
 		summary.cached += result.cached
 		summary.generated += result.generated
 		summary.silenceHit += result.silenceHit
+		summary.silenceRuns += result.silenceRuns
+		summary.silenceFailed += result.silenceFailed
 	}
 
 	s.logger.Info("片头识别任务完成", "source", "opskip",
+		"groups_scanned", summary.scanned, "groups_reused", summary.reused,
+		"episodes_reused", summary.reusedEpisodes, "groups_waiting", summary.waiting, "groups_retry", summary.retry,
 		"groups", summary.groups, "episodes", summary.episodes,
 		"detected", summary.detected, "not_found", summary.notFound, "failed", summary.failed,
 		"fingerprint_cached", summary.cached, "fingerprint_generated", summary.generated,
-		"silence_adjusted", summary.silenceHit)
+		"silence_analyzed", summary.silenceRuns, "silence_failed", summary.silenceFailed, "silence_adjusted", summary.silenceHit)
 	return nil
 }
 
-func (s *Service) completedEpisodeGroups(ctx context.Context) ([]analysisGroup, error) {
+func (s *Service) completedEpisodeGroups(ctx context.Context, key *groupKey) ([]analysisGroup, error) {
+	filter := ""
+	var args []any
+	if key != nil {
+		filter = " AND mj.bangumi_id = ? AND mj.season_number = ?"
+		args = []any{key.BangumiID, key.SeasonNumber}
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT mj.id, mj.bangumi_id, mj.anime_name, mj.season_number,
        mj.episode_number, mj.output_path, mj.total_duration_ms,
-       COALESCE(mj.completed_at, mj.updated_at, mj.created_at, 0)
+       COALESCE(mj.completed_at, mj.created_at, 0),
+       COALESCE(mos.status, ''), COALESCE(mos.start_seconds, 0), COALESCE(mos.end_seconds, 0),
+       COALESCE(mos.analyzed_group_size, 0), COALESCE(ga.input_signature, ''), COALESCE(ga.analysis_version, '')
 FROM media_jobs mj
 JOIN anime_metadata am ON am.bangumi_id = mj.bangumi_id
+LEFT JOIN media_op_segments mos ON mos.media_job_id = mj.id
+    AND mos.bangumi_id = mj.bangumi_id AND mos.season_number = mj.season_number
+    AND mos.episode_type = 'episode' AND mos.episode_number = mj.episode_number
+LEFT JOIN media_op_group_analysis ga ON ga.bangumi_id = mj.bangumi_id AND ga.season_number = mj.season_number
 WHERE am.deleted_at IS NULL
   AND mj.status = 'completed'
   AND mj.output_path != ''
-  AND LOWER(COALESCE(NULLIF(mj.episode_type, ''), 'episode')) = 'episode'
+  AND LOWER(COALESCE(NULLIF(mj.episode_type, ''), 'episode')) = 'episode'`+filter+`
 ORDER BY mj.bangumi_id, mj.season_number,
          CASE WHEN mj.episode_number GLOB '[0-9]*' THEN 0 ELSE 1 END,
          CAST(mj.episode_number AS REAL),
          mj.episode_number,
-         mj.id`)
+         mj.id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -229,9 +286,12 @@ ORDER BY mj.bangumi_id, mj.season_number,
 	groups := make([]analysisGroup, 0)
 	for rows.Next() {
 		var episode mediaEpisode
+		var signature, version string
 		if err := rows.Scan(
 			&episode.MediaJobID, &episode.BangumiID, &episode.AnimeName, &episode.SeasonNumber,
 			&episode.EpisodeNumber, &episode.OutputPath, &episode.TotalDurationMS, &episode.CompletedAt,
+			&episode.SegmentStatus, &episode.SegmentStart, &episode.SegmentEnd, &episode.AnalyzedGroupSize,
+			&signature, &version,
 		); err != nil {
 			return nil, err
 		}
@@ -240,7 +300,7 @@ ORDER BY mj.bangumi_id, mj.season_number,
 		if !ok {
 			index = len(groups)
 			groupIndex[key] = index
-			groups = append(groups, analysisGroup{key: key, anime: episode.AnimeName})
+			groups = append(groups, analysisGroup{key: key, anime: episode.AnimeName, signature: signature, version: version})
 		}
 		groups[index].episodes = append(groups[index].episodes, episode)
 	}
@@ -248,27 +308,26 @@ ORDER BY mj.bangumi_id, mj.season_number,
 		return nil, err
 	}
 
-	filtered := groups[:0]
-	for _, group := range groups {
-		if len(group.episodes) < minimumGroupEpisodes {
-			continue
-		}
-		filtered = append(filtered, group)
-	}
-	return filtered, nil
+	return groups, nil
 }
 
 func (s *Service) analyzeGroup(ctx context.Context, group analysisGroup) (groupSummary, error) {
 	s.logger.Info("开始识别番剧片头", "source", "opskip",
 		"bangumi_id", group.key.BangumiID, "anime", group.anime,
-		"season", group.key.SeasonNumber, "episodes", len(group.episodes))
+		"season", group.key.SeasonNumber, "episodes", len(group.episodes), "reason", group.reason)
 
 	result := groupSummary{}
 	valid := make([]mediaEpisode, 0, len(group.episodes))
 	for index := range group.episodes {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		episode := group.episodes[index]
 		fingerprint, err := s.fingerprint(ctx, episode)
 		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
 			episode.FingerprintError = err
 			if saveErr := s.saveSegment(ctx, episode, StatusFailed, openingDetection{}, len(group.episodes), err.Error()); saveErr != nil {
 				return result, saveErr
@@ -290,6 +349,9 @@ func (s *Service) analyzeGroup(ctx context.Context, group analysisGroup) (groupS
 
 	detections := detectOpenings(valid)
 	for _, episode := range valid {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		detection, ok := detections[episode.MediaJobID]
 		if !ok {
 			if err := s.saveSegment(ctx, episode, StatusNotFound, openingDetection{}, len(group.episodes), ""); err != nil {
@@ -298,8 +360,13 @@ func (s *Service) analyzeGroup(ctx context.Context, group analysisGroup) (groupS
 			result.notFound++
 			continue
 		}
+		result.silenceRuns++
 		adjusted, changed, err := s.adjustOpeningEndToSilence(ctx, episode, detection)
 		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			result.silenceFailed++
 			s.logger.Warn("片头结束静音修正失败，将使用音频指纹结果", "source", "opskip",
 				"media_job_id", episode.MediaJobID, "bangumi_id", episode.BangumiID,
 				"episode", episode.EpisodeNumber, "error", err)
@@ -325,7 +392,7 @@ func (s *Service) analyzeGroup(ctx context.Context, group analysisGroup) (groupS
 		"season", group.key.SeasonNumber, "detected", result.detected,
 		"not_found", result.notFound, "failed", result.failed,
 		"fingerprint_cached", result.cached, "fingerprint_generated", result.generated,
-		"silence_adjusted", result.silenceHit)
+		"silence_analyzed", result.silenceRuns, "silence_failed", result.silenceFailed, "silence_adjusted", result.silenceHit)
 	return result, nil
 }
 
@@ -501,7 +568,8 @@ func (s *Service) fingerprint(ctx context.Context, episode mediaEpisode) (finger
 	}
 	fileSize := info.Size()
 	fileMTime := info.ModTime().UTC().Unix()
-	if cached, ok, err := s.cachedFingerprint(ctx, episode.MediaJobID, fileSize, fileMTime); err != nil {
+	fileMTimeNS := info.ModTime().UTC().UnixNano()
+	if cached, ok, err := s.cachedFingerprint(ctx, episode.MediaJobID, fileSize, fileMTime, fileMTimeNS); err != nil {
 		return fingerprintResult{}, err
 	} else if ok {
 		return cached, nil
@@ -526,21 +594,21 @@ func (s *Service) fingerprint(ctx context.Context, episode mediaEpisode) (finger
 	if err != nil {
 		return fingerprintResult{}, err
 	}
-	if err := s.saveFingerprint(ctx, episode.MediaJobID, fileSize, fileMTime, duration, fingerprintEnd, points); err != nil {
+	if err := s.saveFingerprint(ctx, episode.MediaJobID, fileSize, fileMTime, fileMTimeNS, duration, fingerprintEnd, points); err != nil {
 		return fingerprintResult{}, err
 	}
 	return fingerprintResult{points: points, duration: duration, end: fingerprintEnd}, nil
 }
 
-func (s *Service) cachedFingerprint(ctx context.Context, mediaJobID, fileSize, fileMTime int64) (fingerprintResult, bool, error) {
-	var cachedSize, cachedMTime int64
+func (s *Service) cachedFingerprint(ctx context.Context, mediaJobID, fileSize, fileMTime, fileMTimeNS int64) (fingerprintResult, bool, error) {
+	var cachedSize, cachedMTime, cachedMTimeNS int64
 	var duration, fingerprintEnd float64
 	var blob []byte
 	err := s.db.QueryRowContext(ctx, `
-SELECT file_size, file_mtime, duration_seconds, fingerprint_end_seconds, fingerprint_points
+SELECT file_size, file_mtime, file_mtime_ns, duration_seconds, fingerprint_end_seconds, fingerprint_points
 FROM media_op_fingerprints
 WHERE media_job_id = ? AND chromaprint_version = ?`, mediaJobID, chromaprintVersion).Scan(
-		&cachedSize, &cachedMTime, &duration, &fingerprintEnd, &blob,
+		&cachedSize, &cachedMTime, &cachedMTimeNS, &duration, &fingerprintEnd, &blob,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fingerprintResult{}, false, nil
@@ -548,32 +616,40 @@ WHERE media_job_id = ? AND chromaprint_version = ?`, mediaJobID, chromaprintVers
 	if err != nil {
 		return fingerprintResult{}, false, err
 	}
-	if cachedSize != fileSize || cachedMTime != fileMTime || len(blob) == 0 {
+	if cachedSize != fileSize || cachedMTime != fileMTime || (cachedMTimeNS != 0 && cachedMTimeNS != fileMTimeNS) || len(blob) == 0 {
 		return fingerprintResult{}, false, nil
 	}
 	points, err := decodeFingerprintPoints(blob)
 	if err != nil {
 		return fingerprintResult{}, false, err
 	}
+	if cachedMTimeNS == 0 {
+		// Adopt an existing cache using its original size/seconds validation once,
+		// then enforce subsecond identity on all subsequent runs.
+		if _, err := s.db.ExecContext(ctx, `UPDATE media_op_fingerprints SET file_mtime_ns = ? WHERE media_job_id = ?`, fileMTimeNS, mediaJobID); err != nil {
+			return fingerprintResult{}, false, err
+		}
+	}
 	return fingerprintResult{points: points, duration: duration, end: fingerprintEnd, fromCache: true}, true, nil
 }
 
-func (s *Service) saveFingerprint(ctx context.Context, mediaJobID, fileSize, fileMTime int64, duration, fingerprintEnd float64, points []uint32) error {
+func (s *Service) saveFingerprint(ctx context.Context, mediaJobID, fileSize, fileMTime, fileMTimeNS int64, duration, fingerprintEnd float64, points []uint32) error {
 	now := s.now().UTC().Unix()
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO media_op_fingerprints(
-    media_job_id, file_size, file_mtime, duration_seconds, fingerprint_end_seconds,
+    media_job_id, file_size, file_mtime, file_mtime_ns, duration_seconds, fingerprint_end_seconds,
     fingerprint_points, chromaprint_version, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(media_job_id) DO UPDATE SET
     file_size = excluded.file_size,
     file_mtime = excluded.file_mtime,
+    file_mtime_ns = excluded.file_mtime_ns,
     duration_seconds = excluded.duration_seconds,
     fingerprint_end_seconds = excluded.fingerprint_end_seconds,
     fingerprint_points = excluded.fingerprint_points,
     chromaprint_version = excluded.chromaprint_version,
     updated_at = excluded.updated_at`,
-		mediaJobID, fileSize, fileMTime, duration, fingerprintEnd,
+		mediaJobID, fileSize, fileMTime, fileMTimeNS, duration, fingerprintEnd,
 		encodeFingerprintPoints(points), chromaprintVersion, now, now)
 	return err
 }
