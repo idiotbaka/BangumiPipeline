@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { api, type DownloadJob, type DownloadRetryAction, type DownloadStatus } from '../api'
+import { api, APIError, type DownloadJob, type DownloadRetryAction, type DownloadStatus } from '../api'
 
 const items = ref<DownloadJob[]>([])
 const total = ref(0)
@@ -12,6 +12,12 @@ const loading = ref(true)
 const status = ref<DownloadStatus>('downloading')
 const retryingId = ref<number | null>(null)
 const cancelingId = ref<number | null>(null)
+const magnetRetryingId = ref<number | null>(null)
+const magnetDialogVisible = ref(false)
+const magnetJob = ref<DownloadJob | null>(null)
+const magnetInput = ref('')
+const magnetError = ref('')
+const actionBusy = computed(() => retryingId.value !== null || cancelingId.value !== null || magnetRetryingId.value !== null)
 let pollingTimer: ReturnType<typeof setInterval> | undefined
 
 const filters: Array<{ label: string; value: DownloadStatus }> = [
@@ -99,12 +105,14 @@ function progressPercentage(job: DownloadJob) {
 }
 
 function retryMessage(action: DownloadRetryAction) {
+  if (action === 'magnet_reset') return '已改用磁力链接并重置为待下载，等待下载计划任务执行'
   if (action === 'corrected') return '已根据 qBittorrent 状态纠正本地记录'
   if (action === 'deleted_reset') return '已删除 qBittorrent 失败任务并重置为待下载'
   return 'qBittorrent 中未找到任务，已重置为待下载'
 }
 
 async function retryJob(job: DownloadJob) {
+  if (actionBusy.value) return
   retryingId.value = job.id
   try {
     const { result } = await api.retryDownloadJob(job.id)
@@ -117,7 +125,50 @@ async function retryJob(job: DownloadJob) {
   }
 }
 
+async function retryJobWithMagnet(job: DownloadJob, magnetUrl?: string) {
+  if (actionBusy.value) return
+  magnetRetryingId.value = job.id
+  magnetError.value = ''
+  try {
+    const { result } = await api.retryDownloadJobWithMagnet(job.id, magnetUrl)
+    magnetDialogVisible.value = false
+    ElMessage.success(retryMessage(result.action))
+    await load(false)
+  } catch (error) {
+    if (error instanceof APIError && error.code === 'download_magnet_required' && magnetUrl === undefined) {
+      magnetJob.value = job
+      magnetInput.value = ''
+      magnetDialogVisible.value = true
+    } else if (magnetDialogVisible.value) {
+      magnetError.value = error instanceof Error ? error.message : '磁力链接重试失败'
+    } else {
+      ElMessage.error(error instanceof Error ? error.message : '磁力链接重试失败')
+    }
+  } finally {
+    magnetRetryingId.value = null
+  }
+}
+
+function submitMagnet() {
+  if (!magnetJob.value || actionBusy.value) return
+  const value = magnetInput.value.trim()
+  try {
+    const parsed = new URL(value)
+    const hashes = [...parsed.searchParams.entries()]
+      .filter(([key]) => key.toLowerCase() === 'xt')
+      .map(([, topic]) => topic)
+    if (parsed.protocol !== 'magnet:' || /\s/.test(value) || !hashes.some((hash) => /^urn:btih:([a-f\d]{40}|[a-z2-7]{32})$/i.test(hash))) {
+      throw new Error('invalid magnet')
+    }
+  } catch {
+    magnetError.value = '请填写包含有效 BTIH 的 magnet 磁力链接'
+    return
+  }
+  void retryJobWithMagnet(magnetJob.value, value)
+}
+
 async function cancelJob(job: DownloadJob) {
+  if (actionBusy.value) return
   try {
     await ElMessageBox.confirm(
       `撤销「${job.animeName} ${formatEpisode(job)}」的下载后，qBittorrent 中的任务及已下载文件会被删除，该订阅项将回退到待绑定。是否继续？`,
@@ -226,7 +277,7 @@ onBeforeUnmount(() => {
           <span v-else class="muted-text">—</span>
         </template>
       </el-table-column>
-      <el-table-column v-if="status === 'downloading' || status === 'failed'" label="操作" :width="status === 'failed' ? 184 : 104" fixed="right">
+      <el-table-column v-if="status === 'downloading' || status === 'failed'" label="操作" :width="status === 'failed' ? 360 : 104" fixed="right">
         <template #default="{ row }">
           <div class="download-actions">
             <el-button
@@ -236,15 +287,24 @@ onBeforeUnmount(() => {
               plain
               :icon="Refresh"
               :loading="retryingId === row.id"
-              :disabled="cancelingId === row.id"
+              :disabled="actionBusy"
               @click="retryJob(row)"
             >重试</el-button>
+            <el-button
+              v-if="status === 'failed'"
+              size="small"
+              type="warning"
+              plain
+              :loading="magnetRetryingId === row.id"
+              :disabled="actionBusy"
+              @click="retryJobWithMagnet(row)"
+            >重试(改用磁力链接)</el-button>
             <el-button
               size="small"
               type="danger"
               plain
               :loading="cancelingId === row.id"
-              :disabled="retryingId === row.id"
+              :disabled="actionBusy"
               @click="cancelJob(row)"
             >撤销下载</el-button>
           </div>
@@ -256,4 +316,34 @@ onBeforeUnmount(() => {
   <div v-if="total > pageSize" class="anime-pagination">
     <el-pagination background layout="prev, pager, next" :current-page="page" :page-size="pageSize" :total="total" @current-change="changePage" />
   </div>
+
+  <el-dialog
+    v-model="magnetDialogVisible"
+    title="填写磁力链接"
+    width="560px"
+    :close-on-click-modal="false"
+    :close-on-press-escape="!actionBusy"
+    :show-close="!actionBusy"
+  >
+    <p>未能从已有订阅信息取得磁力链接，请粘贴该话资源的 magnet 链接。</p>
+    <p v-if="magnetJob">{{ magnetJob.animeName }} {{ formatEpisode(magnetJob) }}</p>
+    <el-form label-position="top" @submit.prevent="submitMagnet">
+      <el-form-item label="磁力链接" :error="magnetError">
+        <el-input
+          v-model="magnetInput"
+          type="textarea"
+          :rows="4"
+          :maxlength="16384"
+          :disabled="actionBusy"
+          placeholder="magnet:?xt=urn:btih:..."
+          @input="magnetError = ''"
+        />
+      </el-form-item>
+    </el-form>
+    <p>确认后仅将此任务改用磁力链接并重置为待下载，等待下载计划任务执行。</p>
+    <template #footer>
+      <el-button :disabled="actionBusy" @click="magnetDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="magnetRetryingId !== null" :disabled="!magnetInput.trim() || actionBusy" @click="submitMagnet">确认重试</el-button>
+    </template>
+  </el-dialog>
 </template>

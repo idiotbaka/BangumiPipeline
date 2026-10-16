@@ -39,6 +39,7 @@ SQLite 是唯一事实源。Writer 打开和迁移在 `backend/internal/database
 - `bangumi_custom_search_settings`：Bangumi 自定义标签抓取设置。
 - `subscription_settings`、`subscription_items`、`subscription_title_rules`：RSS、匹配、绑定、标题记忆。
 - `download_settings`、`download_jobs`：qBittorrent 设置与下载状态。
+- 迁移 39 为 `download_jobs` 新增 `retry_magnet_url`，默认空字符串。仅磁力重试写入该任务专用下载源，调度时优先使用；普通存量任务和订阅源字段保持原行为。手动同步/替换单话重置任务时清除旧磁力重试地址，避免沿用先前的资源。
 - `media_jobs`：媒体处理状态、最终视频、封面图、转码信息，以及评论链路入队完成标记。
 - `media_storage_settings`：额外成品视频存储根目录。
 - `llm_settings`：OpenAI Chat 兼容 LLM 配置。

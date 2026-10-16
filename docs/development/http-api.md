@@ -21,9 +21,11 @@
 | 设置、概览、任务、日志 | `/api/settings/*`、`/api/dashboard/overview`、`/api/scheduled-tasks`、`/api/system-logs` | [backend.md](backend.md) |
 | 番剧设置、刷新 | `/api/anime/{bangumiID}/settings`、`/refresh` | [bangumi.md](bangumi.md) |
 | 历史/单话补源、绑定编辑/解除 | `/sync-history`、`/sync-episode`、`/bound-episodes` | [subscription.md](subscription.md) |
-| 下载重试、撤销 | `/api/download/jobs/{jobID}/retry`、`/cancel` | [download.md](download.md) |
+| 下载重试、磁力重试、撤销 | `/api/download/jobs/{jobID}/retry`、`/retry-magnet`、`/cancel` | [download.md](download.md) |
 | 媒体重试、存储移动 | `/api/media/jobs/{jobID}/retry`、`/api/anime/{bangumiID}/storage` | [media.md](media.md) |
 | Viewer 配置与 APP 发布 | `/api/viewer/*`，专题为 `/single-pages` | [admin.md](admin.md) |
+
+管理员 `POST /api/download/jobs/{jobID}/retry-magnet` 接受可选 `magnetUrl`。没有提供且无法从本地订阅信息提取时返回 `422 download_magnet_required`，用于打开填写弹窗；链接无效为 `400 invalid_magnet_url`，任务不允许重试为 `409 download_retry_not_allowed`。成功返回 `{ "result": { "job": ..., "action": "magnet_reset" } }`，任务状态为 `pending`，不会立即绕过调度器下载。
 
 ## 观看端鉴权
 

@@ -1440,6 +1440,18 @@ INSERT INTO schema_migrations(version, applied_at) VALUES (38, unixepoch());`); 
 			return fmt.Errorf("finish version 38 migration: %w", err)
 		}
 	}
+	applied, err = migrationApplied(ctx, db, 39)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		if err := ensureColumn(ctx, db, "download_jobs", "retry_magnet_url", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (39, unixepoch())`); err != nil {
+			return fmt.Errorf("finish version 39 migration: %w", err)
+		}
+	}
 	return nil
 }
 

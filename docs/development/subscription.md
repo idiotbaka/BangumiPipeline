@@ -36,6 +36,7 @@ RSS 流程：
 - 磁力链接必须包含 BTIH。
 - 该功能不走 RSS 匹配，直接创建或更新已绑定 `subscription_items`。
 - 同时创建或重置对应 `download_jobs(status='pending')`。
+- 手动同步/替换单话重置任务时清空 `retry_magnet_url`，确保使用此次明确提供的新资源；下载失败列表的磁力重试则只修改单个下载任务，不改订阅原链接。
 - 替换前会清理同一番剧、季数、话类型、话数的旧绑定和旧下载任务。
 - 如果已有成品视频，会删除旧成品视频和旧封面图，并删除旧 `media_jobs`。
 - 如果对应话存在 `media_jobs.status='transcoding'`，必须拒绝操作。

@@ -193,7 +193,10 @@ func (s *Service) Execute(ctx context.Context) error {
 	}
 	started := 0
 	for _, candidate := range candidates {
-		if err := s.startCandidate(ctx, client, candidate, settings); err != nil {
+		s.activeMu.Lock()
+		err := s.startCandidate(ctx, client, candidate, settings)
+		s.activeMu.Unlock()
+		if err != nil {
 			return err
 		}
 		started++
@@ -665,7 +668,7 @@ func (s *Service) runningCount(ctx context.Context) (int, error) {
 func (s *Service) nextPendingCandidates(ctx context.Context, limit int) ([]pendingCandidate, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT COALESCE(dj.id, 0), si.id, si.title,
-       COALESCE(NULLIF(si.enclosure_url, ''), NULLIF(si.torrent_url, ''), si.link) AS source_url,
+       COALESCE(NULLIF(dj.retry_magnet_url, ''), NULLIF(si.enclosure_url, ''), NULLIF(si.torrent_url, ''), si.link) AS source_url,
        si.bound_bangumi_id, si.bound_anime_name, si.bound_season_number,
        COALESCE(NULLIF(si.bound_episode_type, ''), 'episode'), si.bound_episode_number
 FROM subscription_items si
@@ -716,17 +719,38 @@ func (s *Service) startCandidate(ctx context.Context, client *qBitClient, candid
 		_ = s.markFailed(ctx, jobID, err.Error())
 		return err
 	}
+	_, infoHash, _ := normalizeMagnet(candidate.SourceURL)
+	if infoHash != "" {
+		torrents, err := client.torrents(ctx)
+		if err != nil {
+			return s.markFailed(ctx, jobID, err.Error())
+		}
+		torrent, exists, err := matchMagnetTorrent(torrents, infoHash, savePath, qBitSavePath)
+		if err != nil {
+			return s.markFailed(ctx, jobID, err.Error())
+		}
+		if exists {
+			s.logger.Info("磁力下载任务已存在，复用 qBittorrent 任务", "source", "download", "job_id", jobID, "info_hash", infoHash)
+			return s.updateFromTorrent(ctx, jobID, torrent)
+		}
+	}
+	sourceKind := "http"
+	if infoHash != "" {
+		sourceKind = "magnet"
+	}
+	s.logger.Info("提交 qBittorrent 下载任务", "source", "download", "job_id", jobID, "download_source", sourceKind)
 	tags := []string{commonQBitTag, tagForItem(candidate.SubscriptionItemID)}
 	if err := client.addURL(ctx, candidate.SourceURL, qBitSavePath, tags); err != nil {
 		_ = s.markFailed(ctx, jobID, err.Error())
 		return nil
 	}
-	torrent, ok, err := s.waitForTorrent(ctx, client, candidate.SubscriptionItemID, savePath, qBitSavePath)
+	torrent, ok, err := s.waitForTorrent(ctx, client, candidate.SubscriptionItemID, savePath, qBitSavePath, infoHash)
 	if err != nil {
 		_ = s.markFailed(ctx, jobID, err.Error())
 		return nil
 	}
 	if !ok {
+		s.logger.Warn("qBittorrent 添加请求成功但未找到匹配任务", "source", "download", "job_id", jobID, "download_source", sourceKind, "info_hash", infoHash)
 		_ = s.markFailed(ctx, jobID, "qBittorrent 已接受任务，但未能查询到任务状态")
 		return nil
 	}
@@ -757,15 +781,24 @@ INSERT INTO download_jobs(
 	return result.LastInsertId()
 }
 
-func (s *Service) waitForTorrent(ctx context.Context, client *qBitClient, itemID int64, savePath, qBitSavePath string) (qBitTorrent, bool, error) {
-	for attempt := 0; attempt < 10; attempt++ {
+func (s *Service) waitForTorrent(ctx context.Context, client *qBitClient, itemID int64, savePath, qBitSavePath, infoHash string) (qBitTorrent, bool, error) {
+	attempts := 10
+	if infoHash != "" {
+		attempts = 40
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		torrents, err := client.torrents(ctx)
 		if err != nil {
 			return qBitTorrent{}, false, err
 		}
 		job := activeJob{SubscriptionItemID: itemID, SavePath: savePath, QBitSavePath: qBitSavePath}
-		if torrent, ok := matchTorrent(job, torrents, nil); ok {
-			return torrent, true, nil
+		if infoHash != "" {
+			torrent, ok, err := matchMagnetTorrent(torrents, infoHash, savePath, qBitSavePath)
+			if err != nil || ok {
+				return torrent, ok, err
+			}
+		} else if torrent, ok := matchTorrent(job, torrents, nil); ok {
+			return torrent, ok, nil
 		}
 		select {
 		case <-ctx.Done():

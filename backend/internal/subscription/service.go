@@ -932,6 +932,7 @@ ON CONFLICT(subscription_item_id) DO UPDATE SET
     status = 'pending',
     source_type = 'download',
     source_url = excluded.source_url,
+    retry_magnet_url = '',
     folder_name = '',
     save_path = '',
     qbit_hash = '',

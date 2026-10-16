@@ -42,4 +42,5 @@
 - `ViewerSinglePageManagementPage.vue` 管理内置专题页启用 key，清单在后端 `viewer/single_pages.go`，不接受任意 HTML 或 URL。
 - 番剧设置包含资源集数偏移与 `series/movie` 分类，API 在 `catalog.UpdateSettings`。
 - 已绑定话数可编辑/解除，下载任务可撤销；UI 禁用态与错误提示遵守服务端对任务状态的限制。
+- 下载失败列表同时保留“重试”“重试(改用磁力链接)”和“撤销下载”。磁力重试先由后端查找已有链接或从 Mikan 详情链接生成；收到 `download_magnet_required` 后才弹出填写框，确认时校验有效 BTIH，错误保留在弹窗中，取消不改任务。成功只重置所选任务为使用磁力链接的待下载状态，不影响其他任务；请求期间禁用重复操作。
 - 邀请码列表区分管理员与用户生成来源；用户自助配额在后端校验，见 [viewer.md](viewer.md)。

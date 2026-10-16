@@ -205,7 +205,7 @@ export interface DownloadConnectionTestResult {
 }
 
 export type DownloadStatus = 'pending' | 'downloading' | 'completed' | 'failed'
-export type DownloadRetryAction = 'corrected' | 'reset' | 'deleted_reset'
+export type DownloadRetryAction = 'corrected' | 'reset' | 'deleted_reset' | 'magnet_reset'
 
 export interface DownloadJob {
   id: number
@@ -868,6 +868,11 @@ export const api = {
     request<{ result: DownloadRetryResult }>(`/api/download/jobs/${jobId}/retry`, {
       method: 'POST',
       body: '{}',
+    }),
+  retryDownloadJobWithMagnet: (jobId: number, magnetUrl?: string) =>
+    request<{ result: DownloadRetryResult }>(`/api/download/jobs/${jobId}/retry-magnet`, {
+      method: 'POST',
+      body: JSON.stringify({ magnetUrl }),
     }),
   cancelDownloadJob: (jobId: number) =>
     request<{ result: DownloadCancelResult }>(`/api/download/jobs/${jobId}/cancel`, {
