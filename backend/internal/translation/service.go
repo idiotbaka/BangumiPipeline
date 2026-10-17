@@ -55,6 +55,7 @@ type translationTarget struct {
 	AnimeTitle string
 	TextType   string
 	SourceText string
+	Label      string
 }
 
 type chatClient struct {
@@ -104,16 +105,24 @@ func (s *Service) Execute(ctx context.Context) error {
 		if canCopyWithoutLLM(target) {
 			text = strings.TrimSpace(target.SourceText)
 			copiedDirectly = true
-			copied++
 		} else {
 			text, err = client.translate(ctx, target)
 			if err != nil {
-				return fmt.Errorf("翻译%s失败: %w", target.TextType, err)
+				return fmt.Errorf("翻译%s时失败: %w", target.description(), err)
 			}
-			translated++
 		}
-		if err := s.saveTranslation(ctx, target, text); err != nil {
-			return err
+		saved, err := s.saveTranslation(ctx, target, text)
+		if err != nil {
+			return fmt.Errorf("保存%s的译文时失败: %w", target.description(), err)
+		}
+		if !saved {
+			s.logger.Info("翻译目标已变化，保留当前内容", "source", "translation", "target", target.description())
+			continue
+		}
+		if copiedDirectly {
+			copied++
+		} else {
+			translated++
 		}
 		s.logger.Info("元数据翻译完成",
 			"source", "translation",
@@ -220,12 +229,13 @@ LIMIT 1`).Scan(&target.BangumiID, &target.AnimeTitle, &target.SourceText)
 func (s *Service) nextEpisodeTitle(ctx context.Context) (translationTarget, bool, error) {
 	var target translationTarget
 	err := s.db.QueryRowContext(ctx, `
-SELECT e.id, e.bangumi_id, COALESCE(NULLIF(am.name_cn, ''), am.name), e.name
+SELECT e.episode_id, e.bangumi_id, COALESCE(NULLIF(am.name_cn, ''), am.name), e.name,
+       printf('%s %g · %s', CASE WHEN e.type = 0 THEN '正片' ELSE '特殊分集' END, e.sort_number, e.name)
 FROM anime_episodes e
 JOIN anime_metadata am ON am.bangumi_id = e.bangumi_id
 WHERE am.deleted_at IS NULL AND e.name != '' AND e.name_cn = ''
 ORDER BY am.created_at, e.bangumi_id, e.sort_number, e.episode_id
-LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.SourceText)
+LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.SourceText, &target.Label)
 	if errors.Is(err, sql.ErrNoRows) {
 		return translationTarget{}, false, nil
 	}
@@ -240,12 +250,13 @@ LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.Source
 func (s *Service) nextEpisodeSummary(ctx context.Context) (translationTarget, bool, error) {
 	var target translationTarget
 	err := s.db.QueryRowContext(ctx, `
-SELECT e.id, e.bangumi_id, COALESCE(NULLIF(am.name_cn, ''), am.name), e.description
+SELECT e.episode_id, e.bangumi_id, COALESCE(NULLIF(am.name_cn, ''), am.name), e.description,
+       printf('%s %g · %s', CASE WHEN e.type = 0 THEN '正片' ELSE '特殊分集' END, e.sort_number, e.name)
 FROM anime_episodes e
 JOIN anime_metadata am ON am.bangumi_id = e.bangumi_id
 WHERE am.deleted_at IS NULL AND e.description != '' AND e.description_cn = ''
 ORDER BY am.created_at, e.bangumi_id, e.sort_number, e.episode_id
-LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.SourceText)
+LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.SourceText, &target.Label)
 	if errors.Is(err, sql.ErrNoRows) {
 		return translationTarget{}, false, nil
 	}
@@ -260,12 +271,12 @@ LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.Source
 func (s *Service) nextCharacterSummary(ctx context.Context) (translationTarget, bool, error) {
 	var target translationTarget
 	err := s.db.QueryRowContext(ctx, `
-SELECT c.id, c.bangumi_id, COALESCE(NULLIF(am.name_cn, ''), am.name), c.summary
+SELECT c.character_id, c.bangumi_id, COALESCE(NULLIF(am.name_cn, ''), am.name), c.summary, c.name
 FROM anime_characters c
 JOIN anime_metadata am ON am.bangumi_id = c.bangumi_id
 WHERE am.deleted_at IS NULL AND c.summary != '' AND c.summary_cn = ''
 ORDER BY am.created_at, c.bangumi_id, c.id
-LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.SourceText)
+LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.SourceText, &target.Label)
 	if errors.Is(err, sql.ErrNoRows) {
 		return translationTarget{}, false, nil
 	}
@@ -280,20 +291,18 @@ LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.Source
 func (s *Service) nextActorShortSummary(ctx context.Context) (translationTarget, bool, error) {
 	var target translationTarget
 	err := s.db.QueryRowContext(ctx, `
-SELECT a.actor_id,
-       COALESCE((
-           SELECT COALESCE(NULLIF(am.name_cn, ''), am.name)
-           FROM character_actors ca
-           JOIN anime_metadata am ON am.bangumi_id = ca.bangumi_id
-           WHERE ca.actor_id = a.actor_id AND am.deleted_at IS NULL
-           ORDER BY am.created_at
-           LIMIT 1
-       ), ''),
-       a.short_summary
+SELECT a.actor_id, COALESCE(am.bangumi_id, 0),
+       COALESCE(NULLIF(am.name_cn, ''), am.name, ''), a.short_summary, a.name
 FROM actors a
+LEFT JOIN anime_metadata am ON am.bangumi_id = (
+    SELECT ca.bangumi_id FROM character_actors ca
+    JOIN anime_metadata related ON related.bangumi_id = ca.bangumi_id
+    WHERE ca.actor_id = a.actor_id AND related.deleted_at IS NULL
+    ORDER BY related.created_at, related.bangumi_id LIMIT 1
+)
 WHERE a.short_summary != '' AND a.short_summary_cn = ''
 ORDER BY a.actor_id
-LIMIT 1`).Scan(&target.ID, &target.AnimeTitle, &target.SourceText)
+LIMIT 1`).Scan(&target.ID, &target.BangumiID, &target.AnimeTitle, &target.SourceText, &target.Label)
 	if errors.Is(err, sql.ErrNoRows) {
 		return translationTarget{}, false, nil
 	}
@@ -305,34 +314,27 @@ LIMIT 1`).Scan(&target.ID, &target.AnimeTitle, &target.SourceText)
 	return target, true, nil
 }
 
-func (s *Service) saveTranslation(ctx context.Context, target translationTarget, text string) error {
+func (target translationTarget) description() string {
+	anime := "全局资料"
+	if target.BangumiID != 0 {
+		anime = fmt.Sprintf("《%s》（Bangumi ID：%d）", target.AnimeTitle, target.BangumiID)
+	}
+	if target.Label != "" {
+		return fmt.Sprintf("%s的%s「%s」（ID：%d）", anime, target.TextType, target.Label, target.ID)
+	}
+	return anime + "的" + target.TextType
+}
+
+func (s *Service) saveTranslation(ctx context.Context, target translationTarget, text string) (bool, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return errors.New("翻译结果为空")
+		return false, errors.New("翻译结果为空")
 	}
-	now := s.now().UTC().Unix()
-	switch target.Kind {
-	case targetAnimeTitle:
-		_, err := s.db.ExecContext(ctx, "UPDATE anime_metadata SET name_cn = ? WHERE bangumi_id = ?", text, target.BangumiID)
-		return err
-	case targetAnimeSummary:
-		_, err := s.db.ExecContext(ctx, "UPDATE anime_metadata SET summary_cn = ? WHERE bangumi_id = ?", text, target.BangumiID)
-		return err
-	case targetEpisodeTitle:
-		_, err := s.db.ExecContext(ctx, "UPDATE anime_episodes SET name_cn = ?, updated_at = ? WHERE id = ?", text, now, target.ID)
-		return err
-	case targetEpisodeSummary:
-		_, err := s.db.ExecContext(ctx, "UPDATE anime_episodes SET description_cn = ?, updated_at = ? WHERE id = ?", text, now, target.ID)
-		return err
-	case targetCharacterSummary:
-		_, err := s.db.ExecContext(ctx, "UPDATE anime_characters SET summary_cn = ?, updated_at = ? WHERE id = ?", text, now, target.ID)
-		return err
-	case targetActorShortSummary:
-		_, err := s.db.ExecContext(ctx, "UPDATE actors SET short_summary_cn = ?, updated_at = ? WHERE actor_id = ?", text, now, target.ID)
-		return err
-	default:
-		return errors.New("未知翻译目标")
+	field, ok := translationFieldFor(target.Kind)
+	if !ok {
+		return false, ErrInvalidTranslationKind
 	}
+	return s.writeTranslation(ctx, field, target.BangumiID, target.ID, target.SourceText, "", text, target.Kind != targetActorShortSummary)
 }
 
 func (c *chatClient) translate(ctx context.Context, target translationTarget) (string, error) {

@@ -607,6 +607,18 @@ export interface TranslationProgressTarget {
   status: 'pending' | 'completed' | 'no_source'
 }
 
+export interface TranslationContent extends TranslationProgressTarget {
+  originalText: string
+  translatedText: string
+  shared: boolean
+}
+
+export interface UpdateTranslationInput {
+  originalText: string
+  expectedTranslatedText: string
+  translatedText: string
+}
+
 export type OpeningProgressFilter = 'all' | 'completed' | 'pending' | 'failed' | 'waiting_episodes' | 'not_found'
 
 export interface OpeningAnimeProgress {
@@ -878,6 +890,12 @@ export const api = {
   },
   translationProgressDetails: (bangumiId: number) =>
     request<{ items: TranslationProgressTarget[] }>(`/api/translation/anime/${bangumiId}`),
+  translationContent: (bangumiId: number, kind: TranslationKind, id: number) =>
+    request<{ item: TranslationContent }>(`/api/translation/anime/${bangumiId}/targets/${kind}/${id}`),
+  updateTranslation: (bangumiId: number, kind: TranslationKind, id: number, input: UpdateTranslationInput) =>
+    request<{ item: TranslationContent }>(`/api/translation/anime/${bangumiId}/targets/${kind}/${id}`, {
+      method: 'PUT', body: JSON.stringify(input),
+    }),
   openingProgress: (page: number, pageSize: number, q: string, status: OpeningProgressFilter) => {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), q, status })
     return request<ProgressPage<OpeningAnimeProgress>>(`/api/opskip/anime?${params}`)

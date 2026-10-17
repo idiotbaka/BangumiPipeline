@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { api, type TranslationKind, type TranslationProgressTarget } from '../api'
 import { translationKinds, useProgressDetails } from '../progress'
+import TranslationEditor from './TranslationEditor.vue'
 
-const props = defineProps<{ bangumiId: number }>()
+const props = defineProps<{ bangumiId: number; revision: number }>()
+const emit = defineEmits<{ saved: [] }>()
 const { items, loading, error, load } = useProgressDetails(() => props.bangumiId, api.translationProgressDetails)
+const editing = ref<TranslationProgressTarget | null>(null)
+watch(() => props.revision, load)
 const kind = ref<TranslationKind | ''>('')
 const status = ref<TranslationProgressTarget['status'] | ''>('')
 const filtered = computed(() => items.value.filter((item) => (!kind.value || item.kind === kind.value) && (!status.value || item.status === status.value)))
@@ -40,6 +44,12 @@ function kindLabel(value: TranslationKind) {
           <el-tag :type="row.status === 'completed' ? 'success' : row.status === 'pending' ? 'warning' : 'info'" effect="plain" size="small">{{ labels[row.status] }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="编辑翻译" width="110" fixed="right">
+        <template #default="{ row }: { row: TranslationProgressTarget }">
+          <el-button link type="primary" :disabled="row.status === 'no_source'" @click="editing = row">编辑翻译</el-button>
+        </template>
+      </el-table-column>
     </el-table>
+    <TranslationEditor v-if="editing" :bangumi-id="bangumiId" :target="editing" @close="editing = null" @saved="emit('saved')" />
   </div>
 </template>

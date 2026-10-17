@@ -18,7 +18,7 @@
 - `frontend/apps/admin/src/pages/SubscriptionMatchesPage.vue`：订阅匹配。
 - `frontend/apps/admin/src/pages/DownloadManagementPage.vue`：下载管理。
 - `frontend/apps/admin/src/pages/TranscodeManagementPage.vue`：媒体处理管理。
-- `frontend/apps/admin/src/pages/TranslationManagementPage.vue`：按番剧展示六类元数据中文内容进度、元数据抓取提示与只读明细，规则见 [translation.md](translation.md)。
+- `frontend/apps/admin/src/pages/TranslationManagementPage.vue`：按番剧展示六类元数据中文内容进度、元数据抓取提示及明细；`TranslationEditor.vue` 提供原文只读、译文可编辑的弹窗，规则见 [translation.md](translation.md)。
 - `frontend/apps/admin/src/pages/OpeningManagementPage.vue`：按番剧汇总 OP 检测结果，展开显示每季每话的等待原因、时间范围和错误，规则见 [opskip.md](opskip.md)。
 - `frontend/apps/admin/src/pages/SystemLogsPage.vue`：系统日志。
 - `frontend/apps/admin/src/pages/ViewerUserManagementPage.vue`：观看端用户启停与密码重置。
@@ -38,7 +38,7 @@
 - 管理端系统设置、系统概览、番剧存储管理可以展示服务器路径。
 - 番剧卡片按钮区保持固定宽度和可读文本，避免话数 tag 或按钮遮挡。
 - “前端管理”下的观看端配置仍通过 Admin API 管理，必须使用管理员鉴权，不得复用观看端 Session。
-- 翻译与 OP 管理页支持搜索、进度筛选、分页与手动刷新；`ProgressTaskStatus.vue` 展示对应计划任务状态，明细按展开行加载。第一期只读，不提供编辑、跳过或手动执行操作。
+- 翻译与 OP 管理页支持搜索、进度筛选、分页与手动刷新；`ProgressTaskStatus.vue` 展示对应计划任务状态，明细按展开行加载。翻译明细支持编辑已有译文或补齐人工译文，无原文禁用；共享声优有明确提示，保存冲突保留当前输入并允许重新加载。保存后刷新列表与所有展开明细。OP 明细保持只读，两页均不提供跳过或手动执行操作。
 - 系统设置的 LLM 翻译设置支持请求超时（秒），默认 60、范围 1～3600。翻译任务在下一轮读取新值，连接测试使用当前表单值；保存和测试均校验超时范围。
 
 ## 后续功能入口

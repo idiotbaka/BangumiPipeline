@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { Refresh, Search } from '@element-plus/icons-vue'
+import { ref } from 'vue'
 import { api, type TranslationAnimeProgress, type TranslationKind, type TranslationProgressStatus } from '../api'
 import { translationKinds, useProgressList } from '../progress'
 import ProgressTaskStatus from '../components/ProgressTaskStatus.vue'
 import TranslationProgressDetails from '../components/TranslationProgressDetails.vue'
 
-const { items, total, page, pageSize, query, status, loading, error, revision, load, search, changePage, refresh } =
+const { items, total, page, pageSize, query, status, loading, error, revision, load, reload, search, changePage, refresh } =
   useProgressList(api.translationProgress, 'all')
+const detailsRevision = ref(0)
+function translationSaved() {
+  detailsRevision.value++
+  void reload()
+}
 
 const filters: Array<{ label: string; value: TranslationProgressStatus }> = [
   { label: '全部', value: 'all' }, { label: '待翻译', value: 'pending' },
@@ -68,7 +74,7 @@ function missingSources(row: TranslationAnimeProgress, kind: TranslationKind) {
               {{ stageLabels[stage.kind] }}{{ stage.status === 'failed' ? '抓取失败' : '尚未抓取完成' }}{{ stage.errorMessage ? `：${stage.errorMessage}` : '' }}
             </p>
           </div>
-          <TranslationProgressDetails :bangumi-id="row.bangumiId" />
+          <TranslationProgressDetails :bangumi-id="row.bangumiId" :revision="detailsRevision" @saved="translationSaved" />
         </template>
       </el-table-column>
       <el-table-column label="番剧" min-width="250">

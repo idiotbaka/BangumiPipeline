@@ -109,6 +109,8 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/anime", api.listAnime)
 	mux.HandleFunc("GET /api/translation/anime", api.listTranslationProgress)
 	mux.HandleFunc("GET /api/translation/anime/{bangumiID}", api.translationProgressDetails)
+	mux.HandleFunc("GET /api/translation/anime/{bangumiID}/targets/{kind}/{targetID}", api.translationContent)
+	mux.HandleFunc("PUT /api/translation/anime/{bangumiID}/targets/{kind}/{targetID}", api.updateTranslation)
 	mux.HandleFunc("GET /api/opskip/anime", api.listOpeningProgress)
 	mux.HandleFunc("GET /api/opskip/anime/{bangumiID}", api.openingProgressDetails)
 	mux.HandleFunc("POST /api/anime", api.createAnime)

@@ -54,15 +54,17 @@ export function useProgressList<T, S extends string>(
   let generation = 0
   let appliedQuery = ''
 
-  async function load() {
+  async function loadPage(preserveItems = false) {
     const current = ++generation
     const selectedQuery = appliedQuery
     const selectedStatus = status.value
     loading.value = true
     error.value = ''
     // Clear stale rows when the selected search/filter changes or a refresh fails.
-    items.value = []
-    total.value = 0
+    if (!preserveItems) {
+      items.value = []
+      total.value = 0
+    }
     try {
       let result = await fetchPage(page.value, pageSize, selectedQuery, selectedStatus)
       if (current !== generation) return
@@ -75,11 +77,19 @@ export function useProgressList<T, S extends string>(
       items.value = result.items
       total.value = result.total
     } catch (cause) {
-      if (current === generation) error.value = cause instanceof Error ? cause.message : '加载进度失败'
+      if (current === generation) {
+        items.value = []
+        total.value = 0
+        error.value = cause instanceof Error ? cause.message : '加载进度失败'
+      }
     } finally {
       if (current === generation) loading.value = false
     }
   }
+
+  const load = () => loadPage()
+  // Keep expanded rows mounted while refreshing after an inline edit.
+  const reload = () => loadPage(true)
 
   function search() {
     appliedQuery = query.value.trim()
@@ -99,5 +109,5 @@ export function useProgressList<T, S extends string>(
 
   onMounted(load)
   onBeforeUnmount(() => { generation++ })
-  return { items, total, page, pageSize, query, status, loading, error, revision, load, search, changePage, refresh }
+  return { items, total, page, pageSize, query, status, loading, error, revision, load, reload, search, changePage, refresh }
 }
