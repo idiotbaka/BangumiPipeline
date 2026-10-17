@@ -60,6 +60,9 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 	mux.HandleFunc("GET /api/auth/me", api.me)
 	mux.HandleFunc("POST /api/auth/logout", api.logout)
 	mux.HandleFunc("GET /api/dashboard/overview", api.dashboardOverview)
+	mux.HandleFunc("GET /api/dashboard/pipeline", api.dashboardPipeline)
+	mux.HandleFunc("GET /api/dashboard/storage", api.dashboardStorage)
+	mux.HandleFunc("GET /api/dashboard/activities", api.dashboardActivities)
 	mux.HandleFunc("GET /api/scheduled-tasks", api.listScheduledTasks)
 	mux.HandleFunc("PATCH /api/scheduled-tasks/{taskKey}", api.updateScheduledTask)
 	mux.HandleFunc("POST /api/scheduled-tasks/{taskKey}/run", api.runScheduledTask)
@@ -145,19 +148,7 @@ func NewAdminHandler(authService *auth.Service, systemService *system.Service, s
 }
 
 type dashboardOverview struct {
-	Subscription struct {
-		PendingBindings int `json:"pendingBindings"`
-	} `json:"subscription"`
-	Download struct {
-		Pending     int `json:"pending"`
-		Downloading int `json:"downloading"`
-		Failed      int `json:"failed"`
-	} `json:"download"`
-	Media struct {
-		Pending     int `json:"pending"`
-		Transcoding int `json:"transcoding"`
-		Failed      int `json:"failed"`
-	} `json:"media"`
+	system.DashboardPipeline
 	Storage struct {
 		Roots []dashboardStorageRoot `json:"roots"`
 	} `json:"storage"`
@@ -197,37 +188,12 @@ func (a *AdminAPI) dashboardOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var overview dashboardOverview
-	var err error
-	overview.Subscription.PendingBindings, err = a.subscription.CountItemsByBindingStatus(r.Context(), subscription.BindingStatusPending)
+	pipeline, err := a.system.DashboardPipeline(r.Context())
 	if err != nil {
 		a.internalError(w, err)
 		return
 	}
-	overview.Download.Pending, err = a.download.CountJobsByStatus(r.Context(), download.StatusPending)
-	if err != nil {
-		a.internalError(w, err)
-		return
-	}
-	overview.Download.Downloading, err = a.download.CountJobsByStatus(r.Context(), download.StatusDownloading)
-	if err != nil {
-		a.internalError(w, err)
-		return
-	}
-	overview.Download.Failed, err = a.download.CountJobsByStatus(r.Context(), download.StatusFailed)
-	if err != nil {
-		a.internalError(w, err)
-		return
-	}
-	mediaCounts, err := a.media.CountJobsByStatuses(
-		r.Context(), media.StatusPending, media.StatusTranscoding, media.StatusFailed,
-	)
-	if err != nil {
-		a.internalError(w, err)
-		return
-	}
-	overview.Media.Pending = mediaCounts[media.StatusPending]
-	overview.Media.Transcoding = mediaCounts[media.StatusTranscoding]
-	overview.Media.Failed = mediaCounts[media.StatusFailed]
+	overview.DashboardPipeline = pipeline
 	overview.Storage.Roots, err = a.dashboardStorageRoots(r.Context())
 	if err != nil {
 		a.internalError(w, err)

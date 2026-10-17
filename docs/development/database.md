@@ -50,6 +50,7 @@ SQLite 是唯一事实源。Writer 打开和迁移在 `backend/internal/database
 - `viewer_carousel_items`：首页轮播图二进制图片、绑定番剧和排序。
 - `viewer_filter_dimensions`、`viewer_filter_tags`：番剧图书馆可配置的筛选维度与标签。
 - `viewer_watch_history`：按用户和成品媒体记录播放位置、时长、完播状态及最后观看时间。
+- 迁移 42 为概览新增三个状态与日期范围的组合索引：`subscription_items(binding_status, bound_at, binding_note)`、`download_jobs(status, completed_at, subscription_item_id, source_type)`、`media_jobs(status, completed_at, subscription_item_id)`；另加全局 `viewer_watch_history(last_watched_at DESC, id DESC)`，支持跨用户最近 5 条有效观看记录。保持原有按用户索引，旧记录不改写，统计使用时间范围条件而非 SQL 日期函数。
 - `viewer_anime_follows`：用户追番关系；同一用户和番剧唯一。
 - `viewer_app_releases`：移动端 APP 版本、更新日志、arm64-v8a APK、文件大小与 SHA-256。
 

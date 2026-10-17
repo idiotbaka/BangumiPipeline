@@ -327,6 +327,36 @@ export interface DashboardStorageRoot {
   errorMessage: string
 }
 
+export interface DashboardBindingDay {
+  total: number
+  automatic: number
+  manual: number
+  unknown: number
+}
+
+export interface DashboardPipeline {
+  generatedAt: number
+  timezone: string
+  today: string
+  yesterday: string
+  subscription: { pendingBindings: number; today: DashboardBindingDay; yesterday: DashboardBindingDay }
+  download: { pending: number; downloading: number; failed: number; today: number; yesterday: number }
+  media: { pending: number; transcoding: number; failed: number; today: number; yesterday: number }
+}
+
+export interface DashboardActivity {
+  id: number
+  userId: number
+  username: string
+  bangumiId: number
+  animeTitle: string
+  episodeLabel: string
+  episodeTitle: string
+  progressPercent: number
+  completed: boolean
+  lastWatchedAt: number
+}
+
 export interface SystemLog {
   id: number
   level: LogLevel
@@ -721,6 +751,9 @@ export const api = {
   me: () => request<{ user: User }>('/api/auth/me'),
   logout: () => request<void>('/api/auth/logout', { method: 'POST', body: '{}' }),
   dashboardOverview: () => request<{ overview: DashboardOverview }>('/api/dashboard/overview'),
+  dashboardPipeline: () => request<{ overview: DashboardPipeline }>('/api/dashboard/pipeline'),
+  dashboardStorage: () => request<{ storage: { roots: DashboardStorageRoot[] } }>('/api/dashboard/storage'),
+  dashboardActivities: () => request<{ items: DashboardActivity[]; generatedAt: number }>('/api/dashboard/activities'),
   scheduledTasks: () => request<{ tasks: ScheduledTask[] }>('/api/scheduled-tasks'),
   updateScheduledTask: (key: string, update: { enabled?: boolean; intervalMinutes?: number }) =>
     request<{ task: ScheduledTask }>(`/api/scheduled-tasks/${encodeURIComponent(key)}`, {

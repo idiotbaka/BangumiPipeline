@@ -63,17 +63,35 @@
 系统概览相关代码：
 
 - `backend/internal/httpapi/admin.go`
+- `backend/internal/httpapi/dashboard.go`
+- `backend/internal/system/dashboard.go`
 - `backend/internal/httpapi/disk.go`
 - `backend/internal/httpapi/disk_windows.go`
 - `backend/internal/httpapi/disk_unix.go`
 - `frontend/apps/admin/src/pages/DashboardPage.vue`
 
-概览接口 `GET /api/dashboard/overview` 实时读取：
+概览页分区并行请求，各自显示加载、错误与重试；单区失败不阻塞其余区域。接口均为管理员只读请求：
+
+- `GET /api/dashboard/pipeline`：当前队列和昨日/今日的绑定、下载完成、媒体处理完成数，返回 `overview`。
+- `GET /api/scheduled-tasks`：复用现有任务列表，失败优先展示、保留停用状态和原始错误。
+- `GET /api/dashboard/activities`：全站最近 5 条有效观看历史，返回 `items` 和 `generatedAt`。含用户名称、番剧、分集、进度及最后观看时间；不是每次播放的事件流水，详见 [viewer.md](viewer.md)。
+- `GET /api/dashboard/storage`：磁盘路径及可用空间，返回 `storage.roots`，单独探测不拖住队列/活动显示。
+- 原 `GET /api/dashboard/overview` 保留兼容，返回流水线数据加 `storage`；新页面不使用该合并接口。
+
+队列口径：
 
 - 待绑定订阅数量。
 - 下载 pending、downloading、failed 数量。
 - 转码 pending、transcoding、failed 数量。
 - 默认媒体目录和额外存储根的磁盘空间。
+
+每日口径：
+
+- 后端按 `time.Local`（服务进程实际时区）构造本日零点，用 `AddDate` 获取昨日及次日零点，使用 `[起点, 终点)` 的 Unix 时间范围；不依赖浏览器时区，也不假定一天固定为 86400 秒。响应携带服务器时区、UTC 偏移、两天日期和数据生成时间，页面直接显示。
+- 已绑定数基于当前 `binding_status='bound'` 的 `bound_at`；系统生成备注“标题记忆自动绑定”“历史话数同步自动绑定”“本地媒体文件夹同步自动绑定”计自动，“人工确认绑定”“人工手动绑定”“手动同步/替换单话”计手动，其余备注计来源未知并包含在总数，不猜测旧数据来源。以后新增绑定来源需同步此分类。
+- 下载完成数使用 `download_jobs.completed_at`，保持下载管理有效绑定条件，排除 `source_type='local'`。媒体完成数使用 `media_jobs.completed_at`，包含 copy、remux、转码和本地导入，与媒体任务的 completed 状态一致。
+- 只统计现有记录的当前状态与时间，不是永久审计流水。解除、删除、替换或重试会影响统计；缺失完成/绑定时间不以 `updated_at` 猜测补齐。
+- 概览读取不再调用媒体管理的入队计数路径，不触发写入或创建媒体任务；尚未入队的媒体由后台任务创建后显示。
 
 磁盘空间规则：
 

@@ -1489,6 +1489,24 @@ INSERT INTO schema_migrations(version, applied_at) VALUES (41, unixepoch());`); 
 			return fmt.Errorf("finish version 41 migration: %w", err)
 		}
 	}
+	applied, err = migrationApplied(ctx, db, 42)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		if _, err := db.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS idx_subscription_items_bound_at
+ON subscription_items(binding_status, bound_at, binding_note);
+CREATE INDEX IF NOT EXISTS idx_download_jobs_completed_at
+ON download_jobs(status, completed_at, subscription_item_id, source_type);
+CREATE INDEX IF NOT EXISTS idx_media_jobs_completed_at
+ON media_jobs(status, completed_at, subscription_item_id);
+CREATE INDEX IF NOT EXISTS idx_viewer_watch_history_recent
+ON viewer_watch_history(last_watched_at DESC, id DESC);
+INSERT INTO schema_migrations(version, applied_at) VALUES (42, unixepoch());`); err != nil {
+			return fmt.Errorf("finish version 42 migration: %w", err)
+		}
+	}
 	return nil
 }
 

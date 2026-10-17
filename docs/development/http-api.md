@@ -19,6 +19,7 @@
 | 功能 | 路由入口 | 业务文档 |
 | --- | --- | --- |
 | 设置、概览、任务、日志 | `/api/settings/*`、`/api/dashboard/overview`、`/api/scheduled-tasks`、`/api/system-logs` | [backend.md](backend.md) |
+| 概览分区加载 | `GET /api/dashboard/pipeline`、`/api/dashboard/storage`、`/api/dashboard/activities` | [backend.md](backend.md) |
 | 番剧设置、刷新 | `/api/anime/{bangumiID}/settings`、`/refresh` | [bangumi.md](bangumi.md) |
 | 历史/单话补源、绑定编辑/解除 | `/sync-history`、`/sync-episode`、`/bound-episodes` | [subscription.md](subscription.md) |
 | 下载重试、磁力重试、撤销 | `/api/download/jobs/{jobID}/retry`、`/retry-magnet`、`/cancel` | [download.md](download.md) |
@@ -32,6 +33,8 @@
 管理员 `GET/PUT /api/settings/llm` 与 `POST /api/settings/llm/test` 使用 `timeoutSeconds`（单次请求总超时秒数，1～3600 的整数，默认 60）。旧请求省略字段或传 0 时使用默认值；越界返回 `400 invalid_llm_timeout`。翻译每轮开始读取已保存配置，连接测试使用请求中的设置。
 
 人工译文 GET/PUT 均要求管理员登录，目标 ID 使用公开 Bangumi ID 并验证当前番剧归属。PUT 提交 `originalText`、`expectedTranslatedText`、`translatedText`，不允许省略前两项或保存空白译文；原文与旧译文须与当前记录一致。无效类别为 `400 invalid_translation_kind`，无原文为 `400 translation_no_source`，缺字段/空译文为 `400 invalid_translation`，目标不存在、番剧已删除或不属于该番剧为 `404 translation_not_found`，编辑期间内容或归属变化为 `409 translation_conflict`。成功返回 `{ "item": ... }`，详情及共享声优规则见翻译文档。
+
+概览分区 API 均要求管理员登录并使用 Admin Reader，尤其跨用户最近活动不得暴露给 Viewer 会话。流水线响应中的 `timezone`、`today`、`yesterday` 由服务器计算；活动仅返回最近 5 条有效观看快照，不返回服务器媒体路径或用户凭据。
 
 ## 观看端鉴权
 
